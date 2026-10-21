@@ -1,0 +1,40 @@
+# Analysis artifacts must never be committed (clean-room constraint)
+analysis/
+*.har
+*.pcap
+*.cap
+*.pcapng
+
+# Rust
+target/
+**/target/
+
+# Node
+node_modules/
+.pnpm-store/
+dist/
+dist-ssr/
+*.local
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/certs/*.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs / temp / caches
+*.log
+tmp/
+.cache/
