@@ -1,0 +1,41 @@
+[package]
+name = "openshell-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+openshell-sync-protocol = { workspace = true }
+
+axum = { version = "0.7", features = ["ws"] }
+tokio = { workspace = true }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
+parking_lot = "0.12"
+
+argon2 = "0.5"
+sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+rand = { workspace = true }
+time = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tempfile = "3"
+openshell-vault = { workspace = true }
+openshell-sync-client = { workspace = true }
+openshell-core-domain = { workspace = true }

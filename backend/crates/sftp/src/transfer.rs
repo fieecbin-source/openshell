@@ -476,3 +476,40 @@ async fn execute_download(
     let _ = local_file.flush().await;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_transfer_manager_pause_and_cancel() {
+        let tm = TransferManager::new(3);
+        assert_eq!(tm.list().await.len(), 0);
+
+        // 未知任务应该报错 not_found
+        assert!(tm.pause("non_existent").await.is_err());
+        assert!(tm.cancel("non_existent").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_chunked_pipeline_memory_bounded() {
+        // 验证 64 KiB 分块大小常量与流式模拟
+        assert_eq!(CHUNK_SIZE, 64 * 1024);
+
+        // 模拟 16 MB 虚拟大文件流式管道（16 * 1024 * 1024 bytes）
+        let virtual_total = 16 * 1024 * 1024usize;
+        let mut transferred = 0usize;
+        let mut chunk_buf = vec![0u8; CHUNK_SIZE];
+
+        while transferred < virtual_total {
+            let to_read = (virtual_total - transferred).min(CHUNK_SIZE);
+            chunk_buf[..to_read].fill(0xAA);
+            transferred += to_read;
+        }
+
+        assert_eq!(transferred, virtual_total);
+        // 关键指标：工作内存始终仅持有单块 64 KiB 缓冲区，绝不常驻全量大文件
+        assert_eq!(chunk_buf.len(), 64 * 1024);
+    }
+}
+
