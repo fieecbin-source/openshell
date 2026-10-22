@@ -4,6 +4,11 @@ members = [
   "backend/crates/core-domain",
   "backend/crates/vault",
   "backend/crates/store",
+  "backend/crates/ssh",
+  "backend/crates/sftp",
+  "backend/crates/monitor",
+  "backend/crates/forward",
+  "backend/crates/importer",
 ]
 
 [workspace.package]
