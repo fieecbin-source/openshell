@@ -8,19 +8,29 @@ analysis/
 # Rust
 target/
 **/target/
+Cargo.lock.backup
 
-# Node
+# Node & Frontend
 node_modules/
+**/node_modules/
 .pnpm-store/
 dist/
+**/dist/
 dist-ssr/
+**/dist-ssr/
 *.local
+.eslintcache
+*.tsbuildinfo
 
 # Tauri
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+backend/desktop/gen/
+**/gen/
 
-# Env / secrets
+# Deploy / Server / Backups
+deploy/backups/
+**/backups/
 .env
 .env.*
 !.env.example
@@ -31,8 +41,20 @@ apps/desktop/src-tauri/gen/
 # IDE / OS
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary & intermediate image generation
+app-icon.png
 
 # Logs / temp / caches / databases
 *.log
@@ -41,4 +63,3 @@ tmp/
 *.db
 *.db-shm
 *.db-wal
-backend/desktop/gen/
