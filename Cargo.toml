@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+  "backend/crates/core-domain",
+  "backend/crates/vault",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+authors = ["OpenShell Contributors"]
+repository = "https://example.invalid/openshell"
+
+[workspace.dependencies]
+openshell-core-domain = { path = "backend/crates/core-domain" }
+openshell-vault = { path = "backend/crates/vault" }
+openshell-store = { path = "backend/crates/store" }
+openshell-ssh = { path = "backend/crates/ssh" }
+openshell-app-core = { path = "backend/crates/app-core" }
+openshell-sftp = { path = "backend/crates/sftp" }
+openshell-monitor = { path = "backend/crates/monitor" }
+openshell-forward = { path = "backend/crates/forward" }
+openshell-importer = { path = "backend/crates/importer" }
+openshell-sync-protocol = { path = "backend/crates/sync-protocol" }
+openshell-sync-client = { path = "backend/crates/sync-client" }
+openshell-extension-sample = { path = "backend/crates/extension-sample" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "fs"] }
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ulid = "1"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = true
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 1

@@ -34,7 +34,11 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 
-# Logs / temp / caches
+# Logs / temp / caches / databases
 *.log
 tmp/
 .cache/
+*.db
+*.db-shm
+*.db-wal
+backend/desktop/gen/
