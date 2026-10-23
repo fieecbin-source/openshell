@@ -72,6 +72,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev \
+            libudev-dev \
             build-essential \
             curl \
             wget \
