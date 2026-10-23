@@ -193,7 +193,7 @@ export const AppLayout: React.FC = () => {
             OpenShell
           </span>
           <span className="rounded-full bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[10px] font-medium text-slate-600 font-mono">
-            v1.0.0
+            v1.0.1
           </span>
         </div>
 
