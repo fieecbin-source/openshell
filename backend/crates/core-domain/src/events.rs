@@ -29,6 +29,15 @@ pub enum AppEvent {
         level: String,
         message: String,
     },
+    CardStateChanged {
+        card_id: CardId,
+        state: crate::entities::CardState,
+        mode: crate::entities::CardMode,
+        reason: Option<String>,
+    },
+    SerialPortsChanged {
+        ports: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

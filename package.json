@@ -1,0 +1,12 @@
+{
+  "name": "openshell",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @openshell/frontend dev",
+    "build": "pnpm --filter @openshell/frontend build",
+    "tauri": "node frontend/node_modules/@tauri-apps/cli/tauri.js",
+    "typecheck": "pnpm --filter @openshell/frontend typecheck",
+    "test": "pnpm --filter @openshell/frontend test",
+    "desktop:build": "node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle"
+  }
+}

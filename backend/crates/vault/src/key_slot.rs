@@ -12,7 +12,7 @@ pub const SLOT_AAD: &[u8] = b"openshell-vault-key-v1";
 /// key_check 中加密的固定明文。
 pub const KEY_CHECK_PLAINTEXT: &[u8] = b"openshell-key-check-v1";
 /// 主密码最小长度。
-pub const MIN_PASSWORD_LEN: usize = 10;
+pub const MIN_PASSWORD_LEN: usize = 1;
 
 /// 直接对应 `vault` 行字段的密钥槽数据（salt / wrapped / key_check 分开）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,12 +117,10 @@ impl KeySlot {
     }
 }
 
-/// 校验主密码最小长度（不静默截断）。
+/// 校验主密码非空（不限制密码位数，支持任意长度密码）。
 pub fn validate_password(password: &str) -> DomainResult<()> {
-    if password.chars().count() < MIN_PASSWORD_LEN {
-        return Err(error::validation(format!(
-            "master password must be at least {MIN_PASSWORD_LEN} characters"
-        )));
+    if password.is_empty() {
+        return Err(error::validation("主密码不能为空"));
     }
     Ok(())
 }
@@ -194,7 +192,8 @@ mod tests {
 
     #[test]
     fn password_length_is_validated() {
-        assert!(validate_password("short").is_err());
+        assert!(validate_password("").is_err());
+        assert!(validate_password("1").is_ok());
         assert!(validate_password("0123456789").is_ok());
     }
 

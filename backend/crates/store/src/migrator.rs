@@ -37,6 +37,30 @@ impl Store {
                 tx.commit().map_err(map_sql_error)?;
             }
 
+            // 确保会话的 host_key_policy 统一为 accept_new，防止 strict 导致首次建连被未知主机公钥阻断
+            let _ = conn.execute(
+                "UPDATE session SET host_key_policy = 'accept_new' WHERE host_key_policy = 'strict'",
+                [],
+            );
+
+            // 修正历史数据：早期版本把「未删除」写成了 deleted_at = 0，
+            // 而查询统一按 IS NULL 判断，导致这些记录无法被读取。
+            for table in [
+                "secret",
+                "credential",
+                "ssh_key",
+                "session",
+                "session_group",
+                "snippet",
+                "port_forward",
+                "known_host",
+            ] {
+                let _ = conn.execute(
+                    &format!("UPDATE {table} SET deleted_at = NULL WHERE deleted_at = 0"),
+                    [],
+                );
+            }
+
             Ok(SCHEMA_VERSION)
         })
     }

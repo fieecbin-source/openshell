@@ -1,0 +1,49 @@
+services:
+  openshell-server:
+    build:
+      context: ..
+      dockerfile: backend/server/Dockerfile
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - DATABASE_URL=/data/openshell-server.db
+      - ARTIFACTS_DIR=/data/artifacts
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-secure-random-string-at-least-32-chars-long}
+      - BOOTSTRAP_TOKEN=${BOOTSTRAP_TOKEN:-}
+      - ALLOW_MULTI_USER=${ALLOW_MULTI_USER:-false}
+      - REQUIRE_INVITE=${REQUIRE_INVITE:-false}
+      - INVITE_CODE=${INVITE_CODE:-}
+      - RELAY_ENABLED=${RELAY_ENABLED:-false}
+      - RELAY_ALLOWED_NETS=${RELAY_ALLOWED_NETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32}
+      - RUST_LOG=openshell_server=info,tower_http=info
+    volumes:
+      - server-data:/data
+    networks:
+      - openshell-net
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - openshell-server
+    networks:
+      - openshell-net
+
+volumes:
+  server-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  openshell-net:
+    driver: bridge

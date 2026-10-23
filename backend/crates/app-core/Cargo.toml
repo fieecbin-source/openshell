@@ -1,0 +1,34 @@
+[package]
+name = "openshell-app-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+openshell-core-domain = { workspace = true }
+openshell-vault = { workspace = true }
+openshell-store = { workspace = true }
+openshell-ssh = { workspace = true }
+openshell-sftp = { workspace = true }
+openshell-monitor = { workspace = true }
+openshell-forward = { workspace = true }
+openshell-importer = { workspace = true }
+openshell-sync-protocol = { workspace = true }
+openshell-sync-client = { workspace = true }
+openshell-serial = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+parking_lot = "0.12"
+zeroize = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+time = { workspace = true }
+
+[dev-dependencies]
+openshell-extension-sample = { workspace = true }
+tempfile = "3"
+

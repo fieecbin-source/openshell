@@ -4,10 +4,22 @@ members = [
   "backend/crates/core-domain",
   "backend/crates/vault",
   "backend/crates/store",
+  "backend/crates/ssh",
+  "backend/crates/sftp",
+  "backend/crates/monitor",
+  "backend/crates/forward",
+  "backend/crates/importer",
+  "backend/crates/sync-protocol",
+  "backend/crates/sync-client",
+  "backend/crates/extension-sample",
+  "backend/crates/app-core",
+  "backend/crates/serial",
+  "backend/desktop",
+  "backend/server",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
@@ -27,6 +39,7 @@ openshell-importer = { path = "backend/crates/importer" }
 openshell-sync-protocol = { path = "backend/crates/sync-protocol" }
 openshell-sync-client = { path = "backend/crates/sync-client" }
 openshell-extension-sample = { path = "backend/crates/extension-sample" }
+openshell-serial = { path = "backend/crates/serial" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

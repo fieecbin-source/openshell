@@ -71,6 +71,7 @@ id_type!(SecretId, "秘密载荷标识");
 id_type!(DeviceId, "设备标识");
 id_type!(ConnectionId, "连接标识");
 id_type!(TabId, "终端标签标识");
+id_type!(CardId, "视图卡标识");
 
 /// 生成一个 26 字符 ULID 文本。
 pub fn new_id() -> String {

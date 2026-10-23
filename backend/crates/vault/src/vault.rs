@@ -227,7 +227,6 @@ impl VaultManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::key_slot::MIN_PASSWORD_LEN;
     use openshell_core_domain::{ErrorCode, SecretStore};
 
     const OLD_PASSWORD: &str = "correct horse battery";
@@ -364,11 +363,10 @@ mod tests {
     }
 
     #[test]
-    fn short_password_is_rejected() {
+    fn empty_password_is_rejected() {
         let vault = VaultManager::new();
-        let err = vault.init("short", fast_kdf()).unwrap_err();
+        let err = vault.init("", fast_kdf()).unwrap_err();
         assert_eq!(err.code, ErrorCode::Validation);
-        assert!("short".len() < MIN_PASSWORD_LEN);
     }
 
     #[test]

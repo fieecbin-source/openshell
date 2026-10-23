@@ -1,0 +1,41 @@
+[package]
+name = "openshell-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "OpenShell"
+path = "src/main.rs"
+
+[lib]
+name = "openshell_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+openshell-core-domain = { workspace = true }
+openshell-store = { workspace = true }
+openshell-vault = { workspace = true }
+openshell-ssh = { workspace = true }
+openshell-app-core = { workspace = true }
+openshell-sftp = { workspace = true }
+openshell-monitor = { workspace = true }
+openshell-forward = { workspace = true }
+openshell-importer = { workspace = true }
+openshell-sync-protocol = { workspace = true }
+openshell-extension-sample = { workspace = true }
+openshell-serial = { workspace = true }
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zeroize = { workspace = true }
+ulid = { workspace = true }
+tauri-plugin-single-instance = "2.5.4"

@@ -7,8 +7,8 @@ use crate::repositories::secret::{insert_secret_row, soft_delete_secret};
 use crate::Store;
 use async_trait::async_trait;
 use openshell_core_domain::{
-    now_ms, DomainError, DomainResult, SecretId, SecretMaterial, SecretRecord, SshKey, SshKeyId,
-    SshKeyRepository,
+    now_ms, CredentialId, DomainError, DomainResult, SecretId, SecretMaterial, SecretRecord, SshKey,
+    SshKeyId, SshKeyRepository,
 };
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
@@ -119,6 +119,58 @@ impl SshKeyRepository for SshKeyRepo {
         })
     }
 
+    async fn find_by_fingerprint(&self, fingerprint: &str) -> DomainResult<Option<SshKey>> {
+        self.store.with_conn(|conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {SSH_KEY_COLUMNS} FROM ssh_key WHERE fingerprint_sha256 = ?1 \
+                     ORDER BY (deleted_at IS NULL) DESC, updated_at DESC LIMIT 1"
+                ),
+                params![fingerprint],
+                ssh_key_from_row,
+            )
+            .optional()
+            .map_err(map_sql_error)
+        })
+    }
+
+    async fn update_passphrase(
+        &self,
+        id: &SshKeyId,
+        credential_id: Option<&CredentialId>,
+        has_passphrase: bool,
+    ) -> DomainResult<SshKey> {
+        let now = now_ms();
+        self.store.with_conn(|conn| {
+            conn.execute(
+                "UPDATE ssh_key SET passphrase_credential_id = ?1, has_passphrase = ?2, \
+                 updated_at = ?3, dirty = 1 WHERE id = ?4 AND deleted_at IS NULL",
+                params![
+                    credential_id.map(|c| c.as_str()),
+                    if has_passphrase { 1 } else { 0 },
+                    now,
+                    id.as_str(),
+                ],
+            )
+            .map_err(map_sql_error)?;
+            Ok(())
+        })?;
+        self.get_sync(id)
+    }
+
+    async fn restore(&self, id: &SshKeyId, name: &str) -> DomainResult<()> {
+        let now = now_ms();
+        self.store.with_conn(|conn| {
+            conn.execute(
+                "UPDATE ssh_key SET deleted_at = NULL, name = ?1, updated_at = ?2, dirty = 1 \
+                 WHERE id = ?3",
+                params![name, now, id.as_str()],
+            )
+            .map_err(map_sql_error)?;
+            Ok(())
+        })
+    }
+
     async fn delete(&self, id: &SshKeyId) -> DomainResult<()> {
         let now = now_ms();
         self.store.with_conn(|conn| {
@@ -136,18 +188,13 @@ impl SshKeyRepository for SshKeyRepo {
                 .map_err(map_sql_error)?
                 .ok_or_else(|| DomainError::not_found("ssh key not found"))?;
 
-            let references: i64 = tx
-                .query_row(
-                    "SELECT COUNT(*) FROM session WHERE ssh_key_id = ?1 AND deleted_at IS NULL",
-                    params![id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(map_sql_error)?;
-            if references > 0 {
-                return Err(DomainError::conflict(
-                    "ssh key is still referenced by a session",
-                ));
-            }
+            // 自动解除关联会话的绑定引用（删除的是配置记录，不影响本地物理文件）
+            tx.execute(
+                "UPDATE session SET ssh_key_id = NULL, updated_at = ?1, dirty = 1 \
+                 WHERE ssh_key_id = ?2 AND deleted_at IS NULL",
+                params![now, id.as_str()],
+            )
+            .map_err(map_sql_error)?;
 
             tx.execute(
                 "UPDATE ssh_key SET deleted_at = ?1, updated_at = ?1, dirty = 1 \

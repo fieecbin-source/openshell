@@ -410,3 +410,36 @@ pub struct ProcessMetrics {
     pub name: String,
     pub command: String,
 }
+
+/// 视图卡模式（命令模式 vs 视图模式）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardMode {
+    Command,
+    View,
+}
+
+/// 视图卡状态（由权威状态机驱动）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardState {
+    Connecting,
+    Connected,
+    Disconnected,
+    Reconnecting,
+    Closed,
+}
+
+/// 视图卡实体（1 会话连接 = 1 视图卡）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCard {
+    pub card_id: CardId,
+    pub session_id: SessionId,
+    pub name: String,
+    pub protocol: Protocol,
+    pub current_mode: CardMode,
+    pub state: CardState,
+    pub connection_id: Option<ConnectionId>,
+    pub created_at: i64,
+    pub last_active_at: i64,
+}
