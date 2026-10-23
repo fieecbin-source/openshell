@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { formatFriendlyError } from "../lib/errors";
 
 export interface PortCheckResult {
   host: string;
@@ -86,7 +87,7 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
         port,
         is_open: false,
         latency_ms: timeoutMs,
-        error: String(err?.message || err),
+        error: formatFriendlyError(err),
       });
     } finally {
       setLoading(false);

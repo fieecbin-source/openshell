@@ -73,13 +73,22 @@ pub trait CredentialRepository: Send + Sync {
 pub trait SshKeyRepository: Send + Sync {
     async fn list(&self) -> DomainResult<Vec<SshKey>>;
     async fn get(&self, id: &SshKeyId) -> DomainResult<SshKey>;
+    async fn find_by_fingerprint(&self, fingerprint: &str) -> DomainResult<Option<SshKey>>;
     async fn create(
         &self,
         key: SshKey,
         secret: SecretRecord,
         material: SecretMaterial,
     ) -> DomainResult<SshKey>;
+    async fn restore(&self, id: &SshKeyId, name: &str) -> DomainResult<()>;
     async fn delete(&self, id: &SshKeyId) -> DomainResult<()>;
+    /// 更新私钥口令凭据绑定（用于补录/重置已加密私钥的口令）。
+    async fn update_passphrase(
+        &self,
+        id: &SshKeyId,
+        credential_id: Option<&CredentialId>,
+        has_passphrase: bool,
+    ) -> DomainResult<SshKey>;
 }
 
 #[async_trait]

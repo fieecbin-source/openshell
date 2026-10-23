@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { useSftpStore } from "../stores/sftpStore";
 import type { TransferTask } from "../types/ipc";
 
@@ -9,7 +9,18 @@ export const TransferQueueDrawer: React.FC = () => {
     setTransferQueueOpen,
     pauseTransfer,
     cancelTransfer,
+    pollTransfers,
   } = useSftpStore();
+
+  // 抽屉打开时轮询任务进度，否则进度条与状态不会更新
+  useEffect(() => {
+    if (!transferQueueOpen) return;
+    void pollTransfers();
+    const timer = window.setInterval(() => {
+      void pollTransfers();
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [transferQueueOpen, pollTransfers]);
 
   if (!transferQueueOpen) return null;
 

@@ -365,6 +365,15 @@ interface SettingsState {
   logSessionOutput: boolean;
   settingsModalOpen: boolean;
 
+  /** 终端背景：空字符串表示不启用，内置壁纸使用 preset id，"custom" 表示自定义图片 */
+  backgroundId: string;
+  /** 自定义背景图片（data URL），仅当 backgroundId === "custom" 时生效 */
+  backgroundCustom: string | null;
+  /** 壁纸不透明度 0-100 */
+  backgroundOpacity: number;
+  /** 壁纸高斯模糊 0-24 px */
+  backgroundBlur: number;
+
   loadSettings: () => Promise<void>;
   setTheme: (theme: TerminalTheme) => Promise<void>;
   setFontSize: (fontSize: number) => Promise<void>;
@@ -373,6 +382,11 @@ interface SettingsState {
   setLogSessionOutput: (logSessionOutput: boolean) => Promise<void>;
   setSettingsModalOpen: (open: boolean) => void;
   saveCustomTheme: (id: string, config: TerminalThemeConfig) => Promise<void>;
+
+  setBackgroundId: (id: string) => Promise<void>;
+  setBackgroundCustom: (dataUrl: string | null) => Promise<void>;
+  setBackgroundOpacity: (opacity: number) => Promise<void>;
+  setBackgroundBlur: (blur: number) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -383,17 +397,31 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   cursorBlink: true,
   logSessionOutput: false,
   settingsModalOpen: false,
+  backgroundId: "",
+  backgroundCustom: null,
+  backgroundOpacity: 45,
+  backgroundBlur: 6,
 
   loadSettings: async () => {
     try {
       const themeRec = await settingsGet("user", "terminal.theme");
       const fontRec = await settingsGet("user", "terminal.font_size");
       const logRec = await settingsGet("user", "terminal.log_session");
+      const bgIdRec = await settingsGet("user", "terminal.background_id");
+      const bgOpacityRec = await settingsGet("user", "terminal.background_opacity");
+      const bgBlurRec = await settingsGet("user", "terminal.background_blur");
+      const bgCustomRec = await settingsGet("user", "terminal.background_custom");
 
       set({
         theme: (themeRec?.value_json as TerminalTheme) || "dark",
         fontSize: (fontRec?.value_json as number) || 13,
         logSessionOutput: (logRec?.value_json as boolean) || false,
+        backgroundId: (bgIdRec?.value_json as string) || "",
+        backgroundOpacity:
+          typeof bgOpacityRec?.value_json === "number" ? (bgOpacityRec.value_json as number) : 45,
+        backgroundBlur:
+          typeof bgBlurRec?.value_json === "number" ? (bgBlurRec.value_json as number) : 6,
+        backgroundCustom: (bgCustomRec?.value_json as string) || null,
       });
     } catch (e) {
       console.warn("load settings error", e);
@@ -439,6 +467,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ customThemes: updated });
     try {
       await settingsSet("user", "terminal.custom_themes", updated);
+    } catch {}
+  },
+
+  setBackgroundId: async (backgroundId: string) => {
+    set({ backgroundId });
+    try {
+      await settingsSet("user", "terminal.background_id", backgroundId);
+    } catch {}
+  },
+
+  setBackgroundCustom: async (backgroundCustom: string | null) => {
+    set({ backgroundCustom });
+    try {
+      await settingsSet("user", "terminal.background_custom", backgroundCustom);
+    } catch {}
+  },
+
+  setBackgroundOpacity: async (backgroundOpacity: number) => {
+    set({ backgroundOpacity });
+    try {
+      await settingsSet("user", "terminal.background_opacity", backgroundOpacity);
+    } catch {}
+  },
+
+  setBackgroundBlur: async (backgroundBlur: number) => {
+    set({ backgroundBlur });
+    try {
+      await settingsSet("user", "terminal.background_blur", backgroundBlur);
     } catch {}
   },
 }));

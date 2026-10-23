@@ -11,6 +11,7 @@ import {
   renameGroup,
   updateSession,
 } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 interface SessionState {
   sessions: Session[];
@@ -49,7 +50,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ]);
       set({ sessions, groups, isLoading: false });
     } catch (err: any) {
-      set({ error: err?.message || String(err), isLoading: false });
+      set({ error: formatFriendlyError(err), isLoading: false });
     }
   },
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSyncStore } from "../stores/syncStore";
+import { formatFriendlyError } from "../lib/errors";
 
 export const SyncSettingsModal: React.FC = () => {
   const {
@@ -64,7 +65,7 @@ export const SyncSettingsModal: React.FC = () => {
         `同步成功：已推送 ${res.pushed_count} 条变更，拉取 ${res.pulled_count} 条，版本 #${res.head_seq}`
       );
     } catch (err: any) {
-      setSyncFeedback(`同步失败: ${err?.message || err}`);
+      setSyncFeedback(`同步失败: ${formatFriendlyError(err)}`);
     }
   };
 
@@ -281,11 +282,10 @@ export const SyncSettingsModal: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-[#1d1d1f] font-semibold mb-1">密码（10-128 位字符）</label>
+                <label className="block text-[#1d1d1f] font-semibold mb-1">密码（非空，最多 128 位）</label>
                 <input
                   type="password"
                   required
-                  minLength={10}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"

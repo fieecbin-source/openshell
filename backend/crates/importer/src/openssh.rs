@@ -122,7 +122,7 @@ impl OpenSshParser {
                 port: Some(port),
                 username: Some(user),
                 auth_method: Some(auth_method),
-                host_key_policy: Some(HostKeyPolicy::Strict),
+                host_key_policy: Some(HostKeyPolicy::AcceptNew),
                 keepalive_sec: Some(keepalive_sec),
                 notes,
                 ..Default::default()

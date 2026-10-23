@@ -5,7 +5,8 @@ import type { SftpFileEntry } from "../types/ipc";
 import { ChmodModal } from "./ChmodModal";
 import { DeleteConfirmModal } from "./DeleteConfirmModal";
 import { RemoteEditorModal } from "./RemoteEditorModal";
-import { localFsHome } from "../lib/ipc";
+import { localFsHome, sftpWriteFile } from "../lib/ipc";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 interface SftpViewProps {
   connId: string;
@@ -293,6 +294,20 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
     setIsDraggingOver(false);
   };
 
+  // 浏览器 File 可能没有系统路径（Tauri 拖拽事件以外的场景），退化为直接读取内容上传
+  const uploadFileObject = async (file: File) => {
+    const systemPath = (file as any).path as string | undefined;
+    if (systemPath) {
+      await uploadFile(connId, sessionId, systemPath, remotePath, true);
+      return;
+    }
+    const buffer = await file.arrayBuffer();
+    const dest = remotePath.endsWith("/")
+      ? `${remotePath}${file.name}`
+      : `${remotePath}/${file.name}`;
+    await sftpWriteFile(connId, dest, Array.from(new Uint8Array(buffer)));
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -301,17 +316,45 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
     // 处理原生操作系统拖入的文件
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        // 如果能获取系统路径
-        const systemPath = (file as any).path;
-        if (systemPath) {
-          await uploadFile(connId, sessionId, systemPath, remotePath, true);
+      try {
+        for (let i = 0; i < files.length; i++) {
+          await uploadFileObject(files[i]);
         }
+        await refreshRemote(connId);
+      } catch (err) {
+        console.warn("拖拽上传失败", err);
       }
-      await refreshRemote(connId);
     }
   };
+
+  // Tauri 窗口级拖拽事件：WebView 默认接管拖拽，HTML5 drop 不会触发
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    getCurrentWebview()
+      .onDragDropEvent(async (event) => {
+        if (event.payload.type !== "drop") return;
+        const paths = event.payload.paths || [];
+        if (paths.length === 0) return;
+        try {
+          for (const path of paths) {
+            await uploadFile(connId, sessionId, path, remotePath, true);
+          }
+          await refreshRemote(connId);
+        } catch (err) {
+          console.warn("拖拽上传失败", err);
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [connId, sessionId, remotePath, uploadFile, refreshRemote]);
 
   // 触发本地文件上传选择器
   const triggerUploadPicker = () => {
@@ -321,14 +364,14 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const systemPath = (file as any).path;
-        if (systemPath) {
-          await uploadFile(connId, sessionId, systemPath, remotePath, true);
+      try {
+        for (let i = 0; i < files.length; i++) {
+          await uploadFileObject(files[i]);
         }
+        await refreshRemote(connId);
+      } catch (err) {
+        console.warn("上传失败", err);
       }
-      await refreshRemote(connId);
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -881,8 +924,8 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
           entryName={chmodTarget.name}
           initialMode={chmodTarget.permissions}
           isDirectory={chmodTarget.file_type === "directory"}
-          onConfirm={async (mode, _recursive) => {
-            await chmodRemoteEntry(connId, chmodTarget.path, mode);
+          onConfirm={async (mode, recursive) => {
+            await chmodRemoteEntry(connId, chmodTarget.path, mode, recursive);
             setChmodModalOpen(false);
             setChmodTarget(null);
           }}

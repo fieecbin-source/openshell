@@ -605,6 +605,7 @@ export const AppLayout: React.FC = () => {
         }}
         editingSession={editingSession}
         initialValues={initialSessionValues}
+        onConnectSession={handleConnectSession}
       />
       <CommandPaletteModal
         isOpen={commandPaletteOpen}

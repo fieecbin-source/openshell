@@ -319,6 +319,20 @@ pub async fn ssh_key_delete(
     state.session.delete_ssh_key(&id).await.map_err(Into::into)
 }
 
+#[tauri::command]
+pub async fn ssh_key_set_passphrase(
+    state: tauri::State<'_, Arc<AppServices>>,
+    id: String,
+    passphrase: String,
+) -> Result<SshKey, IpcError> {
+    let id = SshKeyId::from_string(id)?;
+    state
+        .session
+        .set_ssh_key_passphrase(&id, &passphrase)
+        .await
+        .map_err(Into::into)
+}
+
 // ==========================================
 // Connection & Terminal
 // ==========================================

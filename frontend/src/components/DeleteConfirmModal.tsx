@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { SftpFileEntry } from "../types/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 interface DeleteConfirmModalProps {
   isOpen: boolean;
@@ -15,6 +16,11 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   onClose,
 }) => {
   const [deleting, setDeleting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) setErrorMsg(null);
+  }, [isOpen]);
 
   if (!isOpen || entries.length === 0) return null;
 
@@ -26,9 +32,12 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
 
   const handleDelete = async () => {
     setDeleting(true);
+    setErrorMsg(null);
     try {
       await onConfirm();
       onClose();
+    } catch (e) {
+      setErrorMsg(formatFriendlyError(e));
     } finally {
       setDeleting(false);
     }
@@ -90,6 +99,12 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
             </div>
           </div>
         </div>
+
+        {errorMsg && (
+          <div className="mt-3 rounded-xl border border-red-500/20 bg-red-500/10 p-2.5 text-[11px] text-red-700">
+            {errorMsg}
+          </div>
+        )}
 
         <div className="mt-6 flex justify-end gap-2.5">
           <button

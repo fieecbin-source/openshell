@@ -22,7 +22,7 @@ pub struct SessionService {
     ssh_key_repo: Arc<SshKeyRepo>,
     known_host_repo: Arc<KnownHostRepo>,
     settings_repo: Arc<SettingsRepo>,
-    _secret_repo: Arc<SecretRepo>,
+    secret_repo: Arc<SecretRepo>,
     vault_manager: Arc<VaultManager>,
     _event_bus: Arc<EventBus>,
 }
@@ -47,7 +47,7 @@ impl SessionService {
             ssh_key_repo,
             known_host_repo,
             settings_repo,
-            _secret_repo: secret_repo,
+            secret_repo,
             vault_manager,
             _event_bus: event_bus,
         }
@@ -287,24 +287,26 @@ impl SessionService {
         let privkey =
             openshell_ssh::russh::keys::decode_secret_key(&clean_pem, passphrase.as_deref())
                 .map_err(|e| {
-                    let err_str = e.to_string();
-                    if clean_pem.contains("ENCRYPTED")
+                    let err_str = e.to_string().to_lowercase();
+                    let has_passphrase = passphrase.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
+                    let unreadable = err_str.contains("could not read key")
+                        || err_str.contains("unsupported key type");
+                    let encrypted = err_str.contains("encrypted")
+                        || clean_pem.contains("ENCRYPTED")
                         || clean_pem.contains("bcrypt")
-                        || clean_pem.contains("aes256")
-                    {
-                        if passphrase.as_deref().unwrap_or("").is_empty() {
-                            DomainError::validation(
-                                "该私钥已被加密，请输入对应的私钥密码 (Passphrase) 后再导入。",
-                            )
-                        } else {
-                            DomainError::validation(
-                                "私钥解密失败，请检查私钥密码 (Passphrase) 是否正确。",
-                            )
-                        }
+                        || clean_pem.contains("aes256");
+                    if !unreadable && has_passphrase {
+                        DomainError::validation(
+                            "私钥口令不正确，无法解密该私钥，请重新输入。",
+                        )
+                    } else if !unreadable && encrypted {
+                        DomainError::validation(
+                            "该私钥已加密，请在下方填写私钥口令 (Passphrase) 后再导入。",
+                        )
                     } else {
-                        DomainError::validation(format!(
-                            "私钥格式无法识别，请确保为标准的 OpenSSH 或 PEM 格式私钥: {err_str}"
-                        ))
+                        DomainError::validation(
+                            "无法识别该私钥文件。请选择 OpenSSH (-----BEGIN OPENSSH PRIVATE KEY-----) 或 PEM 格式的私钥文件，不要选择 .pub 公钥文件。",
+                        )
                     }
                 })?;
 
@@ -312,8 +314,68 @@ impl SessionService {
         let fingerprint = pubkey
             .fingerprint(openshell_ssh::russh::keys::HashAlg::Sha256)
             .to_string();
+
+        // 检查是否已有相同指纹的私钥（已存在则直接返回，但必须把本次填写的口令补绑上，
+        // 否则旧记录会一直缺少口令凭据，导致连接时无法解密私钥）
+        if let Ok(Some(existing_key)) = self.ssh_key_repo.find_by_fingerprint(&fingerprint).await {
+            let mut key = existing_key;
+            if key.deleted_at.is_some() {
+                let _ = self.ssh_key_repo.restore(&key.id, &name).await;
+                key.deleted_at = None;
+                key.name = name.clone();
+            }
+            // 以本次导入的私钥内容重新写入密文：历史记录可能存在密文缺失或被标记删除的情况，
+            // 仅恢复元数据无法建立连接，必须同时补齐加密内容。
+            let secret_record = self.vault_manager.encrypt_secret(
+                &key.secret_id,
+                "ssh_key",
+                clean_pem.as_bytes(),
+            )?;
+            self.secret_repo.save_or_restore(secret_record)?;
+            if let Some(pass) = passphrase.as_deref().filter(|p| !p.is_empty()) {
+                let cred = self
+                    .create_credential(
+                        format!("{} (私钥口令)", key.name),
+                        CredentialKind::Passphrase,
+                        None,
+                        pass,
+                        None,
+                        Some(SavePolicy::Always),
+                    )
+                    .await?;
+                key = self
+                    .ssh_key_repo
+                    .update_passphrase(&key.id, Some(&cred.id), true)
+                    .await?;
+            } else if key.has_passphrase {
+                // 本次导入的私钥未加密（无需口令即可解析），清理旧记录上残留的“已加密”标记，
+                // 否则连接时会一直等待一个并不存在的口令。
+                key = self
+                    .ssh_key_repo
+                    .update_passphrase(&key.id, None, false)
+                    .await?;
+            }
+            return Ok(key);
+        }
+
         let public_key_str = pubkey.to_openssh().unwrap_or_default();
         let algorithm = privkey.algorithm().to_string();
+
+        // 持久化私钥口令：否则带 Passphrase 的私钥在连接时无法解密。
+        let passphrase_credential = match passphrase.as_deref() {
+            Some(pass) if !pass.is_empty() => Some(
+                self.create_credential(
+                    format!("{name} (私钥口令)"),
+                    CredentialKind::Passphrase,
+                    None,
+                    pass,
+                    None,
+                    Some(SavePolicy::Always),
+                )
+                .await?,
+            ),
+            _ => None,
+        };
 
         let key_id = SshKeyId::new();
         let secret_id = SecretId::new();
@@ -322,7 +384,6 @@ impl SessionService {
                 .encrypt_secret(&secret_id, "ssh_key", clean_pem.as_bytes())?;
 
         let now = now_ms();
-        let has_passphrase = passphrase.is_some();
         let ssh_key = SshKey {
             id: key_id,
             name,
@@ -331,8 +392,8 @@ impl SessionService {
             public_key: public_key_str,
             fingerprint_sha256: fingerprint,
             secret_id,
-            passphrase_credential_id: None,
-            has_passphrase,
+            passphrase_credential_id: passphrase_credential.as_ref().map(|c| c.id.clone()),
+            has_passphrase: passphrase_credential.is_some(),
             comment,
             created_at: now,
             updated_at: now,
@@ -341,7 +402,7 @@ impl SessionService {
         };
 
         let material = SecretMaterial::PrivateKey {
-            pem: Zeroizing::new(pem.as_bytes().to_vec()),
+            pem: Zeroizing::new(clean_pem.as_bytes().to_vec()),
             passphrase: passphrase.map(Zeroizing::new),
         };
 
@@ -352,6 +413,57 @@ impl SessionService {
 
     pub async fn delete_ssh_key(&self, id: &SshKeyId) -> DomainResult<()> {
         self.ssh_key_repo.delete(id).await
+    }
+
+    /// 为已导入的加密私钥补录/重置口令。
+    ///
+    /// 校验口令能否真正解开私钥，成功后才写入保险库并绑定到该私钥。
+    pub async fn set_ssh_key_passphrase(
+        &self,
+        id: &SshKeyId,
+        passphrase: &str,
+    ) -> DomainResult<SshKey> {
+        if !self.vault_manager.is_unlocked() {
+            return Err(DomainError::new(
+                ErrorCode::VaultLocked,
+                "主保险库已锁定，请先解锁后再设置私钥口令",
+            ));
+        }
+        if passphrase.is_empty() {
+            return Err(DomainError::validation("请输入私钥口令 (Passphrase)"));
+        }
+
+        let key = self.ssh_key_repo.get(id).await?;
+        let secret = match self.secret_repo.get(&key.secret_id)? {
+            Some(secret) => secret,
+            None => self.secret_repo.restore_if_deleted(&key.secret_id)?.ok_or_else(|| {
+                DomainError::not_found(
+                    "该私钥的加密内容缺失，无法设置口令。请在「私钥管理」中重新导入该私钥文件。",
+                )
+            })?,
+        };
+        let pem_bytes = self.vault_manager.decrypt_secret(&secret)?;
+        let pem = String::from_utf8(pem_bytes)
+            .map_err(|_| DomainError::new(ErrorCode::Validation, "私钥内容不是有效的文本格式"))?;
+
+        openshell_ssh::russh::keys::decode_secret_key(&pem, Some(passphrase)).map_err(|_| {
+            DomainError::validation("私钥口令不正确，无法解密该私钥，请重新输入。")
+        })?;
+
+        let cred = self
+            .create_credential(
+                format!("{} (私钥口令)", key.name),
+                CredentialKind::Passphrase,
+                None,
+                passphrase,
+                None,
+                Some(SavePolicy::Always),
+            )
+            .await?;
+
+        self.ssh_key_repo
+            .update_passphrase(id, Some(&cred.id), true)
+            .await
     }
 
     // ==========================================

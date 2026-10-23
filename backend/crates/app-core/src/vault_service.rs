@@ -213,15 +213,17 @@ impl SecretResolver for VaultService {
         if !self.vault_manager.is_unlocked() {
             return Err(DomainError::new(
                 ErrorCode::VaultLocked,
-                "vault is locked: cannot resolve credential",
+                "主保险库处于锁定状态，无法解密服务器登录凭据，请先输入主密码解锁保险库",
             ));
         }
 
         let cred = self.credential_repo.get(id).await?;
-        let secret = self
-            .secret_repo
-            .get(&cred.secret_id)?
-            .ok_or_else(|| DomainError::not_found("secret not found for credential"))?;
+        let secret = match self.secret_repo.get(&cred.secret_id)? {
+            Some(secret) => secret,
+            None => self.secret_repo.restore_if_deleted(&cred.secret_id)?.ok_or_else(|| {
+                DomainError::not_found("该凭据的加密内容缺失，请重新保存该登录凭据后再连接。")
+            })?,
+        };
 
         let plaintext = self.vault_manager.decrypt_secret(&secret)?;
         match cred.kind {
@@ -249,15 +251,19 @@ impl SecretResolver for VaultService {
         if !self.vault_manager.is_unlocked() {
             return Err(DomainError::new(
                 ErrorCode::VaultLocked,
-                "vault is locked: cannot resolve ssh key",
+                "主保险库处于锁定状态，无法解密私钥，请先输入主密码解锁保险库",
             ));
         }
 
         let key = self.ssh_key_repo.get(id).await?;
-        let secret = self
-            .secret_repo
-            .get(&key.secret_id)?
-            .ok_or_else(|| DomainError::not_found("secret not found for ssh key"))?;
+        let secret = match self.secret_repo.get(&key.secret_id)? {
+            Some(secret) => secret,
+            None => self.secret_repo.restore_if_deleted(&key.secret_id)?.ok_or_else(|| {
+                DomainError::not_found(
+                    "该私钥的加密内容缺失，无法用于连接。请在「私钥管理」中重新导入该私钥文件。",
+                )
+            })?,
+        };
 
         let pem_bytes = self.vault_manager.decrypt_secret(&secret)?;
 

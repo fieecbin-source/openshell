@@ -8,7 +8,18 @@ import {
   closeCard,
   setCardMode,
   openSerial,
+  forwardList,
+  forwardStart,
 } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
+
+export interface ConnectOverrides {
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  passphrase?: string;
+}
 
 export interface TerminalTab {
   tabId: string;
@@ -23,20 +34,53 @@ export interface TerminalTab {
   baudRate?: number;
 }
 
+// 后端以 26 位 ULID 校验终端标签 ID，这里生成同格式 ID，
+// 否则打开终端时会被判定为“格式有误”。
+const ULID_CHARS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
 function generateId(): string {
-  return "t_" + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+  let id = "";
+  let time = Date.now();
+  for (let i = 9; i >= 0; i--) {
+    id = ULID_CHARS[time % 32] + id;
+    time = Math.floor(time / 32);
+  }
+  const random = new Uint8Array(16);
+  crypto.getRandomValues(random);
+  for (let i = 0; i < 16; i++) {
+    id += ULID_CHARS[random[i] % 32];
+  }
+  return id;
+}
+
+/**
+ * 连接成功后自动启动该会话中标记为“自动启动”的端口转发规则。
+ * 单条规则失败（如本地端口被占用）不影响 SSH 会话本身。
+ */
+async function startAutoForwardRules(sessionId: string, connectionId: string) {
+  try {
+    const rules = await forwardList(sessionId);
+    for (const rule of rules) {
+      if (!rule.auto_start) continue;
+      await forwardStart(rule.id, connectionId).catch((e) => {
+        console.warn(`auto start forward rule failed: ${rule.id}`, e);
+      });
+    }
+  } catch {
+    // 没有规则或后端不可用时忽略
+  }
 }
 
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
 
-  openSession: (session: Session) => Promise<string>;
+  openSession: (session: Session, overrides?: ConnectOverrides) => Promise<string>;
   closeTab: (tabId: string) => Promise<void>;
   setActiveTab: (tabId: string) => void;
   switchMode: (tabId: string, mode: CardMode) => Promise<void>;
   toggleMode: (tabId: string) => Promise<void>;
-  reconnectTab: (tabId: string) => Promise<void>;
+  reconnectTab: (tabId: string, overrides?: ConnectOverrides) => Promise<void>;
   updateTabStatus: (
     tabId: string,
     status: TerminalTab["status"],
@@ -48,7 +92,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
 
-  openSession: async (session: Session) => {
+  openSession: async (session: Session, overrides?: ConnectOverrides) => {
     const tabId = generateId();
     const protocol: Protocol = session.protocol || "ssh";
 
@@ -104,7 +148,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               ? {
                   ...t,
                   status: "error",
-                  error: err?.message || String(err),
+                  connectionId: null,
+                  error: formatFriendlyError(err),
                 }
               : t
           ),
@@ -115,15 +160,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       // SSH 模式
       try {
         const requestId = "req_" + generateId();
-        const res = await connectSession(requestId, session.id);
+        const res = await connectSession(requestId, session.id, overrides);
 
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, connectionId: res.connection_id, status: "connected" }
+              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined }
               : t
           ),
         }));
+
+        // 连接成功后自动启动该会话中标记为“自动启动”的端口转发规则
+        await startAutoForwardRules(session.id, res.connection_id);
 
         return tabId;
       } catch (err: any) {
@@ -133,7 +181,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               ? {
                   ...t,
                   status: "error",
-                  error: err?.message || String(err),
+                  connectionId: null,
+                  error: formatFriendlyError(err),
                 }
               : t
           ),
@@ -171,12 +220,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     await get().switchMode(tabId, nextMode);
   },
 
-  reconnectTab: async (tabId: string) => {
+  reconnectTab: async (tabId: string, overrides?: ConnectOverrides) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
     set((state) => ({
       tabs: state.tabs.map((t) =>
-        t.tabId === tabId ? { ...t, status: "connecting", error: undefined } : t
+        t.tabId === tabId
+          ? { ...t, status: "connecting", connectionId: null, error: undefined }
+          : t
       ),
     }));
 
@@ -199,7 +250,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, status: "disconnected", error: err?.message || String(err) }
+              ? { ...t, status: "disconnected", connectionId: null, error: formatFriendlyError(err) }
               : t
           ),
         }));
@@ -207,19 +258,21 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     } else {
       try {
         const requestId = "req_" + generateId();
-        const res = await connectSession(requestId, tab.sessionId);
+        const res = await connectSession(requestId, tab.sessionId, overrides);
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, connectionId: res.connection_id, status: "connected" }
+              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined }
               : t
           ),
         }));
+        // 连接成功后自动启动该会话中标记为“自动启动”的端口转发规则
+        await startAutoForwardRules(tab.sessionId, res.connection_id);
       } catch (err: any) {
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, status: "disconnected", error: err?.message || String(err) }
+              ? { ...t, status: "error", connectionId: null, error: formatFriendlyError(err) }
               : t
           ),
         }));

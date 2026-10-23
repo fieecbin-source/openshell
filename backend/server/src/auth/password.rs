@@ -3,8 +3,8 @@ use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVe
 use rand::rngs::OsRng;
 
 pub fn hash_password(password: &str) -> Result<String, String> {
-    if password.len() < 10 || password.len() > 128 {
-        return Err("Password length must be between 10 and 128 characters".to_string());
+    if password.is_empty() || password.len() > 128 {
+        return Err("Password must be non-empty and at most 128 characters".to_string());
     }
 
     let salt = SaltString::generate(&mut OsRng);

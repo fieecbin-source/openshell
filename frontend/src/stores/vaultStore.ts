@@ -1,11 +1,13 @@
 import { create } from "zustand";
 import type { VaultStatus } from "../types/ipc";
 import {
+  changeVaultPassword,
   getVaultStatus,
   initVault,
   lockVault,
   unlockVault,
 } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 interface VaultState {
   status: VaultStatus | null;
@@ -15,6 +17,7 @@ interface VaultState {
   init: (masterPassword: string, rememberInKeychain?: boolean) => Promise<void>;
   unlock: (masterPassword?: string, useKeychain?: boolean) => Promise<void>;
   lock: () => Promise<void>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
 }
 
 export const useVaultStore = create<VaultState>((set) => ({
@@ -28,7 +31,7 @@ export const useVaultStore = create<VaultState>((set) => ({
       const status = await getVaultStatus();
       set({ status, isLoading: false });
     } catch (err: any) {
-      set({ error: err?.message || String(err), isLoading: false });
+      set({ error: formatFriendlyError(err), isLoading: false });
     }
   },
 
@@ -38,7 +41,7 @@ export const useVaultStore = create<VaultState>((set) => ({
       const status = await initVault(masterPassword, rememberInKeychain);
       set({ status, isLoading: false });
     } catch (err: any) {
-      set({ error: err?.message || String(err), isLoading: false });
+      set({ error: formatFriendlyError(err), isLoading: false });
       throw err;
     }
   },
@@ -49,7 +52,7 @@ export const useVaultStore = create<VaultState>((set) => ({
       const status = await unlockVault(masterPassword, useKeychain);
       set({ status, isLoading: false });
     } catch (err: any) {
-      set({ error: err?.message || String(err), isLoading: false });
+      set({ error: formatFriendlyError(err), isLoading: false });
       throw err;
     }
   },
@@ -60,7 +63,18 @@ export const useVaultStore = create<VaultState>((set) => ({
       const status = await lockVault();
       set({ status, isLoading: false });
     } catch (err: any) {
-      set({ error: err?.message || String(err), isLoading: false });
+      set({ error: formatFriendlyError(err), isLoading: false });
+    }
+  },
+
+  changePassword: async (oldPassword, newPassword) => {
+    set({ isLoading: true, error: null });
+    try {
+      const status = await changeVaultPassword(oldPassword, newPassword);
+      set({ status, isLoading: false });
+    } catch (err: any) {
+      set({ error: formatFriendlyError(err), isLoading: false });
+      throw err;
     }
   },
 }));

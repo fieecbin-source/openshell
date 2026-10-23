@@ -17,6 +17,8 @@ pub struct ConnectOverrides {
     pub port: Option<u16>,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// 私钥口令（连接失败后补录，或临时覆盖已保存口令）。
+    pub passphrase: Option<String>,
 }
 
 pub struct ConnectionService {
@@ -116,6 +118,12 @@ impl ConnectionService {
                         private_key_passphrase = passphrase.map(|p| p.to_string());
                     }
                 }
+                // 用户在连接失败弹窗中补录的口令优先于已保存口令
+                if let Some(ref pass) = overrides.as_ref().and_then(|o| o.passphrase.clone()) {
+                    if !pass.is_empty() {
+                        private_key_passphrase = Some(pass.clone());
+                    }
+                }
             }
             AuthMethod::Agent | AuthMethod::None => {}
         }
@@ -132,7 +140,9 @@ impl ConnectionService {
             .as_ref()
             .and_then(|o| o.host.clone())
             .or_else(|| session.host.clone())
-            .ok_or_else(|| DomainError::validation("host is required for connection"))?;
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .ok_or_else(|| DomainError::validation("目标服务器主机地址 (IP 或域名) 不能为空"))?;
 
         let port = overrides
             .as_ref()
@@ -144,6 +154,8 @@ impl ConnectionService {
             .as_ref()
             .and_then(|o| o.username.clone())
             .or_else(|| session.username.clone())
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty())
             .unwrap_or_else(|| "root".to_string());
 
         let opts = ConnectOptions {
@@ -158,7 +170,7 @@ impl ConnectionService {
             private_key_passphrase,
             host_key_policy: session.host_key_policy,
             keepalive_sec: session.keepalive_sec.max(0) as u64,
-            timeout_sec: 15,
+            timeout_sec: 30,
         };
 
         self.event_bus.emit(AppEvent::ConnectionState {

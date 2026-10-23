@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useForwardStore } from "../stores/forwardStore";
 import type { PortForwardRuleInput, PortForwardType, SocksAuth } from "../types/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 interface PortForwardModalProps {
   sessionId?: string;
@@ -76,7 +77,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
       setBindPort(8080);
       setDestPort(80);
     } catch (e: any) {
-      setErrorMsg(e?.message || "创建规则失败");
+      setErrorMsg(formatFriendlyError(e));
     } finally {
       setSubmitting(false);
     }
@@ -189,9 +190,14 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                       {isListening ? "停止" : "启动"}
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (confirm(`确定删除规则 ${rule.name} 吗？`)) {
-                          deleteRule(rule.id);
+                          try {
+                            await deleteRule(rule.id);
+                            setErrorMsg(null);
+                          } catch (e) {
+                            setErrorMsg(formatFriendlyError(e));
+                          }
                         }
                       }}
                       className="p-1.5 text-[#86868b] hover:text-red-600 rounded-lg hover:bg-black/[0.05] active:scale-95 transition"

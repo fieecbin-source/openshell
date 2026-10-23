@@ -70,7 +70,7 @@ impl HostKeyVerifier {
                 if kh.status == KnownHostStatus::Revoked {
                     return Err(DomainError::new(
                         ErrorCode::HostkeyMismatch,
-                        format!("host key for {}:{} has been revoked", self.host, self.port),
+                        format!("服务器 {}:{} 的主机公钥已被显式标记为撤销 (Revoked)，已阻止连接", self.host, self.port),
                     ));
                 }
 
@@ -86,7 +86,7 @@ impl HostKeyVerifier {
                     Err(DomainError::new(
                         ErrorCode::HostkeyMismatch,
                         format!(
-                            "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED for {}:{}! Expected {}, got {}",
+                            "警告：目标服务器 {}:{} 的主机公钥指纹已发生变更！\n历史保存指纹: {}\n当前实际指纹: {}\n这可能是服务器重装或存在中间人风险。",
                             self.host, self.port, kh.fingerprint_sha256, fp
                         ),
                     ))
@@ -120,7 +120,7 @@ impl HostKeyVerifier {
                     Err(DomainError::new(
                         ErrorCode::HostkeyUnknown,
                         format!(
-                            "unknown host key for {}:{} (fingerprint: {})",
+                            "检测到未收录的目标主机公钥 ({}:{}，指纹: {})。如需首次自动信任，请将主机密钥策略设为「首次自动接受 (Accept New)」。",
                             self.host, self.port, fp
                         ),
                     ))

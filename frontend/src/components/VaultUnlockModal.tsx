@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useVaultStore } from "../stores/vaultStore";
+import { formatFriendlyError } from "../lib/errors";
 
 export const VaultUnlockModal: React.FC = () => {
   const { status, init, unlock, isLoading, error } = useVaultStore();
@@ -19,12 +20,12 @@ export const VaultUnlockModal: React.FC = () => {
     setLocalError(null);
 
     if (isUninitialized) {
-      if (password.length < 8) {
-        setLocalError("主密码长度至少需要 8 个字符");
+      if (!password) {
+        setLocalError("请输入应用主密码（不限位数要求）");
         return;
       }
       if (password !== confirmPassword) {
-        setLocalError("两次输入的密码不一致");
+        setLocalError("两次输入的密码不一致，请重新输入");
         return;
       }
       try {
@@ -32,7 +33,7 @@ export const VaultUnlockModal: React.FC = () => {
         setPassword("");
         setConfirmPassword("");
       } catch (err: any) {
-        setLocalError(err?.message || "初始化保险库失败");
+        setLocalError(formatFriendlyError(err));
       }
     } else {
       if (!password) {
@@ -43,7 +44,7 @@ export const VaultUnlockModal: React.FC = () => {
         await unlock(password, rememberKeychain);
         setPassword("");
       } catch (err: any) {
-        setLocalError(err?.message || "密码错误或解锁失败");
+        setLocalError(formatFriendlyError(err));
       }
     }
   };
@@ -69,11 +70,11 @@ export const VaultUnlockModal: React.FC = () => {
           </div>
           <div>
             <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-              {isUninitialized ? "初始化 OpenShell 主保险库" : "解锁 OpenShell 保险库"}
+              {isUninitialized ? "设置 OpenShell 应用主密码" : "解锁 OpenShell 保险库"}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
               {isUninitialized
-                ? "首次使用，请设置主密码以加密保护所有会话凭据与密钥"
+                ? "首次使用，请设置主密码以加密保护会话凭据与密钥（不限制位数）"
                 : "请输入主密码以解密会话凭据"}
             </p>
           </div>

@@ -206,7 +206,7 @@ impl SessionRepository for SessionRepo {
             auth_method: input.auth_method.unwrap_or(AuthMethod::Password),
             credential_id: input.credential_id,
             ssh_key_id: input.ssh_key_id,
-            host_key_policy: input.host_key_policy.unwrap_or(HostKeyPolicy::Strict),
+            host_key_policy: input.host_key_policy.unwrap_or(HostKeyPolicy::AcceptNew),
             proxy_jump_json: input.proxy_jump_json,
             proxy_id: None,
             terminal_profile_id: input.terminal_profile_id,

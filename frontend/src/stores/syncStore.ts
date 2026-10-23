@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { formatFriendlyError } from "../lib/errors";
 
 export interface SyncConfig {
   server_url: string | null;
@@ -70,7 +71,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       await invoke("sync_save_config", { serverUrl, autoSync });
       await get().loadConfig();
     } catch (err: any) {
-      set({ error: err?.message || String(err) });
+      set({ error: formatFriendlyError(err) });
       throw err;
     }
   },
@@ -86,7 +87,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       });
       await get().loadConfig();
     } catch (err: any) {
-      set({ error: err?.message || String(err) });
+      set({ error: formatFriendlyError(err) });
       throw err;
     } finally {
       set({ syncing: false });
@@ -99,7 +100,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       await invoke("sync_login", { serverUrl, email, password });
       await get().loadConfig();
     } catch (err: any) {
-      set({ error: err?.message || String(err) });
+      set({ error: formatFriendlyError(err) });
       throw err;
     } finally {
       set({ syncing: false });
@@ -111,7 +112,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       await invoke("sync_logout");
       await get().loadConfig();
     } catch (err: any) {
-      set({ error: err?.message || String(err) });
+      set({ error: formatFriendlyError(err) });
       throw err;
     }
   },
@@ -124,7 +125,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       await get().loadConfig();
       return result;
     } catch (err: any) {
-      set({ error: err?.message || String(err) });
+      set({ error: formatFriendlyError(err) });
       throw err;
     } finally {
       set({ syncing: false });

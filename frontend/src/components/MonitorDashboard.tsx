@@ -21,6 +21,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
     kill,
     filterProcess,
     setFilterProcess,
+    error,
   } = useMonitorStore();
 
   const [killModal, setKillModal] = useState<ProcessMetrics | null>(null);
@@ -133,6 +134,13 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {error && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-300 flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
+
         {/* 指标卡片网格 */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* CPU 卡片 */}

@@ -14,6 +14,8 @@ interface ForwardState {
   rules: PortForwardRule[];
   statuses: Record<string, ForwardStatus>;
   loading: boolean;
+  /** 当前会话筛选条件；增删改后刷新时沿用，避免把其它会话的规则混入列表 */
+  activeSessionId: string | null;
 
   loadRules: (sessionId?: string) => Promise<void>;
   loadStatuses: () => Promise<void>;
@@ -27,12 +29,14 @@ export const useForwardStore = create<ForwardState>((set, get) => ({
   rules: [],
   statuses: {},
   loading: false,
+  activeSessionId: null,
 
   loadRules: async (sessionId?: string) => {
-    set({ loading: true });
+    const filterId = sessionId ?? get().activeSessionId ?? undefined;
+    set({ loading: true, activeSessionId: filterId ?? null });
     try {
       const [rules, statuses] = await Promise.all([
-        forwardList(sessionId),
+        forwardList(filterId),
         forwardListStatuses(),
       ]);
       set({ rules, statuses, loading: false });

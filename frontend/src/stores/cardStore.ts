@@ -8,6 +8,7 @@ import {
   connectSession,
   openSerial,
 } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 interface CardState {
   cards: SessionCard[];
@@ -38,7 +39,7 @@ export const useCardStore = create<CardState>((set, get) => ({
         set({ activeCardId: cards[0].card_id });
       }
     } catch (e: any) {
-      set({ error: e?.message });
+      set({ error: formatFriendlyError(e) });
     }
   },
 
@@ -79,6 +80,7 @@ export const useCardStore = create<CardState>((set, get) => ({
           });
         } catch (err: any) {
           get().updateCardState(card.card_id, { state: "disconnected" });
+          set({ error: formatFriendlyError(err) });
         }
       }
 
@@ -100,7 +102,7 @@ export const useCardStore = create<CardState>((set, get) => ({
       const updated = await setCardMode(cardId, mode);
       get().updateCardState(cardId, { current_mode: updated.current_mode });
     } catch (e: any) {
-      set({ error: e?.message });
+      set({ error: formatFriendlyError(e) });
     }
   },
 
@@ -121,7 +123,7 @@ export const useCardStore = create<CardState>((set, get) => ({
       }
       set({ cards: remaining, activeCardId: nextActive });
     } catch (e: any) {
-      set({ error: e?.message });
+      set({ error: formatFriendlyError(e) });
     }
   },
 

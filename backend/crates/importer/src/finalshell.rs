@@ -83,7 +83,7 @@ impl FinalShellParser {
                     port: Some(port),
                     username: Some(username),
                     auth_method: Some(auth_method),
-                    host_key_policy: Some(HostKeyPolicy::Strict),
+                    host_key_policy: Some(HostKeyPolicy::AcceptNew),
                     notes,
                     ..Default::default()
                 });

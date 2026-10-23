@@ -23,11 +23,11 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Response, crate::middleware::ApiError> {
-    // Validate password length
-    if req.password.len() < 10 || req.password.len() > 128 {
+    // Validate password: 只要非空即可，不再强制 10 位下限
+    if req.password.is_empty() || req.password.len() > 128 {
         return Err(make_error(
             ApiErrorCode::ValidationFailed,
-            "Password length must be between 10 and 128 characters",
+            "Password must be non-empty and at most 128 characters",
         ));
     }
 
@@ -456,10 +456,10 @@ pub async fn change_password(
     State(state): State<AppState>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, crate::middleware::ApiError> {
-    if req.new_password.len() < 10 || req.new_password.len() > 128 {
+    if req.new_password.is_empty() || req.new_password.len() > 128 {
         return Err(make_error(
             ApiErrorCode::ValidationFailed,
-            "New password must be between 10 and 128 characters",
+            "New password must be non-empty and at most 128 characters",
         ));
     }
 

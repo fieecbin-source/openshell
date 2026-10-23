@@ -110,9 +110,10 @@ export const useSerialStore = create<SerialState>((set, get) => ({
 
     let payloadBytes: number[] = [];
     if (sendIsHex) {
-      const cleaned = sendText.replace(/\s+/g, "");
+      // 非十六进制字符直接忽略，避免被静默转换成 0x00
+      const cleaned = sendText.replace(/[^0-9a-fA-F]/g, "");
       for (let i = 0; i < cleaned.length; i += 2) {
-        payloadBytes.push(parseInt(cleaned.substring(i, i + 2), 16) || 0);
+        payloadBytes.push(parseInt(cleaned.substring(i, i + 2), 16));
       }
     } else {
       let textToSend = sendText;
@@ -132,9 +133,9 @@ export const useSerialStore = create<SerialState>((set, get) => ({
   sendSnippet: async (cardId, snippet) => {
     let payloadBytes: number[] = [];
     if (snippet.isHex) {
-      const cleaned = snippet.payload.replace(/\s+/g, "");
+      const cleaned = snippet.payload.replace(/[^0-9a-fA-F]/g, "");
       for (let i = 0; i < cleaned.length; i += 2) {
-        payloadBytes.push(parseInt(cleaned.substring(i, i + 2), 16) || 0);
+        payloadBytes.push(parseInt(cleaned.substring(i, i + 2), 16));
       }
     } else {
       payloadBytes = Array.from(new TextEncoder().encode(snippet.payload));

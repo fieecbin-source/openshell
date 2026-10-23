@@ -85,6 +85,7 @@ pub fn run() {
             ssh_key_list,
             ssh_key_import,
             ssh_key_delete,
+            ssh_key_set_passphrase,
             connect_session,
             connection_close,
             connection_list,

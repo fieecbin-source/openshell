@@ -19,7 +19,7 @@ impl From<DomainError> for IpcError {
             code: err.code,
             message: err.message,
             retryable: err.retryable,
-            details: None,
+            details: err.details,
             correlation_id: Ulid::new().to_string(),
         }
     }

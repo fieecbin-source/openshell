@@ -46,6 +46,16 @@ export async function lockVault(): Promise<VaultStatus> {
   return await invoke<VaultStatus>("vault_lock");
 }
 
+export async function changeVaultPassword(
+  oldPassword: string,
+  newPassword: string
+): Promise<VaultStatus> {
+  return await invoke<VaultStatus>("vault_change_password", {
+    oldPassword,
+    newPassword,
+  });
+}
+
 export async function listSessions(params?: {
   groupId?: string;
   query?: string;
@@ -153,6 +163,10 @@ export async function deleteSshKey(id: string): Promise<void> {
   await invoke("ssh_key_delete", { id });
 }
 
+export async function setSshKeyPassphrase(id: string, passphrase: string): Promise<SshKey> {
+  return await invoke<SshKey>("ssh_key_set_passphrase", { id, passphrase });
+}
+
 export async function connectSession(
   requestId: string,
   sessionId: string,
@@ -161,6 +175,7 @@ export async function connectSession(
     port?: number;
     username?: string;
     password?: string;
+    passphrase?: string;
   }
 ): Promise<ConnectSessionResult> {
   return await invoke<ConnectSessionResult>("connect_session", {

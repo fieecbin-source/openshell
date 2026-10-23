@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { sshExec } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 export interface DockerContainerInfo {
   id: string;
@@ -69,7 +70,7 @@ export const ContainerDetailDrawer: React.FC<ContainerDetailDrawerProps> = ({
       const res = await sshExec(connId, `docker logs --tail 150 ${safeId} 2>&1 || podman logs --tail 150 ${safeId} 2>&1`);
       setLogs(res.stdout || res.stderr || "(无容器日志输出)");
     } catch (e: any) {
-      setLogs(`获取日志失败: ${e.message || String(e)}`);
+      setLogs(`获取日志失败: ${formatFriendlyError(e)}`);
     } finally {
       setLoading(false);
     }
@@ -91,7 +92,7 @@ export const ContainerDetailDrawer: React.FC<ContainerDetailDrawerProps> = ({
         setActionMsg(`操作失败: ${res.stderr || "未知错误"}`);
       }
     } catch (e: any) {
-      setActionMsg(`执行异常: ${e.message || String(e)}`);
+      setActionMsg(formatFriendlyError(e));
     } finally {
       setActionLoading(false);
     }

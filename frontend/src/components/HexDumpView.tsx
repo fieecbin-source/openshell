@@ -19,6 +19,8 @@ export const HexDumpView: React.FC<HexDumpViewProps> = ({ cardId }) => {
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rawBytesRef = useRef<number[]>([]);
+  // 绝对偏移量（rawBytesRef 会裁剪历史数据，不能再用其长度作为偏移）
+  const totalOffsetRef = useRef(0);
 
   // 轮询消费串口缓冲并格式化为十六进制转储表
   useEffect(() => {
@@ -29,8 +31,17 @@ export const HexDumpView: React.FC<HexDumpViewProps> = ({ cardId }) => {
       try {
         const bytes = await readSerial(cardId, 4096);
         if (bytes.length > 0 && isMounted) {
-          const currentOffset = rawBytesRef.current.length;
+          const currentOffset = totalOffsetRef.current;
           rawBytesRef.current.push(...bytes);
+          totalOffsetRef.current += bytes.length;
+          // 只保留最近 1 MiB 历史数据用于偏移参考，避免长时间采集内存持续增长
+          const maxHistory = 1024 * 1024;
+          if (rawBytesRef.current.length > maxHistory) {
+            rawBytesRef.current.splice(
+              0,
+              rawBytesRef.current.length - maxHistory
+            );
+          }
 
           // 格式化为 16 字节每行的 Hex Dump
           const newLines: HexLine[] = [];

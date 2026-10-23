@@ -17,6 +17,7 @@ import {
   sftpStartTransfer,
   sftpWriteFile,
 } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
 
 export interface RemoteEditorState {
   open: boolean;
@@ -77,7 +78,12 @@ interface SftpState {
   createRemoteFile: (connId: string, fileName: string) => Promise<void>;
   deleteRemoteEntry: (connId: string, entry: SftpFileEntry) => Promise<void>;
   renameRemoteEntry: (connId: string, oldPath: string, newName: string) => Promise<void>;
-  chmodRemoteEntry: (connId: string, path: string, permissions: number) => Promise<void>;
+  chmodRemoteEntry: (
+    connId: string,
+    path: string,
+    permissions: number,
+    recursive?: boolean
+  ) => Promise<void>;
 
   openEditor: (connId: string, path: string) => Promise<void>;
   updateEditorContent: (content: string) => void;
@@ -283,8 +289,27 @@ export const useSftpStore = create<SftpState>((set, get) => ({
     await get().refreshRemote(connId);
   },
 
-  chmodRemoteEntry: async (connId: string, path: string, permissions: number) => {
+  chmodRemoteEntry: async (connId, path, permissions, recursive = false) => {
     await sftpSetPermissions(connId, path, permissions);
+    if (!recursive) {
+      await get().refreshRemote(connId);
+      return;
+    }
+
+    const applyRecursive = async (target: string, depth = 0) => {
+      // 防御异常深的目录树，避免无限递归
+      if (depth >= 32) return;
+      const entries = await sftpListDir(connId, target);
+      for (const entry of entries) {
+        if (entry.file_type === "symlink") continue;
+        await sftpSetPermissions(connId, entry.path, permissions);
+        if (entry.file_type === "directory") {
+          await applyRecursive(entry.path, depth + 1);
+        }
+      }
+    };
+
+    await applyRecursive(path);
     await get().refreshRemote(connId);
   },
 
@@ -322,7 +347,7 @@ export const useSftpStore = create<SftpState>((set, get) => ({
       }));
     } catch (e: any) {
       set((state) => ({
-        editor: { ...state.editor, error: e?.message || "无法读取文件内容" },
+        editor: { ...state.editor, error: formatFriendlyError(e) || "无法读取文件内容" },
       }));
     }
   },
@@ -348,7 +373,7 @@ export const useSftpStore = create<SftpState>((set, get) => ({
       await get().refreshRemote(connId);
     } catch (e: any) {
       set((state) => ({
-        editor: { ...state.editor, saving: false, error: e?.message || "保存失败" },
+        editor: { ...state.editor, saving: false, error: formatFriendlyError(e) || "保存失败" },
       }));
     }
   },

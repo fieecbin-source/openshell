@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import type {
   AuthMethod,
   HostKeyPolicy,
@@ -14,13 +14,16 @@ import type {
 import { useSessionStore } from "../stores/sessionStore";
 import { useSerialStore } from "../stores/serialStore";
 import { useVaultStore } from "../stores/vaultStore";
-import { createCredential, listSshKeys, importSshKey, deleteSshKey } from "../lib/ipc";
+import { createCredential, listSshKeys, setSshKeyPassphrase } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
+import { SshKeyManagerModal } from "./SshKeyManagerModal";
 
 interface SessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   editingSession?: Session | null;
   initialValues?: Partial<SessionInput>;
+  onConnectSession?: (session: Session) => void;
 }
 
 const COMMON_BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
@@ -30,6 +33,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   onClose,
   editingSession,
   initialValues,
+  onConnectSession,
 }) => {
   const { sessions, groups, createSession, updateSession } = useSessionStore();
   const { ports, loadPorts, loadingPorts } = useSerialStore();
@@ -56,13 +60,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   // SSH Key management
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
   const [selectedKeyId, setSelectedKeyId] = useState<string>("");
-  const [showKeyImport, setShowKeyImport] = useState(false);
-  const [newKeyName, setNewKeyName] = useState("");
-  const [newKeyPem, setNewKeyPem] = useState("");
-  const [newKeyPassphrase, setNewKeyPassphrase] = useState("");
-  const [keyImporting, setKeyImporting] = useState(false);
-  const [keyImportError, setKeyImportError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isKeyManagerModalOpen, setIsKeyManagerModalOpen] = useState(false);
+  const [connectAfterSave, setConnectAfterSave] = useState(false);
+  // 私钥口令（选中私钥后在其下方录入并加密保存）
+  const [keyPassphrase, setKeyPassphrase] = useState("");
+  const [keyPassphraseMsg, setKeyPassphraseMsg] = useState<string | null>(null);
+  const [savingKeyPassphrase, setSavingKeyPassphrase] = useState(false);
 
   // Serial Fields
   const [serialPort, setSerialPort] = useState("COM1");
@@ -100,6 +103,27 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       }
     } catch {
       // ignore
+    }
+  };
+
+  const handleSaveKeyPassphrase = async () => {
+    const key = sshKeys.find((k) => k.id === selectedKeyId);
+    if (!key) return;
+    if (!keyPassphrase) {
+      setKeyPassphraseMsg("请输入私钥口令 (Passphrase)");
+      return;
+    }
+    setSavingKeyPassphrase(true);
+    setKeyPassphraseMsg(null);
+    try {
+      const updated = await setSshKeyPassphrase(key.id, keyPassphrase);
+      await loadKeys(updated.id);
+      setKeyPassphrase("");
+      setKeyPassphraseMsg("口令已加密保存，连接该服务器时会自动使用。");
+    } catch (err: any) {
+      setKeyPassphraseMsg(formatFriendlyError(err));
+    } finally {
+      setSavingKeyPassphrase(false);
     }
   };
 
@@ -195,7 +219,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       }
       setError(null);
       setVaultUnlockError(null);
-      setShowKeyImport(false);
       setShowPassword(false);
     }
   }, [editingSession, isOpen, initialValues]);
@@ -218,99 +241,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       }
       setVaultPassword("");
     } catch (err: any) {
-      setVaultUnlockError(err?.message || (isVaultUninitialized ? "初始化保险库失败" : "解锁失败，密码错误"));
+      setVaultUnlockError(formatFriendlyError(err));
     } finally {
       setUnlockingVault(false);
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!newKeyName.trim()) {
-      setNewKeyName(file.name.replace(/\.[^/.]+$/, ""));
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        setNewKeyPem(content.trim());
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  };
-
   const isPublicKeyAuth = (m?: string) => m === "publickey" || m === "public_key";
-
-  function formatFriendlyError(err: any): string {
-    const msg = typeof err === "string"
-      ? err
-      : err?.message || (err?.code ? `${err.code}: ${err.message || ""}` : JSON.stringify(err));
-
-    if (msg.includes("unknown variant 'publickey'") || msg.includes("expected one of")) {
-      return "认证方式格式校验异常，已自动重置对齐。";
-    }
-    if (msg.includes("Could not read key") || msg.includes("failed to decode private key")) {
-      return "私钥解析失败：请确认选择的是以 -----BEGIN 开头的 OpenSSH/PEM 私钥；若私钥有密码保护，请填写对应的私钥密码。";
-    }
-    if (msg.includes("SSH 公钥") || msg.includes("Public Key")) {
-      return "检测到输入为 SSH 公钥。客户端登录服务器需导入私钥，请将公钥部署至目标服务器 ~/.ssh/authorized_keys 中。";
-    }
-    if (msg.includes("vault is locked") || msg.includes("主保险库已锁定")) {
-      return "主保险库处于锁定状态，请先解锁后再操作。";
-    }
-    if (msg.includes("still referenced by a session") || msg.includes("referenced")) {
-      return "该私钥已被现有会话引用绑定，无法删除。";
-    }
-    if (msg.includes("host is required")) {
-      return "请输入有效的主机地址 (IP 或域名)。";
-    }
-    return msg;
-  }
-
-  const handleImportNewKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKeyPem.trim()) {
-      setKeyImportError("请选择私钥文件或粘贴私钥内容");
-      return;
-    }
-    const keyName = newKeyName.trim() || `key-${new Date().toISOString().slice(5, 10).replace("-", "")}`;
-    setKeyImporting(true);
-    setKeyImportError(null);
-    try {
-      const imported = await importSshKey(
-        keyName,
-        newKeyPem.trim(),
-        newKeyPassphrase.trim() || undefined
-      );
-      await loadKeys(imported.id);
-      setSelectedKeyId(imported.id);
-      setAuthMethod("public_key");
-      setShowKeyImport(false);
-      setNewKeyName("");
-      setNewKeyPem("");
-      setNewKeyPassphrase("");
-    } catch (err: any) {
-      setKeyImportError(`导入私钥失败: ${formatFriendlyError(err)}`);
-    } finally {
-      setKeyImporting(false);
-    }
-  };
-
-  const handleDeleteKey = async (id: string, keyName: string) => {
-    if (!window.confirm(`确定要从密钥库中永久删除私钥「${keyName}」吗？`)) {
-      return;
-    }
-    try {
-      await deleteSshKey(id);
-      await loadKeys();
-    } catch (err: any) {
-      alert(`删除私钥失败: ${formatFriendlyError(err)}`);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -341,6 +278,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     setIsSubmitting(true);
     setError(null);
 
+    let savedSession: Session | undefined;
+
     try {
       const effectiveGroupId = groupId && groupId.trim() ? groupId.trim() : null;
 
@@ -366,7 +305,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               credentialId = cred.id;
             } catch (credErr: any) {
               console.warn("保存凭据失败", credErr);
-              throw new Error(`保存密码凭据失败: ${credErr?.message || String(credErr)}`);
+              throw new Error(`保存密码凭据失败：${formatFriendlyError(credErr)}`);
             }
           }
         } else if (isPublicKeyAuth(authMethod)) {
@@ -394,7 +333,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         const effectiveAuthMethod: AuthMethod = isPublicKeyAuth(authMethod) ? "public_key" : (authMethod as AuthMethod);
 
         if (editingSession) {
-          await updateSession(editingSession.id, {
+          savedSession = await updateSession(editingSession.id, {
             name: sessionName,
             group_id: effectiveGroupId,
             protocol: "ssh",
@@ -427,7 +366,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             notes: notes && notes.trim() ? notes.trim() : null,
             keepalive_sec: keepaliveSec,
           };
-          await createSession(input);
+          savedSession = await createSession(input);
         }
       } else if (protocol === "serial") {
         const serialOptions = {
@@ -447,7 +386,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         };
 
         if (editingSession) {
-          await updateSession(editingSession.id, {
+          savedSession = await updateSession(editingSession.id, {
             name: sessionName,
             group_id: effectiveGroupId,
             protocol: "serial",
@@ -464,11 +403,15 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             notes: notes && notes.trim() ? notes.trim() : null,
             protocol_options_json: serialOptions,
           };
-          await createSession(input);
+          savedSession = await createSession(input);
         }
       }
 
       onClose();
+
+      if (connectAfterSave && savedSession && onConnectSession) {
+        onConnectSession(savedSession);
+      }
     } catch (err: any) {
       console.error("保存会话失败详情:", err);
       setError(`保存会话失败: ${formatFriendlyError(err)}`);
@@ -773,206 +716,138 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   </div>
                 )}
 
-                {/* 密钥选择与内联导入区 */}
+                {/* 独立模态框选择与管理私钥区 */}
                 {isPublicKeyAuth(authMethod) && (
-                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-3.5 space-y-3">
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <label className="block text-xs font-bold text-slate-800">
-                          已导入的私钥列表 (点击选择)
+                          SSH 客户端私钥凭据
                         </label>
                         {sshKeys.length > 0 && (
                           <span className="px-1.5 py-0.5 rounded-full bg-apple-blue/10 text-apple-blue font-semibold text-[11px]">
-                            {sshKeys.length} 个可用
+                            {sshKeys.length} 个可用密钥
                           </span>
                         )}
                       </div>
                       <button
                         type="button"
-                        onClick={() => setShowKeyImport(!showKeyImport)}
-                        className="text-xs text-apple-blue hover:text-apple-hoverBlue font-medium flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-apple-sm transition"
+                        onClick={() => setIsKeyManagerModalOpen(true)}
+                        className="text-xs text-apple-blue hover:text-apple-hoverBlue font-semibold flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-apple-sm transition hover:border-apple-blue/40"
                       >
-                        <span>{showKeyImport ? "收起导入面板" : "+ 导入新私钥"}</span>
+                        <span>🔑 打开私钥管理器模态框</span>
                       </button>
                     </div>
 
-                    {/* 可用私钥列表卡片 */}
-                    {sshKeys.length === 0 ? (
-                      <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-white text-center text-xs text-slate-500 space-y-2">
-                        <div className="text-2xl">🛡️</div>
-                        <p className="font-medium text-slate-700">暂无已导入的私钥</p>
-                        <p className="text-[11px] text-slate-400">
-                          点击下方按钮选取本地私钥文件（如 id_rsa、.pem、.key）导入即可直接使用
-                        </p>
-                        {!showKeyImport && (
-                          <button
-                            type="button"
-                            onClick={() => setShowKeyImport(true)}
-                            className="px-3.5 py-1.5 rounded-lg bg-apple-blue text-white text-xs font-medium hover:bg-apple-hoverBlue shadow-apple-sm transition"
-                          >
-                            立即导入私钥
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                        {sshKeys.map((k) => {
-                          const isSelected = selectedKeyId === k.id;
-                          return (
-                            <div
-                              key={k.id}
-                              onClick={() => setSelectedKeyId(k.id)}
-                              className={`p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between ${
-                                isSelected
-                                  ? "bg-apple-blue/5 border-apple-blue ring-2 ring-apple-blue/30 shadow-apple-sm"
-                                  : "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/80"
-                              }`}
-                            >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <div
-                                  className={`w-4 h-4 rounded-full flex items-center justify-center border transition ${
-                                    isSelected
-                                      ? "border-apple-blue bg-apple-blue text-white"
-                                      : "border-slate-300 bg-white"
-                                  }`}
-                                >
-                                  {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-xs text-slate-900 truncate">
-                                      {k.name}
-                                    </span>
-                                    <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-mono text-slate-600 shrink-0">
-                                      {k.algorithm.toUpperCase()}
-                                    </span>
-                                    {k.has_passphrase && (
-                                      <span className="text-[10px] text-amber-600 bg-amber-50 px-1 rounded border border-amber-200 shrink-0">
-                                        🔒 已加密
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
+                    {/* 当前选中的私钥展示卡片 */}
+                    {(() => {
+                      const currentKey = sshKeys.find((k) => k.id === selectedKeyId);
+                      if (currentKey) {
+                        return (
+                          <div className="p-3.5 rounded-xl border border-apple-blue/40 bg-white shadow-apple-sm flex items-center justify-between">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-apple-blue/10 text-apple-blue flex items-center justify-center text-lg shrink-0 font-bold">
+                                🔑
                               </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                {isSelected ? (
-                                  <span className="text-[11px] font-bold text-apple-blue bg-apple-blue/10 px-2 py-0.5 rounded-full">
-                                    ✓ 已选中
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-xs text-slate-900 truncate">
+                                    {currentKey.name}
                                   </span>
-                                ) : (
-                                  <span className="text-[11px] text-slate-400">
-                                    点击选中
+                                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-600 shrink-0">
+                                    {currentKey.algorithm.toUpperCase()}
                                   </span>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteKey(k.id, k.name);
-                                  }}
-                                  className="text-slate-300 hover:text-red-500 p-1 rounded transition"
-                                  title="从密钥库删除此私钥"
-                                >
-                                  🗑️
-                                </button>
+                                  {currentKey.has_passphrase ? (
+                                    <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200 shrink-0">
+                                      🔒 密码保护
+                                    </span>
+                                  ) : (
+                                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 shrink-0">
+                                      无口令
+                                    </span>
+                                  )}
+                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 border border-emerald-200">
+                                    ✓ 已绑定当前会话
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 font-mono truncate mt-0.5">
+                                  指纹: {currentKey.fingerprint_sha256}
+                                </div>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
 
-                    {/* 内联导入新私钥面板 */}
-                    {(showKeyImport || sshKeys.length === 0) && (
-                      <div className="p-3 rounded-xl border border-apple-blue/20 bg-apple-blue/[0.02] space-y-2.5 animate-in fade-in duration-150">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-slate-800">
-                            📥 导入本地私钥
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            className="px-2.5 py-1 rounded-lg border border-apple-blue/40 bg-white text-xs font-semibold text-apple-blue hover:bg-apple-blue/5 shadow-apple-sm transition flex items-center gap-1"
-                          >
-                            <span>📁 选择本地私钥文件 (.pem / .key / id_rsa)</span>
-                          </button>
-                          <input
-                            type="file"
-                            ref={fileInputRef}
-                            onChange={handleFileSelect}
-                            className="hidden"
-                            accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,*"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
-                              私钥别名 (选填)
-                            </label>
-                            <input
-                              type="text"
-                              value={newKeyName}
-                              onChange={(e) => setNewKeyName(e.target.value)}
-                              placeholder="如 id_rsa 或 生产服私钥"
-                              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-apple-blue transition"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
-                              私钥密码 Passphrase (若私钥未加密可留空)
-                            </label>
-                            <input
-                              type="password"
-                              value={newKeyPassphrase}
-                              onChange={(e) => setNewKeyPassphrase(e.target.value)}
-                              placeholder="无密码保护则留空..."
-                              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-apple-blue transition"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-slate-700 mb-0.5">
-                            私钥内容 (选择文件自动填充，或直接粘贴 PEM 文本) *
-                          </label>
-                          <textarea
-                            rows={3}
-                            value={newKeyPem}
-                            onChange={(e) => setNewKeyPem(e.target.value)}
-                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
-                            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none focus:border-apple-blue transition"
-                          />
-                        </div>
-
-                        {keyImportError && (
-                          <div className="rounded-lg bg-red-50 border border-red-200 p-2 text-[11px] text-red-600">
-                            {keyImportError}
-                          </div>
-                        )}
-
-                        <div className="flex justify-end gap-2 pt-1">
-                          {sshKeys.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => setShowKeyImport(false)}
-                              className="px-3 py-1 text-xs text-slate-600 hover:text-slate-900"
+                              onClick={() => setIsKeyManagerModalOpen(true)}
+                              className="px-3.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:border-slate-300 transition shrink-0 ml-3 shadow-apple-sm"
                             >
-                              取消导入
+                              更换 / 管理私钥 ↗
                             </button>
-                          )}
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="p-5 rounded-xl border border-dashed border-slate-300 bg-white text-center space-y-2.5">
+                          <div className="text-2xl">🔑</div>
+                          <p className="text-xs font-semibold text-slate-700">尚未选择任何 SSH 私钥凭据</p>
+                          <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                            点击下方按钮打开独立私钥管理器，可查看所有私钥列表、选取本地文件或粘贴导入新私钥，并一键完成绑定。
+                          </p>
                           <button
                             type="button"
-                            onClick={handleImportNewKey}
-                            disabled={keyImporting || !newKeyPem.trim()}
-                            className="px-3.5 py-1.5 rounded-lg bg-apple-blue text-white font-semibold text-xs hover:bg-apple-hoverBlue disabled:opacity-50 transition shadow-apple-sm"
+                            onClick={() => setIsKeyManagerModalOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-apple-blue text-white text-xs font-semibold hover:bg-apple-hoverBlue shadow-apple-md transition"
                           >
-                            {keyImporting ? "正在解析导入..." : "确认导入并选中"}
+                            <span>🔑 打开私钥管理器选择私钥</span>
                           </button>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
+
+                    {/* 私钥口令：必须放在私钥选中后的下方 */}
+                    {(() => {
+                      const currentKey = sshKeys.find((k) => k.id === selectedKeyId);
+                      if (!currentKey || !currentKey.has_passphrase) return null;
+                      return (
+                        <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                          <label className="block text-[11px] font-semibold text-slate-700">
+                            私钥口令 (Passphrase)
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="password"
+                              value={keyPassphrase}
+                              onChange={(e) => setKeyPassphrase(e.target.value)}
+                              placeholder="输入该私钥的口令"
+                              className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-800 focus:border-apple-blue focus:bg-white focus:outline-none transition"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleSaveKeyPassphrase}
+                              disabled={savingKeyPassphrase}
+                              className="px-3 py-1.5 rounded-lg bg-apple-blue text-white text-xs font-semibold hover:bg-apple-hoverBlue shadow-apple-sm transition disabled:opacity-50 shrink-0"
+                            >
+                              {savingKeyPassphrase ? "校验中..." : "保存口令"}
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-400">
+                            该私钥已加密。口令会保存到主保险库，连接时自动使用；口令不对将无法解密私钥。
+                          </p>
+                          {keyPassphraseMsg && (
+                            <div
+                              className={`text-[11px] ${
+                                keyPassphraseMsg.includes("已加密保存")
+                                  ? "text-emerald-600"
+                                  : "text-red-600"
+                              }`}
+                            >
+                              {keyPassphraseMsg}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -1239,14 +1114,36 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             </button>
             <button
               type="submit"
+              onClick={() => setConnectAfterSave(false)}
               disabled={isSubmitting}
-              className="rounded-xl bg-apple-blue px-5 py-2 text-xs font-semibold text-white shadow-apple-md hover:bg-apple-hoverBlue transition disabled:opacity-50"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-50"
             >
-              {isSubmitting ? "保存中..." : "保存会话"}
+              {isSubmitting && !connectAfterSave ? "保存中..." : "仅保存"}
             </button>
+            {onConnectSession && (
+              <button
+                type="submit"
+                onClick={() => setConnectAfterSave(true)}
+                disabled={isSubmitting}
+                className="rounded-xl bg-apple-blue px-5 py-2 text-xs font-semibold text-white shadow-apple-md hover:bg-apple-hoverBlue transition disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <span>⚡</span>
+                <span>{isSubmitting && connectAfterSave ? "保存并连接中..." : "保存并立即连接"}</span>
+              </button>
+            )}
           </div>
         </form>
       </div>
+
+      <SshKeyManagerModal
+        isOpen={isKeyManagerModalOpen}
+        onClose={() => setIsKeyManagerModalOpen(false)}
+        selectedKeyId={selectedKeyId}
+        onSelectKey={(key) => {
+          setSelectedKeyId(key.id);
+          loadKeys(key.id);
+        }}
+      />
     </div>
   );
 };
