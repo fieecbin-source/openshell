@@ -19,8 +19,8 @@ export const VaultUnlockModal: React.FC = () => {
     setLocalError(null);
 
     if (isUninitialized) {
-      if (password.length < 10) {
-        setLocalError("主密码长度至少需要 10 个字符");
+      if (password.length < 8) {
+        setLocalError("主密码长度至少需要 8 个字符");
         return;
       }
       if (password !== confirmPassword) {
@@ -49,10 +49,10 @@ export const VaultUnlockModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-surface-900/90 p-8 shadow-2xl backdrop-blur-xl">
-        <div className="mb-6 flex items-center space-x-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+      <div className="w-full max-w-md rounded-2xl border border-black/10 bg-white/95 p-8 shadow-apple-xl backdrop-blur-xl text-slate-800">
+        <div className="mb-6 flex items-center space-x-3.5">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-apple-blue/10 text-apple-blue shadow-apple-sm">
             <svg
               className="h-6 w-6"
               fill="none"
@@ -68,10 +68,10 @@ export const VaultUnlockModal: React.FC = () => {
             </svg>
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white tracking-wide">
+            <h2 className="text-lg font-bold text-slate-900 tracking-tight">
               {isUninitialized ? "初始化 OpenShell 主保险库" : "解锁 OpenShell 保险库"}
             </h2>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
               {isUninitialized
                 ? "首次使用，请设置主密码以加密保护所有会话凭据与密钥"
                 : "请输入主密码以解密会话凭据"}
@@ -81,7 +81,7 @@ export const VaultUnlockModal: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
               主密码 (Master Password)
             </label>
             <input
@@ -90,13 +90,13 @@ export const VaultUnlockModal: React.FC = () => {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
               autoFocus
-              className="w-full rounded-lg border border-slate-700 bg-surface-950 px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-apple-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-apple-blue/20 transition"
             />
           </div>
 
           {isUninitialized && (
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                 确认主密码 (Confirm Password)
               </label>
               <input
@@ -104,34 +104,35 @@ export const VaultUnlockModal: React.FC = () => {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="••••••••••••"
-                className="w-full rounded-lg border border-slate-700 bg-surface-950 px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-apple-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-apple-blue/20 transition"
               />
             </div>
           )}
 
-          <div className="flex items-center space-x-2 pt-1">
+          <div className="flex items-center space-x-2 pt-0.5">
             <input
               type="checkbox"
               id="keychain"
               checked={rememberKeychain}
               onChange={(e) => setRememberKeychain(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-700 bg-surface-950 text-emerald-500 focus:ring-emerald-500/20"
+              className="h-4 w-4 rounded border-slate-300 text-apple-blue focus:ring-apple-blue"
             />
-            <label htmlFor="keychain" className="text-xs text-slate-400">
-              在系统安全钥匙串中记住密码 (自动解锁)
+            <label htmlFor="keychain" className="text-xs text-slate-600 select-none">
+              在系统钥匙串中记住密码 (自动解锁)
             </label>
           </div>
 
           {(localError || error) && (
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2.5 text-xs text-red-400">
-              {localError || error}
+            <div className="rounded-xl bg-red-50 border border-red-200 p-2.5 text-xs text-red-600 flex items-center gap-1.5">
+              <span>⚠️</span>
+              <span>{localError || error}</span>
             </div>
           )}
 
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:opacity-50"
+            className="w-full rounded-xl bg-apple-blue px-4 py-2.5 text-sm font-semibold text-white shadow-apple-md transition hover:bg-apple-hoverBlue focus:outline-none focus:ring-2 focus:ring-apple-blue/30 disabled:opacity-50"
           >
             {isLoading
               ? "处理中..."

@@ -768,6 +768,29 @@ pub async fn monitor_kill_process(
         .map_err(Into::into)
 }
 
+#[derive(Debug, Serialize)]
+pub struct SshExecResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn ssh_exec(
+    state: tauri::State<'_, Arc<AppServices>>,
+    conn_id: String,
+    command: String,
+) -> Result<SshExecResult, IpcError> {
+    let cid = ConnectionId::from_string(&conn_id)?;
+    let conn = state.ssh_manager.get(&cid).await?;
+    let out = conn.open_exec(&command).await?;
+    Ok(SshExecResult {
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        exit_code: out.exit_code,
+    })
+}
+
 // ==========================================
 // Port Forwarding
 // ==========================================
@@ -1386,8 +1409,9 @@ pub async fn card_close(
 
 #[tauri::command]
 pub async fn serial_list_ports() -> Result<Vec<openshell_serial::SerialPortInfo>, IpcError> {
-    let ports = openshell_serial::list_serial_ports()
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+    let ports = openshell_serial::list_serial_ports().map_err(|e| {
+        openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string())
+    })?;
     Ok(ports)
 }
 
@@ -1403,7 +1427,12 @@ pub async fn serial_open(
         .serial
         .open(&card_id, &config, mock)
         .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+        .map_err(|e| {
+            openshell_core_domain::DomainError::new(
+                openshell_core_domain::ErrorCode::Io,
+                e.to_string(),
+            )
+        })?;
 
     let cid = openshell_core_domain::CardId::from_string(card_id)?;
     let _ = state.card.mark_connected(&cid, None);
@@ -1416,11 +1445,9 @@ pub async fn serial_send(
     card_id: String,
     data: Vec<u8>,
 ) -> Result<usize, IpcError> {
-    let written = state
-        .serial
-        .write(&card_id, &data)
-        .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+    let written = state.serial.write(&card_id, &data).await.map_err(|e| {
+        openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string())
+    })?;
     Ok(written)
 }
 
@@ -1432,11 +1459,9 @@ pub async fn serial_read(
 ) -> Result<Vec<u8>, IpcError> {
     let cap = max_bytes.unwrap_or(16384).min(65536);
     let mut buf = vec![0u8; cap];
-    let n = state
-        .serial
-        .read(&card_id, &mut buf)
-        .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+    let n = state.serial.read(&card_id, &mut buf).await.map_err(|e| {
+        openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string())
+    })?;
     buf.truncate(n);
     Ok(buf)
 }
@@ -1452,7 +1477,12 @@ pub async fn serial_set_lines(
         .serial
         .set_lines(&card_id, dtr, rts)
         .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+        .map_err(|e| {
+            openshell_core_domain::DomainError::new(
+                openshell_core_domain::ErrorCode::Io,
+                e.to_string(),
+            )
+        })?;
     Ok(())
 }
 
@@ -1461,11 +1491,9 @@ pub async fn serial_get_modem_status(
     state: tauri::State<'_, Arc<AppServices>>,
     card_id: String,
 ) -> Result<openshell_serial::ModemStatus, IpcError> {
-    let status = state
-        .serial
-        .get_modem_status(&card_id)
-        .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+    let status = state.serial.get_modem_status(&card_id).await.map_err(|e| {
+        openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string())
+    })?;
     Ok(status)
 }
 
@@ -1479,7 +1507,12 @@ pub async fn serial_set_baud_rate(
         .serial
         .set_baud_rate(&card_id, baud_rate)
         .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+        .map_err(|e| {
+            openshell_core_domain::DomainError::new(
+                openshell_core_domain::ErrorCode::Io,
+                e.to_string(),
+            )
+        })?;
     Ok(())
 }
 
@@ -1496,11 +1529,8 @@ pub async fn serial_close(
     state: tauri::State<'_, Arc<AppServices>>,
     card_id: String,
 ) -> Result<(), IpcError> {
-    state
-        .serial
-        .close(&card_id)
-        .await
-        .map_err(|e| openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string()))?;
+    state.serial.close(&card_id).await.map_err(|e| {
+        openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string())
+    })?;
     Ok(())
 }
-

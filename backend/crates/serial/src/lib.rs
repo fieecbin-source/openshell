@@ -2,13 +2,13 @@
 //!
 //! 提供跨平台串口硬件通信与 Mock 抽象。
 
-pub mod error;
-pub mod types;
 pub mod backend;
+pub mod error;
 pub mod mock;
 pub mod native;
 pub mod scanner;
 pub mod service;
+pub mod types;
 
 pub use backend::SerialBackend;
 pub use error::SerialError;

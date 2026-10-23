@@ -63,3 +63,10 @@ tmp/
 *.db
 *.db-shm
 *.db-wal
+
+# Build artifacts & IDE assistant caches
+bin/
+.agents/
+.codebuddy/
+.trae/
+skills-lock.json

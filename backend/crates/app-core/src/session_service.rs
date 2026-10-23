@@ -255,17 +255,58 @@ impl SessionService {
         if !self.vault_manager.is_unlocked() {
             return Err(DomainError::new(
                 ErrorCode::VaultLocked,
-                "vault is locked: cannot import ssh key",
+                "主保险库已锁定，请先解锁后再导入 SSH 密钥",
+            ));
+        }
+
+        let trimmed = pem.trim();
+        let mut clean_pem = trimmed.replace("\r\n", "\n").replace('\r', "\n");
+
+        // 兼容支持 Base64 编码的 PEM（例如直接复制 FinalShell 等导出的 key_data）
+        if !clean_pem.starts_with("-----BEGIN") {
+            use openshell_ssh::base64::Engine;
+            if let Ok(decoded) =
+                openshell_ssh::base64::engine::general_purpose::STANDARD.decode(trimmed)
+            {
+                if let Ok(utf8) = String::from_utf8(decoded) {
+                    if utf8.contains("-----BEGIN") {
+                        clean_pem = utf8.trim().replace("\r\n", "\n").replace('\r', "\n");
+                    }
+                }
+            }
+        }
+
+        // 友好拦截用户误贴公钥的情况
+        if clean_pem.starts_with("ssh-") || clean_pem.starts_with("ecdsa-") {
+            return Err(DomainError::validation(
+                "检测到输入为 SSH 公钥 (Public Key)。客户端连接服务器需要导入私钥 (Private Key)。请将该公钥部署至目标服务器的 ~/.ssh/authorized_keys 中，并在客户端导入私钥。"
             ));
         }
 
         // 验证私钥并提取公钥与指纹
-        let privkey = openshell_ssh::russh::keys::decode_secret_key(pem, passphrase.as_deref())
-            .map_err(|e| {
-                DomainError::validation(format!(
-                    "failed to decode private key (check passphrase): {e}"
-                ))
-            })?;
+        let privkey =
+            openshell_ssh::russh::keys::decode_secret_key(&clean_pem, passphrase.as_deref())
+                .map_err(|e| {
+                    let err_str = e.to_string();
+                    if clean_pem.contains("ENCRYPTED")
+                        || clean_pem.contains("bcrypt")
+                        || clean_pem.contains("aes256")
+                    {
+                        if passphrase.as_deref().unwrap_or("").is_empty() {
+                            DomainError::validation(
+                                "该私钥已被加密，请输入对应的私钥密码 (Passphrase) 后再导入。",
+                            )
+                        } else {
+                            DomainError::validation(
+                                "私钥解密失败，请检查私钥密码 (Passphrase) 是否正确。",
+                            )
+                        }
+                    } else {
+                        DomainError::validation(format!(
+                            "私钥格式无法识别，请确保为标准的 OpenSSH 或 PEM 格式私钥: {err_str}"
+                        ))
+                    }
+                })?;
 
         let pubkey = privkey.public_key();
         let fingerprint = pubkey
@@ -278,7 +319,7 @@ impl SessionService {
         let secret_id = SecretId::new();
         let secret_record =
             self.vault_manager
-                .encrypt_secret(&secret_id, "ssh_key", pem.as_bytes())?;
+                .encrypt_secret(&secret_id, "ssh_key", clean_pem.as_bytes())?;
 
         let now = now_ms();
         let has_passphrase = passphrase.is_some();

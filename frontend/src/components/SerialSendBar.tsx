@@ -68,19 +68,19 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
   };
 
   return (
-    <div className="flex flex-col bg-slate-900 border-t border-slate-800 p-2 gap-2 text-xs select-none">
+    <div className="flex flex-col bg-[#f5f5f7] border-t border-black/[0.06] p-2.5 gap-2 text-xs select-none">
       {/* 预设指令胶囊栏 */}
       <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-0.5">
-        <span className="text-[11px] text-slate-500 font-medium mr-1">快捷片段:</span>
+        <span className="text-[11px] text-[#86868b] font-medium mr-1">快捷片段:</span>
         {snippets.map((sn) => (
           <div
             key={sn.id}
-            className="flex items-center rounded bg-slate-800 border border-slate-700 hover:border-slate-600 transition group"
+            className="flex items-center rounded-lg bg-white border border-black/[0.08] hover:border-black/[0.15] shadow-apple-sm transition group"
           >
             <button
               type="button"
               onClick={() => sendSnippet(cardId, sn)}
-              className="px-2 py-0.5 text-slate-300 hover:text-indigo-400 font-mono text-[11px]"
+              className="px-2.5 py-0.5 text-[#1d1d1f] hover:text-[#0071e3] font-mono text-[11px] font-medium"
               title={`点击发送: ${sn.payload} (${sn.isHex ? "HEX" : "ASCII"})`}
             >
               {sn.name}
@@ -88,7 +88,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
             <button
               type="button"
               onClick={() => removeSnippet(sn.id)}
-              className="px-1 text-slate-600 hover:text-rose-400 text-[10px] opacity-0 group-hover:opacity-100 transition"
+              className="px-1.5 text-[#86868b] hover:text-red-600 text-[11px] opacity-0 group-hover:opacity-100 transition"
               title="删除此片段"
             >
               ×
@@ -98,7 +98,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
         <button
           type="button"
           onClick={() => setShowAddSnippet(!showAddSnippet)}
-          className="px-1.5 py-0.5 rounded bg-slate-800/60 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 text-[11px] transition"
+          className="px-2 py-0.5 rounded-lg bg-black/[0.04] hover:bg-black/[0.08] text-[#1d1d1f] border border-dashed border-black/[0.12] text-[11px] font-medium transition"
         >
           + 添加
         </button>
@@ -108,41 +108,41 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
       {showAddSnippet && (
         <form
           onSubmit={handleCreateSnippet}
-          className="flex items-center gap-2 bg-slate-800/80 p-1.5 rounded border border-slate-700 animate-fadeIn"
+          className="flex items-center gap-2 bg-white p-2 rounded-xl border border-black/[0.08] shadow-apple-sm animate-in fade-in"
         >
           <input
             type="text"
             placeholder="名称 (如: 读取传感器)"
             value={newSnippetName}
             onChange={(e) => setNewSnippetName(e.target.value)}
-            className="px-2 py-1 bg-slate-900 border border-slate-700 rounded text-slate-200 text-xs focus:outline-none focus:border-indigo-500 w-32"
+            className="px-2.5 py-1 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-[#1d1d1f] text-xs focus:outline-none focus:border-[#0071e3] focus:bg-white w-32 transition"
           />
           <input
             type="text"
             placeholder={newSnippetIsHex ? "HEX (如: 01 03 00 00)" : "内容 (如: AT+CSQ\\r\\n)"}
             value={newSnippetPayload}
             onChange={(e) => setNewSnippetPayload(e.target.value)}
-            className="flex-1 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-indigo-500"
+            className="flex-1 px-2.5 py-1 bg-[#f5f5f7] border border-black/[0.08] rounded-lg text-[#1d1d1f] text-xs font-mono focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
           />
-          <label className="flex items-center gap-1 text-[11px] text-slate-400 cursor-pointer">
+          <label className="flex items-center gap-1 text-[11px] text-[#424245] cursor-pointer">
             <input
               type="checkbox"
               checked={newSnippetIsHex}
               onChange={(e) => setNewSnippetIsHex(e.target.checked)}
-              className="w-3.5 h-3.5 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
+              className="w-3.5 h-3.5 rounded border-black/[0.2] text-[#0071e3] focus:ring-0 accent-[#0071e3]"
             />
             <span>HEX</span>
           </label>
           <button
             type="submit"
-            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium transition"
+            className="px-3 py-1 bg-[#0071e3] hover:bg-[#0077ed] text-white rounded-lg text-xs font-semibold shadow-sm transition active:scale-[0.98]"
           >
             保存
           </button>
           <button
             type="button"
             onClick={() => setShowAddSnippet(false)}
-            className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs transition"
+            className="px-2.5 py-1 bg-black/[0.04] hover:bg-black/[0.08] text-[#1d1d1f] rounded-lg text-xs font-medium transition"
           >
             取消
           </button>
@@ -155,10 +155,10 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
         <button
           type="button"
           onClick={() => setSendIsHex(!sendIsHex)}
-          className={`px-2 py-1 rounded font-mono text-[11px] font-bold border transition ${
+          className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold border transition active:scale-[0.98] ${
             sendIsHex
-              ? "bg-amber-950/80 text-amber-400 border-amber-600/80 shadow-[0_0_8px_rgba(245,158,11,0.2)]"
-              : "bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200"
+              ? "bg-amber-50 text-amber-800 border-amber-300 shadow-apple-sm"
+              : "bg-white text-[#424245] border-black/[0.08] hover:text-[#1d1d1f] shadow-apple-sm"
           }`}
           title="点击切换 ASCII 文本输入与 HEX 十六进制输入"
         >
@@ -177,7 +177,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
                 ? "输入 HEX 十六进制字节（如 01 03 00 00 00 0A C5 CD），回车发送"
                 : "输入串口指令（支持按 ↑/↓ 切换历史），回车发送"
             }
-            className="w-full px-3 py-1.5 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded text-slate-200 text-xs font-mono focus:outline-none transition"
+            className="w-full px-3 py-1.5 bg-white border border-black/[0.08] focus:border-[#0071e3] rounded-xl text-[#1d1d1f] text-xs font-mono focus:outline-none transition shadow-apple-sm"
           />
         </div>
 
@@ -186,7 +186,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
           <select
             value={newlineMode}
             onChange={(e) => setNewlineMode(e.target.value as SerialNewlineMode)}
-            className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-300 text-xs focus:outline-none focus:border-indigo-500"
+            className="bg-white border border-black/[0.08] shadow-apple-sm rounded-xl px-2.5 py-1.5 text-[#1d1d1f] text-xs focus:outline-none focus:border-[#0071e3] transition"
             title="追加换行符"
           >
             <option value="none">无换行</option>
@@ -197,8 +197,8 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
         )}
 
         {/* 循环定时发送 */}
-        <div className="flex items-center gap-1 bg-slate-800/80 rounded border border-slate-700 px-1.5 py-0.5">
-          <span className="text-[11px] text-slate-400">循环:</span>
+        <div className="flex items-center gap-1.5 bg-white rounded-xl border border-black/[0.08] shadow-apple-sm px-2 py-1">
+          <span className="text-[11px] text-[#86868b] font-medium">循环:</span>
           <input
             type="number"
             min="10"
@@ -206,16 +206,16 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
             step="100"
             value={timerIntervalMs}
             onChange={(e) => setTimerIntervalMs(parseInt(e.target.value) || 1000)}
-            className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] font-mono text-slate-200 focus:outline-none text-right"
+            className="w-14 bg-[#f5f5f7] border border-black/[0.08] rounded-md px-1.5 py-0.5 text-[11px] font-mono text-[#1d1d1f] focus:outline-none text-right"
           />
-          <span className="text-[11px] text-slate-500">ms</span>
+          <span className="text-[11px] text-[#86868b]">ms</span>
           <button
             type="button"
             onClick={() => (isTimerRunning ? stopTimer() : startTimer(cardId))}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+            className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition active:scale-[0.98] ${
               isTimerRunning
-                ? "bg-rose-600 hover:bg-rose-500 text-white animate-pulse"
-                : "bg-slate-700 hover:bg-slate-600 text-slate-300"
+                ? "bg-red-500 text-white animate-pulse"
+                : "bg-black/[0.04] hover:bg-black/[0.08] text-[#1d1d1f]"
             }`}
           >
             {isTimerRunning ? "停止" : "启动"}
@@ -226,7 +226,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
         <button
           type="button"
           onClick={() => sendCurrent(cardId)}
-          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-medium rounded text-xs transition shadow-sm"
+          className="px-4 py-1.5 bg-[#0071e3] hover:bg-[#0077ed] active:scale-[0.98] text-white font-semibold rounded-xl text-xs transition shadow-sm"
         >
           发送
         </button>

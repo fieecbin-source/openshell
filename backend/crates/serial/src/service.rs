@@ -66,9 +66,7 @@ impl SerialService {
     /// 读取数据并统计流量与速率
     pub async fn read(&self, card_id: &str, buf: &mut [u8]) -> SerialResult<usize> {
         let mut sessions = self.sessions.lock().await;
-        let entry = sessions
-            .get_mut(card_id)
-            .ok_or(SerialError::NotConnected)?;
+        let entry = sessions.get_mut(card_id).ok_or(SerialError::NotConnected)?;
 
         let n = entry.backend.read(buf).await?;
         if n > 0 {
@@ -89,9 +87,7 @@ impl SerialService {
     /// 写入数据并统计流量
     pub async fn write(&self, card_id: &str, data: &[u8]) -> SerialResult<usize> {
         let mut sessions = self.sessions.lock().await;
-        let entry = sessions
-            .get_mut(card_id)
-            .ok_or(SerialError::NotConnected)?;
+        let entry = sessions.get_mut(card_id).ok_or(SerialError::NotConnected)?;
 
         let n = entry.backend.write(data).await?;
         if n > 0 {
@@ -109,9 +105,7 @@ impl SerialService {
         rts: Option<bool>,
     ) -> SerialResult<()> {
         let mut sessions = self.sessions.lock().await;
-        let entry = sessions
-            .get_mut(card_id)
-            .ok_or(SerialError::NotConnected)?;
+        let entry = sessions.get_mut(card_id).ok_or(SerialError::NotConnected)?;
 
         if let Some(level) = dtr {
             entry.backend.set_dtr(level).await?;
@@ -125,18 +119,14 @@ impl SerialService {
     /// 读取 Modem 状态引脚
     pub async fn get_modem_status(&self, card_id: &str) -> SerialResult<ModemStatus> {
         let mut sessions = self.sessions.lock().await;
-        let entry = sessions
-            .get_mut(card_id)
-            .ok_or(SerialError::NotConnected)?;
+        let entry = sessions.get_mut(card_id).ok_or(SerialError::NotConnected)?;
         entry.backend.read_modem_status().await
     }
 
     /// 热修改波特率
     pub async fn set_baud_rate(&self, card_id: &str, baud_rate: u32) -> SerialResult<()> {
         let mut sessions = self.sessions.lock().await;
-        let entry = sessions
-            .get_mut(card_id)
-            .ok_or(SerialError::NotConnected)?;
+        let entry = sessions.get_mut(card_id).ok_or(SerialError::NotConnected)?;
         entry.backend.set_baud_rate(baud_rate).await
     }
 

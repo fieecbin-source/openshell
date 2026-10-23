@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "pnpm --filter @openshell/frontend dev",
     "build": "pnpm --filter @openshell/frontend build",
-    "tauri": "pnpm --filter @openshell/frontend tauri",
+    "tauri": "node frontend/node_modules/@tauri-apps/cli/tauri.js",
     "typecheck": "pnpm --filter @openshell/frontend typecheck",
     "test": "pnpm --filter @openshell/frontend test",
     "desktop:build": "node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle"

@@ -96,14 +96,17 @@ impl SshConnection {
                         format!("invalid UTF-8 in private key: {e}"),
                     )
                 })?;
-                let privkey =
-                    russh::keys::decode_secret_key(pem_str, opts.private_key_passphrase.as_deref())
-                        .map_err(|e| {
-                            DomainError::new(
-                                ErrorCode::AuthFailed,
-                                format!("failed to decode private key (check passphrase): {e}"),
-                            )
-                        })?;
+                let clean_pem = pem_str.trim().replace("\r\n", "\n").replace('\r', "\n");
+                let privkey = russh::keys::decode_secret_key(
+                    &clean_pem,
+                    opts.private_key_passphrase.as_deref(),
+                )
+                .map_err(|e| {
+                    DomainError::new(
+                        ErrorCode::AuthFailed,
+                        format!("私钥解析或解密失败 (请核对私钥密码 Passphrase 是否正确): {e}"),
+                    )
+                })?;
 
                 let best_hash = handle
                     .best_supported_rsa_hash()

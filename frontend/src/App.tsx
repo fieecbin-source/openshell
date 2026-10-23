@@ -12,6 +12,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     checkStatus();
+    loadAll();
   }, []);
 
   useEffect(() => {

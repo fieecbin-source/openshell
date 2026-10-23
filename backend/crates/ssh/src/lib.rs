@@ -7,6 +7,7 @@ pub mod known_hosts;
 pub mod manager;
 pub mod stream;
 
+pub use base64;
 pub use connection::{ConnectOptions, SshConnection};
 pub use errors::{map_io_error, map_russh_error};
 pub use handler::OpenShellClientHandler;

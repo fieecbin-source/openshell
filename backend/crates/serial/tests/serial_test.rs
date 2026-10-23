@@ -109,7 +109,10 @@ async fn test_serial_service_management_and_stats() {
     service.open(card_id, &config, true).await.unwrap();
     assert!(service.is_open(card_id).await);
 
-    let mock = service.get_mock(card_id).await.expect("mock backend available");
+    let mock = service
+        .get_mock(card_id)
+        .await
+        .expect("mock backend available");
 
     // 写入
     service.write(card_id, b"DATA_OUT").await.unwrap();
@@ -143,8 +146,10 @@ fn test_list_serial_ports_safe() {
 async fn test_high_baud_rate_throughput_921600() {
     let service = SerialService::new();
     let card_id = "card-high-speed-01";
-    let mut config = SerialProfileConfig::default();
-    config.baud_rate = 921600;
+    let config = SerialProfileConfig {
+        baud_rate: 921600,
+        ..Default::default()
+    };
 
     service.open(card_id, &config, true).await.unwrap();
     let mock = service.get_mock(card_id).await.unwrap();
@@ -188,4 +193,3 @@ async fn test_high_baud_rate_throughput_921600() {
 
     service.close(card_id).await.unwrap();
 }
-

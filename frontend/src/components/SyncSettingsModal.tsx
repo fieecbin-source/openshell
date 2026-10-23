@@ -85,20 +85,25 @@ export const SyncSettingsModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg bg-surface-900 border border-surface-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="w-full max-w-lg bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden animate-in zoom-in-95 backdrop-blur-2xl text-[#1d1d1f]">
         {/* 顶部标题栏 */}
-        <div className="h-12 px-6 border-b border-surface-800 flex items-center justify-between bg-surface-950/70">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <h3 className="text-sm font-bold text-white">自建服务端与 E2EE 云同步</h3>
+        <div className="h-13 px-6 border-b border-black/[0.06] flex items-center justify-between bg-white/70">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-[#0071e3] shadow-sm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-[#1d1d1f] tracking-tight">自建服务端与 E2EE 云同步</h3>
+              <p className="text-[11px] text-[#86868b]">基于 Argon2id + XChaCha20-Poly1305 的零知识加密同步</p>
+            </div>
           </div>
 
           <button
             onClick={() => setModalOpen(false)}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-surface-800 transition"
+            className="p-1.5 text-[#86868b] hover:text-[#1d1d1f] rounded-lg hover:bg-black/[0.05] active:scale-95 transition"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -107,73 +112,74 @@ export const SyncSettingsModal: React.FC = () => {
         </div>
 
         {/* 模态框主体 */}
-        <div className="p-6 space-y-5 text-xs text-slate-300 overflow-y-auto max-h-[75vh]">
+        <div className="p-6 space-y-4 text-xs text-[#1d1d1f] overflow-y-auto max-h-[75vh]">
           {/* E2EE 说明横幅 */}
-          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-start gap-2.5 text-slate-300">
-            <svg className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/60 rounded-xl flex items-start gap-2.5 text-emerald-900 shadow-apple-sm">
+            <svg className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
             </svg>
-            <p className="text-[11px] leading-relaxed">
-              <span className="font-semibold text-emerald-400">端到端加密（E2EE）：</span>
-              所有会话、凭据、私钥及命令均在本地用您的保险库主密钥（Argon2id + XChaCha20-Poly1305）加密后再上送，自建服务端仅保存不可读密文。
+            <p className="text-[11px] leading-relaxed text-emerald-900/90">
+              <span className="font-semibold text-emerald-800">端到端加密（E2EE）：</span>
+              所有会话、凭据、私钥及命令均在本地用您的保险库主密钥加密后再上送，自建服务端仅保存不可读密文。
             </p>
           </div>
 
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs flex items-center justify-between">
-              <span>{error}</span>
+            <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-600 rounded-xl text-xs flex items-center justify-between">
+              <span>⚠️ {error}</span>
             </div>
           )}
 
           {syncFeedback && (
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs">
-              {syncFeedback}
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 rounded-xl text-xs flex items-center gap-1.5">
+              <span>✓</span>
+              <span>{syncFeedback}</span>
             </div>
           )}
 
           {/* 状态或登录表单 */}
           {config?.is_logged_in ? (
             <div className="space-y-4">
-              <div className="p-4 bg-surface-950/70 border border-surface-800 rounded-xl space-y-2.5">
+              <div className="p-4 bg-[#f5f5f7] border border-black/[0.06] rounded-xl space-y-2.5 shadow-apple-sm">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">同步服务端地址:</span>
-                  <span className="font-mono text-emerald-400 font-medium truncate max-w-[250px]">
+                  <span className="text-[#86868b]">同步服务端地址:</span>
+                  <span className="font-mono text-[#0071e3] font-medium truncate max-w-[250px]">
                     {config.server_url || "未配置"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">本地设备 ID:</span>
-                  <span className="font-mono text-slate-300 truncate max-w-[200px]">
+                  <span className="text-[#86868b]">本地设备 ID:</span>
+                  <span className="font-mono text-[#1d1d1f] truncate max-w-[200px]">
                     {config.device_id}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">上次拉取时间:</span>
-                  <span className="text-slate-300">
+                  <span className="text-[#86868b]">上次拉取时间:</span>
+                  <span className="text-[#1d1d1f]">
                     {config.last_sync_at
                       ? new Date(config.last_sync_at).toLocaleString()
                       : "未同步"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">冲突副本状态:</span>
-                  <span className={config.conflict_count > 0 ? "text-amber-400 font-bold" : "text-slate-400"}>
+                  <span className="text-[#86868b]">冲突副本状态:</span>
+                  <span className={config.conflict_count > 0 ? "text-amber-700 font-semibold" : "text-[#86868b]"}>
                     {config.conflict_count > 0 ? `${config.conflict_count} 个冲突副本（已保留）` : "正常（无冲突）"}
                   </span>
                 </div>
               </div>
 
               {/* 自动同步设置 */}
-              <div className="flex items-center justify-between p-3 bg-surface-950/50 border border-surface-800 rounded-xl">
+              <div className="flex items-center justify-between p-3.5 bg-[#f5f5f7] border border-black/[0.06] rounded-xl shadow-apple-sm">
                 <div>
-                  <div className="font-semibold text-white">自动增量同步</div>
-                  <div className="text-[11px] text-slate-400">数据变动时及周期自动推送与合并</div>
+                  <div className="font-semibold text-[#1d1d1f]">自动增量同步</div>
+                  <div className="text-[11px] text-[#86868b]">数据变动时及周期自动推送与合并</div>
                 </div>
                 <input
                   type="checkbox"
                   checked={autoSync}
                   onChange={(e) => handleAutoSyncToggle(e.target.checked)}
-                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                  className="w-4 h-4 accent-[#0071e3] rounded cursor-pointer"
                 />
               </div>
 
@@ -183,7 +189,7 @@ export const SyncSettingsModal: React.FC = () => {
                   type="button"
                   onClick={handleManualSync}
                   disabled={syncing}
-                  className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-xl font-semibold shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition"
+                  className="py-2.5 px-4 bg-[#0071e3] hover:bg-[#0077ed] disabled:opacity-50 text-white rounded-xl font-semibold shadow-sm flex items-center justify-center gap-2 transition active:scale-[0.98]"
                 >
                   {syncing ? (
                     <>
@@ -203,9 +209,9 @@ export const SyncSettingsModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleCheckUpdate}
-                  className="py-2.5 px-4 bg-surface-800 hover:bg-surface-700 text-white rounded-xl font-semibold border border-surface-700 flex items-center justify-center gap-1.5 transition"
+                  className="py-2.5 px-4 bg-white hover:bg-black/[0.04] text-[#1d1d1f] rounded-xl font-semibold border border-black/[0.08] shadow-apple-sm flex items-center justify-center gap-1.5 transition active:scale-[0.98]"
                 >
-                  <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-[#0071e3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                   </svg>
                   <span>检查软件更新</span>
@@ -216,7 +222,7 @@ export const SyncSettingsModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => logout()}
-                  className="text-xs text-red-400 hover:text-red-300 transition underline underline-offset-4"
+                  className="text-xs text-red-500 hover:text-red-600 transition underline underline-offset-4"
                 >
                   退出当前同步账号
                 </button>
@@ -224,15 +230,15 @@ export const SyncSettingsModal: React.FC = () => {
             </div>
           ) : (
             /* 登录 / 注册表单 */
-            <form onSubmit={handleSubmitAuth} className="space-y-4">
-              <div className="flex p-1 bg-surface-950 border border-surface-800 rounded-xl">
+            <form onSubmit={handleSubmitAuth} className="space-y-3.5">
+              <div className="flex p-0.5 bg-black/[0.06] rounded-xl">
                 <button
                   type="button"
                   onClick={() => setMode("login")}
-                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition ${
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition active:scale-[0.98] ${
                     mode === "login"
-                      ? "bg-surface-800 text-white shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                      ? "bg-white text-[#1d1d1f] shadow-apple-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
                   }`}
                 >
                   登录已有账号
@@ -240,10 +246,10 @@ export const SyncSettingsModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setMode("register")}
-                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition ${
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition active:scale-[0.98] ${
                     mode === "register"
-                      ? "bg-surface-800 text-white shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                      ? "bg-white text-[#1d1d1f] shadow-apple-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
                   }`}
                 >
                   注册自建账号
@@ -251,31 +257,31 @@ export const SyncSettingsModal: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">服务端地址 (HTTPS/HTTP)</label>
+                <label className="block text-[#1d1d1f] font-semibold mb-1">服务端地址 (HTTPS/HTTP)</label>
                 <input
                   type="text"
                   required
                   value={serverUrl}
                   onChange={(e) => setServerUrl(e.target.value)}
                   placeholder="https://sync.example.com"
-                  className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                  className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] font-mono placeholder-[#86868b]/60 focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">账号邮箱</label>
+                <label className="block text-[#1d1d1f] font-semibold mb-1">账号邮箱</label>
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="user@example.com"
-                  className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                  className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] placeholder-[#86868b]/60 focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">密码（10-128 位字符）</label>
+                <label className="block text-[#1d1d1f] font-semibold mb-1">密码（10-128 位字符）</label>
                 <input
                   type="password"
                   required
@@ -283,19 +289,19 @@ export const SyncSettingsModal: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                  className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] placeholder-[#86868b]/60 focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
                 />
               </div>
 
               {mode === "register" && (
                 <div>
-                  <label className="block text-slate-300 font-medium mb-1">邀请码 / 引导令牌 (选填)</label>
+                  <label className="block text-[#1d1d1f] font-semibold mb-1">邀请码 / 引导令牌 (选填)</label>
                   <input
                     type="text"
                     value={inviteCode}
                     onChange={(e) => setInviteCode(e.target.value)}
                     placeholder="单用户首次注册或受邀注册时填写"
-                    className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-xl text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                    className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] font-mono placeholder-[#86868b]/60 focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
                   />
                 </div>
               )}
@@ -303,7 +309,7 @@ export const SyncSettingsModal: React.FC = () => {
               <button
                 type="submit"
                 disabled={syncing}
-                className="w-full py-2.5 mt-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-xl font-semibold shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition"
+                className="w-full py-2.5 mt-2 bg-[#0071e3] hover:bg-[#0077ed] disabled:opacity-50 text-white rounded-xl font-semibold shadow-sm flex items-center justify-center gap-2 transition active:scale-[0.98]"
               >
                 {syncing ? (
                   <>

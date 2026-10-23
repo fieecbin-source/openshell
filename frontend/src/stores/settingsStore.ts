@@ -376,7 +376,7 @@ interface SettingsState {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  theme: "dark",
+  theme: "clean_light",
   customThemes: {},
   fontSize: 13,
   fontFamily: 'Menlo, Monaco, "Courier New", Consolas, monospace',

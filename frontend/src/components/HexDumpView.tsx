@@ -102,34 +102,34 @@ export const HexDumpView: React.FC<HexDumpViewProps> = ({ cardId }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-slate-300 font-mono text-xs select-text">
+    <div className="flex flex-col h-full bg-[#fbfbfd] text-[#1d1d1f] font-mono text-xs select-text">
       {/* 顶部小工具栏 */}
-      <div className="flex items-center justify-between px-3 py-1 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 select-none">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#f5f5f7] border-b border-black/[0.06] text-[11px] text-[#86868b] select-none">
         <div className="flex items-center gap-3">
-          <span>总接收: {rawBytesRef.current.length} 字节</span>
-          <span>行数: {lines.length}</span>
+          <span>总接收: <strong className="text-[#1d1d1f]">{rawBytesRef.current.length}</strong> 字节</span>
+          <span>行数: <strong className="text-[#1d1d1f]">{lines.length}</strong></span>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 cursor-pointer hover:text-slate-200">
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-[#1d1d1f] text-[#424245]">
             <input
               type="checkbox"
               checked={autoScroll}
               onChange={(e) => setAutoScroll(e.target.checked)}
-              className="w-3 h-3 rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0"
+              className="w-3.5 h-3.5 rounded border-black/[0.2] text-[#0071e3] focus:ring-0 accent-[#0071e3]"
             />
-            <span>自动滚动</span>
+            <span className="font-medium">自动滚动</span>
           </label>
           <button
             type="button"
             onClick={handleExport}
-            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+            className="px-2.5 py-0.5 rounded-md bg-white border border-black/[0.08] shadow-apple-sm text-[#1d1d1f] hover:bg-black/[0.04] transition active:scale-[0.98] font-medium"
           >
             导出转储
           </button>
           <button
             type="button"
             onClick={handleClear}
-            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-rose-950/60 hover:text-rose-400 text-slate-300 transition"
+            className="px-2.5 py-0.5 rounded-md bg-white border border-black/[0.08] shadow-apple-sm text-red-600 hover:bg-red-50 transition active:scale-[0.98] font-medium"
           >
             清空
           </button>
@@ -137,27 +137,27 @@ export const HexDumpView: React.FC<HexDumpViewProps> = ({ cardId }) => {
       </div>
 
       {/* Hex Dump 视口 */}
-      <div ref={scrollRef} className="flex-1 overflow-auto p-2 leading-relaxed">
+      <div ref={scrollRef} className="flex-1 overflow-auto p-3 leading-relaxed">
         {lines.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-slate-600 select-none">
+          <div className="h-full flex items-center justify-center text-[#86868b] select-none">
             等待串口接收数据...
           </div>
         ) : (
           lines.map((l, idx) => (
-            <div key={idx} className="flex gap-4 hover:bg-slate-900/60 rounded px-1">
+            <div key={idx} className="flex gap-4 hover:bg-black/[0.03] rounded px-1.5 py-0.5">
               {showTimestamp && (
-                <span className="text-slate-600 select-none">[{l.timestamp}]</span>
+                <span className="text-[#86868b] select-none">[{l.timestamp}]</span>
               )}
               {/* 偏移地址 */}
-              <span className="text-indigo-400 select-none font-bold">
+              <span className="text-[#0071e3] select-none font-bold">
                 {l.offset.toString(16).padStart(8, "0").toUpperCase()}:
               </span>
               {/* HEX 字节区 */}
-              <span className="text-amber-300/90 tracking-wide font-medium whitespace-pre">
+              <span className="text-amber-800 tracking-wide font-medium whitespace-pre">
                 {l.hexPart.padEnd(49, " ")}
               </span>
               {/* ASCII 可视字符 */}
-              <span className="text-emerald-400 font-semibold select-none border-l border-slate-800 pl-3">
+              <span className="text-emerald-700 font-semibold select-none border-l border-black/[0.1] pl-3">
                 |{l.asciiPart}|
               </span>
             </div>

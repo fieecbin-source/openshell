@@ -2,38 +2,29 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DataBits {
     Five,
     Six,
     Seven,
+    #[default]
     Eight,
 }
 
-impl Default for DataBits {
-    fn default() -> Self {
-        Self::Eight
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StopBits {
+    #[default]
     One,
     OnePointFive,
     Two,
 }
 
-impl Default for StopBits {
-    fn default() -> Self {
-        Self::One
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Parity {
+    #[default]
     None,
     Even,
     Odd,
@@ -41,54 +32,33 @@ pub enum Parity {
     Space,
 }
 
-impl Default for Parity {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowControl {
+    #[default]
     None,
     Software, // XON/XOFF
     Hardware, // RTS/CTS
 }
 
-impl Default for FlowControl {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NewlineMode {
     None,
     Cr,
     Lf,
+    #[default]
     Crlf,
 }
 
-impl Default for NewlineMode {
-    fn default() -> Self {
-        Self::Crlf
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputNewlineMode {
     None,
     CrToCrlf,
+    #[default]
     LfToCrlf,
     StripCr,
-}
-
-impl Default for OutputNewlineMode {
-    fn default() -> Self {
-        Self::LfToCrlf
-    }
 }
 
 /// 串口连接配置 Profile。

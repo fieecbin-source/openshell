@@ -512,4 +512,3 @@ mod tests {
         assert_eq!(chunk_buf.len(), 64 * 1024);
     }
 }
-

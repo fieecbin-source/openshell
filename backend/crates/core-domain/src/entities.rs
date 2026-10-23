@@ -443,4 +443,3 @@ pub struct SessionCard {
     pub created_at: i64,
     pub last_active_at: i64,
 }
-

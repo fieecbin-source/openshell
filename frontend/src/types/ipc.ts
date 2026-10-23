@@ -1,5 +1,5 @@
 export type Protocol = "ssh" | "sftp" | "telnet" | "serial" | "local_shell";
-export type AuthMethod = "password" | "publickey" | "keyboard_interactive" | "agent" | "none";
+export type AuthMethod = "password" | "publickey" | "public_key" | "keyboard_interactive" | "agent" | "none";
 export type HostKeyPolicy = "strict" | "accept_new" | "insecure";
 export type GroupKind = "session" | "snippet";
 export type CredentialKind = "password" | "keyboard_interactive" | "passphrase";

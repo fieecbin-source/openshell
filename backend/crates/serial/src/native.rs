@@ -187,9 +187,10 @@ impl SerialBackend for NativeSerialBackend {
                         Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
                             // 预期内超时，继续下一次循环
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe
-                            || e.kind() == std::io::ErrorKind::NotFound
-                            || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                        Err(ref e)
+                            if e.kind() == std::io::ErrorKind::BrokenPipe
+                                || e.kind() == std::io::ErrorKind::NotFound
+                                || e.kind() == std::io::ErrorKind::PermissionDenied =>
                         {
                             // 设备拔出
                             break;

@@ -260,17 +260,17 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-black/65 backdrop-blur-md p-4 animate-in fade-in duration-100"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-black/25 backdrop-blur-sm p-4 animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-xl rounded-2xl border border-surface-700 bg-surface-900/95 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden"
+        className="w-full max-w-xl rounded-2xl border border-black/10 bg-white/95 shadow-apple-xl backdrop-blur-xl flex flex-col overflow-hidden text-slate-800"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 输入框 */}
-        <div className="flex items-center px-4 py-3.5 border-b border-surface-800 gap-3">
+        <div className="flex items-center px-4 py-3.5 border-b border-slate-100 gap-3">
           <svg
-            className="w-4 h-4 text-emerald-400 shrink-0"
+            className="w-4 h-4 text-apple-blue shrink-0"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -286,10 +286,10 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
               setSelectedIndex(0);
             }}
             onKeyDown={handleKeyDown}
-            placeholder="搜索会话、执行命令，或输入 root@192.168.1.1 快速连接..."
-            className="w-full bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+            placeholder="搜索会话、执行命令，或输入 root@192.168.1.1 快速直连..."
+            className="w-full bg-transparent text-sm text-slate-900 placeholder-slate-400 focus:outline-none"
           />
-          <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-surface-800 border border-surface-700 rounded text-slate-400 shrink-0">
+          <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-slate-100 border border-slate-200 rounded-md text-slate-400 shrink-0">
             ESC
           </kbd>
         </div>
@@ -297,8 +297,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         {/* 候选列表 */}
         <div className="max-h-[60vh] overflow-y-auto p-2 space-y-1">
           {allItems.length === 0 ? (
-            <div className="p-8 text-center text-xs text-slate-500">
-              未找到匹配会话或命令，可直接输入 <span className="text-emerald-400 font-mono">root@host:port</span> 进行快速连接
+            <div className="p-8 text-center text-xs text-slate-400">
+              未找到匹配会话或命令，可直接输入 <span className="text-apple-blue font-mono font-medium">root@host:port</span> 快速连接
             </div>
           ) : (
             allItems.map((item, idx) => {
@@ -312,20 +312,20 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     onMouseEnter={() => setSelectedIndex(idx)}
                     className={`flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer text-xs transition ${
                       isSelected
-                        ? "bg-emerald-600 text-white shadow-sm"
-                        : "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20"
+                        ? "bg-apple-blue text-white shadow-apple-sm"
+                        : "bg-apple-blue/5 text-apple-blue border border-apple-blue/20"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <span className="text-base">⚡</span>
                       <div>
                         <div className="font-bold">
-                          快速直连并保存会话: <span className="font-mono underline">{item.data.text}</span>
+                          快速直连并新建会话: <span className="font-mono underline">{item.data.text}</span>
                         </div>
-                        <div className="text-[11px] opacity-80">
+                        <div className="text-[11px] opacity-85">
                           {item.data.isSerial
-                            ? "立即打开串口通信卡片"
-                            : "解析地址并录入主机配置"}
+                            ? "立即打开本地串口通信会话"
+                            : "解析地址并录入 SSH 主机连接属性"}
                         </div>
                       </div>
                     </div>
@@ -343,27 +343,29 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     onMouseEnter={() => setSelectedIndex(idx)}
                     className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition ${
                       isSelected
-                        ? "bg-surface-800 text-white"
-                        : "text-slate-300 hover:bg-surface-850"
+                        ? "bg-apple-blue text-white shadow-apple-sm"
+                        : "text-slate-800 hover:bg-slate-100"
                     }`}
                   >
                     <div className="flex items-center gap-2.5 truncate">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-surface-950 text-[11px]">
+                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-xs ${
+                        isSelected ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
+                      }`}>
                         {s.protocol === "serial" ? "🔌" : "⚡"}
                       </span>
                       <div className="truncate">
-                        <div className="font-medium truncate flex items-center gap-1.5">
+                        <div className="font-semibold truncate flex items-center gap-1.5">
                           <span>{s.name}</span>
-                          {s.favorite && <span className="text-[10px] text-amber-400">★</span>}
+                          {s.favorite && <span className="text-[10px] text-apple-orange">★</span>}
                         </div>
-                        <div className="text-[10px] text-slate-500 truncate font-mono">
+                        <div className={`text-[10px] truncate font-mono ${isSelected ? "text-white/80" : "text-slate-400"}`}>
                           {s.protocol === "serial"
                             ? s.protocol_options_json?.port_name || "COM1"
                             : `${s.username || "root"}@${s.host || "localhost"}:${s.port || 22}`}
                         </div>
                       </div>
                     </div>
-                    <span className="text-[10px] text-slate-500 font-mono">连接</span>
+                    <span className={`text-[10px] font-mono ${isSelected ? "text-white/80" : "text-slate-400"}`}>连接</span>
                   </div>
                 );
               }
@@ -377,18 +379,18 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     onMouseEnter={() => setSelectedIndex(idx)}
                     className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition ${
                       isSelected
-                        ? "bg-surface-800 text-white"
-                        : "text-slate-300 hover:bg-surface-850"
+                        ? "bg-apple-blue text-white shadow-apple-sm"
+                        : "text-slate-800 hover:bg-slate-100"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="text-sm shrink-0">{a.icon}</span>
+                      <span className="text-base shrink-0">{a.icon}</span>
                       <div>
-                        <div className="font-medium">{a.title}</div>
-                        <div className="text-[10px] text-slate-500">{a.desc}</div>
+                        <div className="font-semibold">{a.title}</div>
+                        <div className={`text-[10px] ${isSelected ? "text-white/80" : "text-slate-500"}`}>{a.desc}</div>
                       </div>
                     </div>
-                    <span className="text-[10px] text-slate-500 font-mono">命令</span>
+                    <span className={`text-[10px] font-mono ${isSelected ? "text-white/80" : "text-slate-400"}`}>操作</span>
                   </div>
                 );
               }
@@ -404,20 +406,20 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     onMouseEnter={() => setSelectedIndex(idx)}
                     className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition ${
                       isSelected
-                        ? "bg-surface-800 text-white"
-                        : "text-slate-300 hover:bg-surface-850"
+                        ? "bg-apple-blue text-white shadow-apple-sm"
+                        : "text-slate-800 hover:bg-slate-100"
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <span
-                        className="w-3.5 h-3.5 rounded-full border border-surface-700 shrink-0"
+                        className="w-3.5 h-3.5 rounded-full border border-slate-300 shrink-0"
                         style={{ backgroundColor: t.background }}
                       />
-                      <span className="font-medium">
-                        切换主题: {t.name} {isCurrent && "(当前)"}
+                      <span className="font-semibold">
+                        终端主题: {t.name} {isCurrent && "(当前)"}
                       </span>
                     </div>
-                    <span className="text-[10px] text-slate-500 font-mono">主题</span>
+                    <span className={`text-[10px] font-mono ${isSelected ? "text-white/80" : "text-slate-400"}`}>主题</span>
                   </div>
                 );
               }
@@ -428,13 +430,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         </div>
 
         {/* 底部按键提示 */}
-        <div className="px-4 py-2 bg-surface-950 border-t border-surface-800 flex items-center justify-between text-[11px] text-slate-500">
+        <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
           <div className="flex items-center gap-3">
             <span>↑↓ 导航</span>
             <span>↵ 确认选择</span>
             <span>ESC 关闭</span>
           </div>
-          <span>Ctrl+K 全局呼出</span>
+          <span className="font-medium text-apple-blue">⌘K 全局搜索</span>
         </div>
       </div>
     </div>

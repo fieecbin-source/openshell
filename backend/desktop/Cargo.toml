@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "OpenShell"
+path = "src/main.rs"
+
 [lib]
 name = "openshell_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -24,7 +28,7 @@ openshell-importer = { workspace = true }
 openshell-sync-protocol = { workspace = true }
 openshell-extension-sample = { workspace = true }
 openshell-serial = { workspace = true }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { workspace = true }
@@ -34,3 +38,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 zeroize = { workspace = true }
 ulid = { workspace = true }
+tauri-plugin-single-instance = "2.5.4"

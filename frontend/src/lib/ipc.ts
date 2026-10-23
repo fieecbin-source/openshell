@@ -339,6 +339,16 @@ export async function monitorKillProcess(connId: string, pid: number, signal = 1
   await invoke("monitor_kill_process", { connId, pid, signal });
 }
 
+export interface SshExecResult {
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+}
+
+export async function sshExec(connId: string, command: string): Promise<SshExecResult> {
+  return await invoke<SshExecResult>("ssh_exec", { connId, command });
+}
+
 // ==========================================
 // Port Forwarding
 // ==========================================

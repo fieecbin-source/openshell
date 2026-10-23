@@ -57,6 +57,7 @@ impl std::str::FromStr for Protocol {
 #[serde(rename_all = "snake_case")]
 pub enum AuthMethod {
     Password,
+    #[serde(alias = "publickey")]
     PublicKey,
     KeyboardInteractive,
     Agent,

@@ -109,24 +109,24 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="relative w-full max-w-lg rounded-xl border border-surface-800 bg-surface-900 p-6 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="relative w-full max-w-lg rounded-2xl border border-black/[0.08] bg-white/95 p-6 shadow-apple-lg backdrop-blur-2xl text-[#1d1d1f] animate-in zoom-in-95 duration-150">
         {/* 顶部标题栏与 Tab 切换 */}
-        <div className="flex items-center justify-between pb-4 border-b border-surface-800">
+        <div className="flex items-center justify-between pb-4 border-b border-black/[0.06]">
           <div className="flex items-center space-x-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50 border border-teal-200/60 text-teal-600 shadow-sm">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
             <div>
-              <h2 className="text-base font-bold text-white">网络探测与扩展机制</h2>
-              <p className="text-xs text-slate-400 font-mono">架构 §21 扩展机制示例验证模块</p>
+              <h2 className="text-base font-semibold text-[#1d1d1f] tracking-tight">网络探测与扩展机制</h2>
+              <p className="text-xs text-[#86868b] font-mono">TCP 连通性测试与核心插件扩展管理</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-surface-800 hover:text-white transition"
+            className="rounded-lg p-1.5 text-[#86868b] hover:bg-black/[0.05] hover:text-[#1d1d1f] active:scale-95 transition"
           >
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -134,24 +134,24 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
           </button>
         </div>
 
-        {/* 选项卡 */}
-        <div className="flex border-b border-surface-800 mt-4 text-xs">
+        {/* 选项卡 (Apple 风格分段胶囊) */}
+        <div className="mt-4 flex bg-black/[0.06] p-0.5 rounded-xl text-xs font-medium w-fit">
           <button
             onClick={() => setActiveTab("checker")}
-            className={`px-4 py-2 border-b-2 font-medium transition ${
+            className={`px-3.5 py-1.5 rounded-lg transition active:scale-[0.98] ${
               activeTab === "checker"
-                ? "border-teal-400 text-teal-400"
-                : "border-transparent text-slate-400 hover:text-white"
+                ? "bg-white text-[#1d1d1f] font-semibold shadow-apple-sm"
+                : "text-[#86868b] hover:text-[#1d1d1f]"
             }`}
           >
             TCP 连通性探测
           </button>
           <button
             onClick={() => setActiveTab("plugins")}
-            className={`px-4 py-2 border-b-2 font-medium transition ${
+            className={`px-3.5 py-1.5 rounded-lg transition active:scale-[0.98] ${
               activeTab === "plugins"
-                ? "border-teal-400 text-teal-400"
-                : "border-transparent text-slate-400 hover:text-white"
+                ? "bg-white text-[#1d1d1f] font-semibold shadow-apple-sm"
+                : "text-[#86868b] hover:text-[#1d1d1f]"
             }`}
           >
             扩展组件清单 ({tools.length + actions.length})
@@ -161,19 +161,19 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
         {activeTab === "checker" ? (
           <form onSubmit={handleProbe} className="space-y-4 mt-4">
             <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1">
-                <label className="text-xs font-medium text-slate-300">目标主机 / IP</label>
+              <div className="col-span-2 space-y-1.5">
+                <label className="text-xs font-semibold text-[#1d1d1f]">目标主机 / IP</label>
                 <input
                   type="text"
                   required
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
                   placeholder="例如: 127.0.0.1 或 192.168.1.1"
-                  className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-teal-500 focus:outline-none"
+                  className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] px-3 py-2 text-xs text-[#1d1d1f] placeholder-[#86868b]/60 focus:border-[#0071e3] focus:bg-white focus:outline-none transition"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-300">目标端口</label>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#1d1d1f]">目标端口</label>
                 <input
                   type="number"
                   required
@@ -182,13 +182,13 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
                   value={port}
                   onChange={(e) => setPort(Number(e.target.value))}
                   placeholder="22"
-                  className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-teal-500 focus:outline-none"
+                  className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] px-3 py-2 text-xs text-[#1d1d1f] placeholder-[#86868b]/60 focus:border-[#0071e3] focus:bg-white focus:outline-none transition"
                 />
               </div>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-300">探测超时 (毫秒)</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[#1d1d1f]">探测超时 (毫秒)</label>
               <input
                 type="number"
                 min={200}
@@ -196,14 +196,14 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
                 step={100}
                 value={timeoutMs}
                 onChange={(e) => setTimeoutMs(Number(e.target.value))}
-                className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-teal-500 focus:outline-none"
+                className="w-full rounded-xl border border-black/[0.08] bg-[#f5f5f7] px-3 py-2 text-xs text-[#1d1d1f] placeholder-[#86868b]/60 focus:border-[#0071e3] focus:bg-white focus:outline-none transition"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center space-x-2 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-500 disabled:opacity-50 transition"
+              className="w-full flex items-center justify-center space-x-2 rounded-xl bg-[#0071e3] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0077ed] active:scale-[0.98] disabled:opacity-50 transition shadow-sm"
             >
               {loading ? (
                 <>
@@ -223,30 +223,30 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
             {/* 探测结果面板 */}
             {result && (
               <div
-                className={`rounded-lg border p-3 mt-3 text-xs transition ${
+                className={`rounded-xl border p-3.5 mt-3 text-xs transition shadow-apple-sm ${
                   result.is_open
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                    : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+                    ? "border-emerald-500/30 bg-emerald-50/60 text-emerald-900"
+                    : "border-red-500/30 bg-red-50/60 text-red-900"
                 }`}
               >
                 <div className="flex items-center justify-between font-semibold">
                   <div className="flex items-center space-x-2">
                     <span
                       className={`inline-block h-2.5 w-2.5 rounded-full ${
-                        result.is_open ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
+                        result.is_open ? "bg-emerald-500 animate-pulse" : "bg-red-500"
                       }`}
                     />
-                    <span>{result.is_open ? "端口开放 (OPEN)" : "端口不可达 / 关闭 (CLOSED)"}</span>
+                    <span className="font-bold">{result.is_open ? "端口开放 (OPEN)" : "端口不可达 / 关闭 (CLOSED)"}</span>
                   </div>
-                  <span className="font-mono text-[11px] bg-black/30 px-2 py-0.5 rounded">
+                  <span className="font-mono text-[11px] bg-black/[0.06] px-2 py-0.5 rounded-md text-[#1d1d1f]">
                     耗时: {result.latency_ms} ms
                   </span>
                 </div>
-                <div className="mt-1 text-[11px] text-slate-300 font-mono">
+                <div className="mt-1.5 text-[11px] text-[#424245] font-mono">
                   目标: {result.host}:{result.port}
                 </div>
                 {result.error && (
-                  <div className="mt-1 text-[11px] text-rose-400/90 font-mono break-all">
+                  <div className="mt-1 text-[11px] text-red-700 font-mono break-all">
                     原因: {result.error}
                   </div>
                 )}
@@ -255,22 +255,22 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
           </form>
         ) : (
           <div className="mt-4 space-y-3 max-h-72 overflow-y-auto pr-1">
-            <div className="text-xs font-medium text-slate-400">已注册独立工具页 (ToolPageProvider)</div>
+            <div className="text-xs font-semibold text-[#1d1d1f]">已注册独立工具页 (ToolPageProvider)</div>
             {tools.map((t) => (
               <div
                 key={t.tool_id}
-                className="flex items-center justify-between p-2.5 rounded-lg border border-surface-800 bg-surface-950 text-xs"
+                className="flex items-center justify-between p-3 rounded-xl border border-black/[0.06] bg-[#f5f5f7] text-xs shadow-apple-sm"
               >
                 <div>
-                  <div className="font-semibold text-white">{t.display_name}</div>
-                  <div className="text-[11px] text-slate-400 font-mono">路由: {t.route} ({t.window_mode})</div>
+                  <div className="font-semibold text-[#1d1d1f]">{t.display_name}</div>
+                  <div className="text-[11px] text-[#86868b] font-mono">路由: {t.route} ({t.window_mode})</div>
                 </div>
                 <button
                   onClick={() => toggleFeature("tool", t.tool_id, t.enabled)}
-                  className={`px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                  className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition active:scale-[0.98] ${
                     t.enabled
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30"
-                      : "bg-surface-800 text-slate-400 border border-surface-700 hover:text-white"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                      : "bg-white text-[#86868b] border border-black/[0.08] hover:text-[#1d1d1f]"
                   }`}
                 >
                   {t.enabled ? "已启用" : "已禁用"}
@@ -278,24 +278,24 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
               </div>
             ))}
 
-            <div className="text-xs font-medium text-slate-400 pt-2">已注册快捷动作 (QuickActionProvider)</div>
+            <div className="text-xs font-semibold text-[#1d1d1f] pt-2">已注册快捷动作 (QuickActionProvider)</div>
             {actions.map((a) => (
               <div
                 key={a.action_id}
-                className="flex items-center justify-between p-2.5 rounded-lg border border-surface-800 bg-surface-950 text-xs"
+                className="flex items-center justify-between p-3 rounded-xl border border-black/[0.06] bg-[#f5f5f7] text-xs shadow-apple-sm"
               >
                 <div>
-                  <div className="font-semibold text-white">{a.action_id}</div>
-                  <div className="text-[11px] text-slate-400 font-mono">
+                  <div className="font-semibold text-[#1d1d1f]">{a.action_id}</div>
+                  <div className="text-[11px] text-[#86868b] font-mono">
                     快捷键: {a.default_shortcut || "无"}
                   </div>
                 </div>
                 <button
                   onClick={() => toggleFeature("action", a.action_id, a.enabled)}
-                  className={`px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                  className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition active:scale-[0.98] ${
                     a.enabled
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30"
-                      : "bg-surface-800 text-slate-400 border border-surface-700 hover:text-white"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                      : "bg-white text-[#86868b] border border-black/[0.08] hover:text-[#1d1d1f]"
                   }`}
                 >
                   {a.enabled ? "已启用" : "已禁用"}
@@ -305,10 +305,10 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
           </div>
         )}
 
-        <div className="mt-6 flex justify-end border-t border-surface-800 pt-4">
+        <div className="mt-6 flex justify-end border-t border-black/[0.06] pt-4">
           <button
             onClick={onClose}
-            className="rounded-lg bg-surface-800 px-4 py-2 text-xs font-medium text-slate-300 hover:bg-surface-700 hover:text-white transition"
+            className="rounded-xl border border-black/[0.08] bg-black/[0.04] px-4 py-2 text-xs font-semibold text-[#1d1d1f] hover:bg-black/[0.08] active:scale-[0.98] transition"
           >
             关闭
           </button>

@@ -4,7 +4,8 @@ import { useVaultStore } from "../stores/vaultStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { SessionTree } from "./SessionTree";
+import { HomeHub } from "./HomeHub";
+import { ServerSidebar } from "./ServerSidebar";
 import { TerminalTabs } from "./TerminalTabs";
 import { XtermView } from "./XtermView";
 import { SessionModal } from "./SessionModal";
@@ -29,10 +30,11 @@ import { useSerialStore } from "../stores/serialStore";
 import { SftpView } from "./SftpView";
 import { DisconnectedBackdrop } from "./DisconnectedBackdrop";
 import { useSftpStore } from "../stores/sftpStore";
+import { SessionTree } from "./SessionTree";
 
 export const AppLayout: React.FC = () => {
   const { status, lock } = useVaultStore();
-  const { tabs, activeTabId, reconnectTab, toggleMode } = useTerminalStore();
+  const { tabs, activeTabId, reconnectTab } = useTerminalStore();
   const { sessions } = useSessionStore();
   const { loadSettings, setSettingsModalOpen } = useSettingsStore();
   const { loadConfig: loadSyncConfig } = useSyncStore();
@@ -54,6 +56,36 @@ export const AppLayout: React.FC = () => {
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [portCheckerOpen, setPortCheckerOpen] = useState(false);
 
+  // FinalShell 经典布局增强：全终端 / 上下分屏 / 全SFTP 视图模式与分屏比例
+  const [sessionViewMode, setSessionViewMode] = useState<"terminal" | "split" | "sftp">("split");
+  const [splitRatio, setSplitRatio] = useState<number>(55);
+  const [sidebarView, setSidebarView] = useState<"server" | "tree">("server");
+
+  // 拖动上下分屏分割条
+  const handleSplitMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startRatio = splitRatio;
+    const container = (e.currentTarget as HTMLElement).parentElement;
+    if (!container) return;
+    const containerHeight = container.getBoundingClientRect().height;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = moveEvent.clientY - startY;
+      const deltaPercent = (deltaY / containerHeight) * 100;
+      const newRatio = Math.min(85, Math.max(15, startRatio + deltaPercent));
+      setSplitRatio(newRatio);
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
   useEffect(() => {
     loadSettings();
     loadSyncConfig();
@@ -65,14 +97,31 @@ export const AppLayout: React.FC = () => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setCommandPaletteOpen((prev) => !prev);
+      } else if (e.ctrlKey && e.shiftKey && e.key === "Tab") {
+        e.preventDefault();
+        setSessionViewMode((prev) => {
+          if (prev === "terminal") return "split";
+          if (prev === "split") return "sftp";
+          return "terminal";
+        });
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const activeTab = tabs.find((t) => t.tabId === activeTabId);
+  const isHomeActive = activeTabId === null || activeTabId === "home" || tabs.length === 0;
+  const activeTab = isHomeActive ? null : tabs.find((t) => t.tabId === activeTabId);
   const isConnected = activeTab && activeTab.status === "connected" && (activeTab.connectionId || activeTab.protocol === "serial");
+
+  const handleConnectSession = async (session: Session) => {
+    const existing = tabs.find((t) => t.sessionId === session.id);
+    if (existing) {
+      useTerminalStore.getState().setActiveTab(existing.tabId);
+    } else {
+      await useTerminalStore.getState().openSession(session);
+    }
+  };
 
   const handleNewSession = (initialGroupId?: string) => {
     setEditingSession(null);
@@ -92,32 +141,58 @@ export const AppLayout: React.FC = () => {
     setIsSessionModalOpen(true);
   };
 
-  // 快捷保存当前活动标签为新会话或编辑对应会话
+  // 快捷保存当前活动标签为新会话或编辑对应会话 (智能解析 Host/Port/Username)
   const handleSaveActiveTabAsSession = () => {
     if (!activeTab) return;
     const existing = sessions.find((s) => s.id === activeTab.sessionId);
     if (existing) {
       handleEditSession(existing);
     } else {
+      let host = "";
+      let port = 22;
+      let username = "root";
+      const name = activeTab.sessionName || "";
+      if (name.includes("@")) {
+        const parts = name.split("@");
+        username = parts[0];
+        const hostPort = parts[1];
+        if (hostPort.includes(":")) {
+          const hp = hostPort.split(":");
+          host = hp[0];
+          port = parseInt(hp[1], 10) || 22;
+        } else {
+          host = hostPort;
+        }
+      } else if (name.includes(":")) {
+        const hp = name.split(":");
+        host = hp[0];
+        port = parseInt(hp[1], 10) || 22;
+      } else {
+        host = name;
+      }
+
       handleNewSessionWithValues({
         name: activeTab.sessionName,
         protocol: activeTab.protocol,
+        host,
+        port,
+        username,
       });
     }
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-surface-950 font-sans antialiased select-none text-slate-200">
-      {/* 顶部主导航栏 */}
-      <header className="flex h-11 shrink-0 items-center justify-between border-b border-surface-800 bg-surface-950 px-3">
+    <div className="flex h-screen w-screen flex-col bg-[#f5f5f7] font-sans antialiased select-none text-slate-800">
+      {/* 顶部主导航栏 (Apple Translucent Frosted Glass Header) */}
+      <header className="flex h-11 shrink-0 items-center justify-between border-b border-black/[0.08] bg-white/80 backdrop-blur-xl px-3 z-20">
         <div className="flex items-center space-x-2.5">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-400 font-black text-xs border border-emerald-500/30">
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-apple-blue text-white font-black text-[11px] shadow-apple-sm">
             OS
           </div>
-          <span className="text-sm font-bold tracking-tight text-white">
+          <span className="text-sm font-semibold tracking-tight text-slate-900">
             OpenShell
           </span>
-          <span className="rounded bg-surface-800/80 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 font-mono">
+          <span className="rounded-full bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[10px] font-medium text-slate-600 font-mono">
             v1.0.0
           </span>
         </div>
@@ -126,16 +201,16 @@ export const AppLayout: React.FC = () => {
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setCommandPaletteOpen(true)}
-            className="flex items-center space-x-2 px-3 py-1 rounded-lg border border-surface-800 bg-surface-900 text-slate-400 hover:text-slate-200 hover:border-surface-700 transition text-xs w-64 justify-between"
+            className="flex items-center space-x-2 px-3 py-1.5 rounded-xl border border-slate-200/80 bg-slate-100/70 text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition text-xs w-72 justify-between shadow-apple-sm"
             title="搜索会话、快速连接或切换主题 (Ctrl+K / ⌘K)"
           >
             <div className="flex items-center space-x-1.5 truncate">
-              <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
-              <span className="truncate">搜索会话或输入直连...</span>
+              <span className="truncate text-slate-500">快速搜索会话或直连...</span>
             </div>
-            <kbd className="px-1.5 py-0.2 text-[10px] font-mono bg-surface-950 border border-surface-800 rounded text-slate-500">
+            <kbd className="px-1.5 py-0.2 text-[10px] font-mono bg-white border border-slate-200/80 rounded-md text-slate-400 shadow-apple-sm">
               ⌘K
             </kbd>
           </button>
@@ -146,28 +221,49 @@ export const AppLayout: React.FC = () => {
           {isConnected && (
             <>
               {activeTab?.protocol !== "serial" && (
-                <button
-                  onClick={() => activeTab && toggleMode(activeTab.tabId)}
-                  className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border transition ${
-                    activeTab?.currentMode === "view"
-                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                      : "bg-surface-900 border-surface-800 text-slate-400 hover:text-white"
-                  }`}
-                  title="切换命令终端/SFTP视图模式 (Ctrl+Shift+Tab)"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                  <span>{activeTab?.currentMode === "view" ? "返回命令行" : "SFTP 视图"}</span>
-                </button>
+                <div className="flex items-center rounded-xl border border-slate-200/80 bg-slate-100/90 p-0.5 text-xs font-medium shadow-apple-sm">
+                  <button
+                    onClick={() => setSessionViewMode("terminal")}
+                    className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
+                      sessionViewMode === "terminal"
+                        ? "bg-white text-apple-blue font-bold shadow-apple-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="全屏终端模式"
+                  >
+                    📟 终端
+                  </button>
+                  <button
+                    onClick={() => setSessionViewMode("split")}
+                    className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
+                      sessionViewMode === "split"
+                        ? "bg-white text-apple-blue font-bold shadow-apple-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="经典分屏模式 (上终端 + 下SFTP，FinalShell 体验)"
+                  >
+                    ◫ 分屏
+                  </button>
+                  <button
+                    onClick={() => setSessionViewMode("sftp")}
+                    className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
+                      sessionViewMode === "sftp"
+                        ? "bg-white text-apple-blue font-bold shadow-apple-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="全屏 SFTP 文件管理器"
+                  >
+                    📁 SFTP
+                  </button>
+                </div>
               )}
 
               <button
                 onClick={() => setMonitorOpen(true)}
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border bg-surface-900 border-surface-800 text-slate-400 hover:text-white hover:border-surface-700 transition"
-                title="查看服务器监控"
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+                title="查看服务器资源监控"
               >
-                <svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5 text-apple-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
                 <span>服务器监控</span>
@@ -177,10 +273,10 @@ export const AppLayout: React.FC = () => {
 
           <button
             onClick={() => setForwardModalOpen(true)}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border bg-surface-900 border-surface-800 text-slate-400 hover:text-white hover:border-surface-700 transition"
-            title="端口转发与代理"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+            title="端口转发与隧道"
           >
-            <svg className="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5 text-apple-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
             </svg>
             <span>端口转发</span>
@@ -188,10 +284,10 @@ export const AppLayout: React.FC = () => {
 
           <button
             onClick={() => setMultiExecOpen(!multiExecOpen)}
-            className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border transition ${
+            className={`flex items-center space-x-1 px-2.5 py-1 rounded-xl border transition shadow-apple-sm font-medium ${
               multiExecOpen
-                ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
-                : "bg-surface-900 border-surface-800 text-slate-400 hover:text-white"
+                ? "bg-amber-50 border-amber-300 text-amber-800"
+                : "bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50"
             }`}
             title="多会话同步输入"
           >
@@ -203,10 +299,10 @@ export const AppLayout: React.FC = () => {
 
           <button
             onClick={() => setPortCheckerOpen(true)}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border bg-surface-900 border-surface-800 text-slate-400 hover:text-white hover:border-surface-700 transition"
-            title="网络探测与插件机制 (Architecture §21)"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+            title="网络连通探测 (Ping / TCP)"
           >
-            <svg className="w-3.5 h-3.5 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
             <span>网络探测</span>
@@ -214,23 +310,23 @@ export const AppLayout: React.FC = () => {
 
           <button
             onClick={() => setImportExportOpen(true)}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border bg-surface-900 border-surface-800 text-slate-400 hover:text-white hover:border-surface-700 transition"
-            title="导入/导出备份"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+            title="导入 / 导出备份"
           >
-            <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
             <span>导入/导出</span>
           </button>
 
-          {/* 顶部同步小组件 */}
+          {/* 顶部常驻同步小组件 (Apple Header Capsule) */}
           <SyncStatusWidget variant="header" />
 
-          {/* 右侧保险库与设置控制 */}
+          {/* 设置按钮 */}
           <button
             onClick={() => setSettingsModalOpen(true)}
-            className="p-1.5 rounded-lg border border-surface-800 bg-surface-900 text-slate-400 hover:border-surface-700 hover:text-white transition"
-            title="偏好设置与主题"
+            className="p-1.5 rounded-xl border border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm"
+            title="系统偏好设置与外观"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -241,10 +337,10 @@ export const AppLayout: React.FC = () => {
           {status && status.state === "unlocked" && (
             <button
               onClick={() => lock()}
-              className="flex items-center space-x-1.5 rounded-lg border border-surface-800 bg-surface-900 px-2.5 py-1 text-xs text-slate-300 hover:border-surface-700 hover:text-white transition"
-              title="锁定保险库"
+              className="flex items-center space-x-1.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-apple-sm"
+              title="锁定主保险库"
             >
-              <svg className="h-3.5 w-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="h-3.5 w-3.5 text-apple-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
               </svg>
               <span>锁定</span>
@@ -254,158 +350,217 @@ export const AppLayout: React.FC = () => {
       </header>
 
       {/* 主工作区 */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* 左侧会话导航树 */}
-        <aside className="w-64 shrink-0 overflow-hidden border-r border-surface-800">
-          <SessionTree
+      <div className="flex flex-1 flex-col overflow-hidden bg-white">
+        {/* 顶部标签栏（含常驻 🏠 主页 标签，随时点击无缝返回大盘） */}
+        <TerminalTabs
+          onNewTabClick={() => handleNewSession()}
+          onHomeClick={() => useTerminalStore.getState().setActiveTab("home")}
+        />
+
+        {isHomeActive ? (
+          /* 主页模式：大盘机器连接与管理中心（包含大号新建连接、卡片极速直连、状态大盘） */
+          <HomeHub
             onNewSession={(groupId) => handleNewSession(groupId)}
             onEditSession={handleEditSession}
+            onConnectSession={handleConnectSession}
+            onPortCheckerOpen={() => setPortCheckerOpen(true)}
           />
-        </aside>
-
-        {/* 中间主工作区：标签栏 + 命令片段栏 + xterm 终端 + MultiExec 同步输入 */}
-        <main className="flex flex-1 flex-col overflow-hidden bg-surface-950">
-          <TerminalTabs onNewTabClick={() => handleNewSession()} />
-
-          {/* 快捷命令片段栏 (SSH 模式) */}
-          {activeTab?.protocol !== "serial" && <SnippetBar activeTabId={activeTabId} />}
-
-          <div className="relative flex-1 overflow-hidden flex">
-            {activeTab ? (
-              activeTab.protocol === "serial" ? (
-                <div className="flex-1 h-full relative overflow-hidden flex flex-col bg-surface-950">
-                  <SerialControlBar
-                    cardId={activeTab.cardId || activeTab.tabId}
-                    baudRate={activeTab.baudRate}
-                  />
-                  <div className="flex-1 relative overflow-hidden">
-                    {viewMode === "hex" ? (
-                      <HexDumpView cardId={activeTab.cardId || activeTab.tabId} />
-                    ) : (
-                      <XtermView key={activeTab.tabId} tab={activeTab} />
-                    )}
-                  </div>
-                  <SerialSendBar cardId={activeTab.cardId || activeTab.tabId} />
-
-                  {/* 串口断开半透明遮罩 */}
-                  {activeTab.status === "disconnected" && (
-                    <DisconnectedBackdrop
-                      isSerial={true}
-                      reason={activeTab.error}
-                      onReconnect={async () => {
-                        setIsReconnecting(true);
-                        await reconnectTab(activeTab.tabId);
-                        setIsReconnecting(false);
-                      }}
-                      reconnecting={isReconnecting}
-                    />
-                  )}
-                </div>
-              ) : (
-                <div className="flex-1 h-full relative overflow-hidden flex flex-col">
-                  {/* 命令模式：全屏终端，切到视图模式时隐藏 DOM 但保持挂载与缓冲 */}
-                  <div className={activeTab.currentMode === "command" ? "w-full h-full relative" : "hidden"}>
-                    <XtermView key={activeTab.tabId} tab={activeTab} />
-
-                    {/* 浮动监控仪表盘 */}
-                    {monitorOpen && activeTab.connectionId && (
-                      <MonitorDashboard
-                        connId={activeTab.connectionId}
-                        sessionId={activeTab.sessionId}
-                        onClose={() => setMonitorOpen(false)}
-                      />
-                    )}
-                  </div>
-
-                  {/* 视图模式：全屏 SFTP 文件资源管理器 */}
-                  <div className={activeTab.currentMode === "view" ? "w-full h-full relative" : "hidden"}>
-                    {activeTab.connectionId && (
-                      <SftpView
-                        connId={activeTab.connectionId}
-                        sessionId={activeTab.sessionId}
-                      />
-                    )}
-                  </div>
-
-                  {/* 会话断开半透明遮罩 */}
-                  {activeTab.status === "disconnected" && (
-                    <DisconnectedBackdrop
-                      isSerial={false}
-                      reason={activeTab.error}
-                      onReconnect={async () => {
-                        setIsReconnecting(true);
-                        await reconnectTab(activeTab.tabId);
-                        setIsReconnecting(false);
-                      }}
-                      reconnecting={isReconnecting}
-                    />
-                  )}
-                </div>
-              )
-            ) : (
-              <div className="flex h-full flex-1 flex-col items-center justify-center p-8 text-center text-slate-500">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-900 border border-surface-800 mb-4 shadow-xl">
-                  <svg className="h-8 w-8 text-emerald-500/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <h3 className="text-base font-bold text-slate-200 mb-1">
-                  欢迎使用 OpenShell 工作台
-                </h3>
-                <p className="max-w-md text-xs text-slate-400 mb-5">
-                  全 Rust 核心驱动、零 Agent 监控、视图卡 SFTP 双模式无缝切换与串口调试的现代独立终端。
-                </p>
-                <div className="flex items-center gap-3">
+        ) : (
+          /* 活动会话模式：左侧可切换【服务器监控/网络/容器】与【主机连接列表】，右侧为终端/SFTP交互区 */
+          <div className="flex flex-1 overflow-hidden">
+            {activeTab && activeTab.protocol === "ssh" && (
+              <div className="shrink-0 flex flex-col h-full border-r border-slate-200/80 bg-[#fbfbfd]">
+                <div className="flex items-center p-1 bg-slate-100/90 border-b border-slate-200/80 text-[11px] font-semibold gap-0.5">
                   <button
-                    onClick={() => handleNewSession()}
-                    className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-950 hover:bg-emerald-500 transition"
+                    onClick={() => setSidebarView("server")}
+                    className={`flex-1 py-1 rounded-md transition text-center ${
+                      sidebarView === "server"
+                        ? "bg-white text-apple-blue shadow-apple-sm font-bold"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                    title="查看服务器资源监控、网络端口与容器"
                   >
-                    创建连接会话
+                    📊 资源与容器
                   </button>
                   <button
-                    onClick={() => setCommandPaletteOpen(true)}
-                    className="rounded-lg bg-surface-900 border border-surface-800 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white hover:border-surface-700 transition"
+                    onClick={() => setSidebarView("tree")}
+                    className={`flex-1 py-1 rounded-md transition text-center ${
+                      sidebarView === "tree"
+                        ? "bg-white text-apple-blue shadow-apple-sm font-bold"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                    title="查看主机连接列表与快捷管理"
                   >
-                    按 ⌘K 快速查找 / 直连
+                    💻 主机列表
                   </button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  {sidebarView === "server" ? (
+                    <ServerSidebar tab={activeTab} />
+                  ) : (
+                    <div className="w-64 h-full overflow-y-auto bg-[#fbfbfd]">
+                      <SessionTree
+                        onNewSession={(gId) => handleNewSession(gId)}
+                        onEditSession={handleEditSession}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
-          </div>
 
-          {/* 多会话同步输入栏 */}
-          {multiExecOpen && (
-            <MultiExecBar onClose={() => setMultiExecOpen(false)} />
-          )}
-        </main>
+            <div className="flex-1 flex flex-col overflow-hidden bg-white">
+              {/* 快捷命令片段栏 (SSH 模式) */}
+              {activeTab && activeTab.protocol !== "serial" && (
+                <SnippetBar activeTabId={activeTabId} />
+              )}
+
+              <div className="relative flex-1 overflow-hidden flex bg-white">
+                {activeTab && (
+                  activeTab.protocol === "serial" ? (
+                    <div className="flex-1 h-full relative overflow-hidden flex flex-col bg-white">
+                      <SerialControlBar
+                        cardId={activeTab.cardId || activeTab.tabId}
+                        baudRate={activeTab.baudRate}
+                      />
+                      <div className="flex-1 relative overflow-hidden">
+                        {viewMode === "hex" ? (
+                          <HexDumpView cardId={activeTab.cardId || activeTab.tabId} />
+                        ) : (
+                          <XtermView key={activeTab.tabId} tab={activeTab} />
+                        )}
+                      </div>
+                      <SerialSendBar cardId={activeTab.cardId || activeTab.tabId} />
+
+                      {/* 串口断开半透明遮罩 */}
+                      {activeTab.status === "disconnected" && (
+                        <DisconnectedBackdrop
+                          isSerial={true}
+                          reason={activeTab.error}
+                          onReconnect={async () => {
+                            setIsReconnecting(true);
+                            await reconnectTab(activeTab.tabId);
+                            setIsReconnecting(false);
+                          }}
+                          reconnecting={isReconnecting}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex-1 h-full relative overflow-hidden flex flex-col bg-white">
+                      {/* 会话主交互区：根据 sessionViewMode 动态切换终端与 SFTP 布局 */}
+                      {sessionViewMode === "terminal" && (
+                        <div className="w-full h-full relative">
+                          <XtermView key={activeTab.tabId} tab={activeTab} />
+                          {monitorOpen && activeTab.connectionId && (
+                            <MonitorDashboard
+                              connId={activeTab.connectionId}
+                              sessionId={activeTab.sessionId}
+                              onClose={() => setMonitorOpen(false)}
+                            />
+                          )}
+                        </div>
+                      )}
+
+                      {sessionViewMode === "sftp" && (
+                        <div className="w-full h-full relative">
+                          {activeTab.connectionId && (
+                            <SftpView
+                              connId={activeTab.connectionId}
+                              sessionId={activeTab.sessionId}
+                            />
+                          )}
+                        </div>
+                      )}
+
+                      {sessionViewMode === "split" && (
+                        <div className="w-full h-full flex flex-col overflow-hidden relative">
+                          {/* 上半区：终端 */}
+                          <div style={{ height: `${splitRatio}%` }} className="w-full relative overflow-hidden">
+                            <XtermView key={activeTab.tabId} tab={activeTab} />
+                            {monitorOpen && activeTab.connectionId && (
+                              <MonitorDashboard
+                                connId={activeTab.connectionId}
+                                sessionId={activeTab.sessionId}
+                                onClose={() => setMonitorOpen(false)}
+                              />
+                            )}
+                          </div>
+
+                          {/* 水平拖拽分割条 (FinalShell 经典分界线) */}
+                          <div
+                            onMouseDown={handleSplitMouseDown}
+                            className="h-2 w-full bg-slate-200/90 hover:bg-apple-blue cursor-row-resize flex items-center justify-center transition-colors z-10 shrink-0 group border-y border-slate-300/40 select-none"
+                            title="上下拖拽调整终端与 SFTP 占比"
+                          >
+                            <div className="w-12 h-1 bg-slate-400 group-hover:bg-white rounded-full transition-colors" />
+                          </div>
+
+                          {/* 下半区：SFTP 文件管理器 */}
+                          <div style={{ height: `${100 - splitRatio}%` }} className="w-full relative overflow-hidden">
+                            {activeTab.connectionId && (
+                              <SftpView
+                                connId={activeTab.connectionId}
+                                sessionId={activeTab.sessionId}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 会话断开半透明遮罩 */}
+                      {activeTab.status === "disconnected" && (
+                        <DisconnectedBackdrop
+                          isSerial={false}
+                          reason={activeTab.error}
+                          onReconnect={async () => {
+                            setIsReconnecting(true);
+                            await reconnectTab(activeTab.tabId);
+                            setIsReconnecting(false);
+                          }}
+                          reconnecting={isReconnecting}
+                        />
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
+
+              {/* 多会话同步输入栏 */}
+              {multiExecOpen && (
+                <MultiExecBar onClose={() => setMultiExecOpen(false)} />
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 底部状态栏 */}
-      <footer className="flex h-6 shrink-0 items-center justify-between border-t border-surface-800/80 bg-surface-950 px-3 text-[11px] text-slate-400 select-none">
+      {/* 底部状态栏 (Apple Light Status Bar) */}
+      <footer className="flex h-7 shrink-0 items-center justify-between border-t border-black/[0.08] bg-[#f5f5f7] px-3 text-[11px] text-slate-600 select-none">
         <div className="flex items-center space-x-3">
           <span className="flex items-center space-x-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            <span>核心引擎: Ready</span>
+            <span className="h-2 w-2 rounded-full bg-apple-green shadow-apple-sm" />
+            <span className="font-medium text-slate-700">核心引擎: Ready</span>
           </span>
 
           {activeTab && (
             <>
-              <span className="text-surface-700">|</span>
-              <span className="text-slate-300 font-medium">
+              <span className="text-slate-300">|</span>
+              <span className="text-slate-800 font-semibold">
                 当前: {activeTab.sessionName} ({activeTab.currentMode === "view" ? "SFTP 视图" : "终端命令行"})
               </span>
 
               {/* 快捷保存/编辑活动会话动作 */}
               <button
                 onClick={handleSaveActiveTabAsSession}
-                className="text-[10px] text-emerald-400 hover:text-emerald-300 px-1 py-0.2 rounded hover:bg-surface-900 transition"
+                className="text-[11px] text-apple-blue hover:underline px-1 py-0.5 rounded transition font-medium"
                 title="保存或编辑该活动会话属性"
               >
                 💾 保存会话
               </button>
 
               {activeTab.protocol === "ssh" && (
-                <span className="text-slate-500 font-mono">延迟: ~18ms</span>
+                <span className="text-slate-400 font-mono">延迟: ~18ms</span>
               )}
             </>
           )}
@@ -415,10 +570,10 @@ export const AppLayout: React.FC = () => {
           {transfers.length > 0 && (
             <button
               onClick={() => setTransferQueueOpen(!transferQueueOpen)}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-surface-900 border border-surface-800 text-slate-300 hover:text-white hover:border-surface-700 transition"
+              className="flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-apple-sm transition"
               title="点击打开/关闭传输抽屉"
             >
-              <span className="text-emerald-400 font-bold">⚡</span>
+              <span className="text-apple-blue font-bold">⚡</span>
               <span>
                 传输: {transfers.filter((t) => t.state === "transferring" || t.state === "queued").length} 活动 / {transfers.length} 项
               </span>
@@ -428,10 +583,10 @@ export const AppLayout: React.FC = () => {
           {/* 底部常驻同步小组件 */}
           <SyncStatusWidget variant="footer" />
 
-          <span className="text-surface-700">|</span>
-          <span>UTF-8</span>
+          <span className="text-slate-300">|</span>
+          <span className="text-slate-500 font-mono">UTF-8</span>
 
-          <span className="flex items-center space-x-1 text-emerald-400/80">
+          <span className="flex items-center space-x-1 text-emerald-700 font-medium">
             <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
             </svg>

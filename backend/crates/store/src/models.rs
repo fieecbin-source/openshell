@@ -83,7 +83,7 @@ fn parse_protocol(s: String) -> rusqlite::Result<Protocol> {
 fn parse_auth_method(s: String) -> rusqlite::Result<AuthMethod> {
     match s.as_str() {
         "password" => Ok(AuthMethod::Password),
-        "publickey" => Ok(AuthMethod::PublicKey),
+        "publickey" | "public_key" => Ok(AuthMethod::PublicKey),
         "keyboard_interactive" => Ok(AuthMethod::KeyboardInteractive),
         "agent" => Ok(AuthMethod::Agent),
         "none" => Ok(AuthMethod::None),

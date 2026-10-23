@@ -146,7 +146,10 @@ async fn test_multi_card_isolation_and_lifecycle() {
     assert_eq!(services.card.list_cards().len(), 2);
 
     // 2. 卡片 1 切为视图模式，卡片 2 保持命令模式（互不干扰）
-    let _ = services.card.set_mode(&card1.card_id, CardMode::View).unwrap();
+    let _ = services
+        .card
+        .set_mode(&card1.card_id, CardMode::View)
+        .unwrap();
     let c1 = services.card.get_card(&card1.card_id).unwrap();
     let c2 = services.card.get_card(&card2.card_id).unwrap();
     assert_eq!(c1.current_mode, CardMode::View);
@@ -158,4 +161,3 @@ async fn test_multi_card_isolation_and_lifecycle() {
     assert!(services.card.get_card(&card1.card_id).is_err());
     assert!(services.card.get_card(&card2.card_id).is_ok());
 }
-

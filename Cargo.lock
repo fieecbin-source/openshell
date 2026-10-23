@@ -3470,7 +3470,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-app-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3500,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-core-domain"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -3514,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "openshell-app-core",
  "openshell-core-domain",
@@ -3534,6 +3534,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3543,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-extension-sample"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3557,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-forward"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3571,7 +3572,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-importer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3585,7 +3586,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-monitor"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3599,7 +3600,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-serial"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3615,7 +3616,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2 0.5.3",
  "axum",
@@ -3648,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-sftp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3665,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-ssh"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3682,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-store"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3698,7 +3699,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-sync-client"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3718,7 +3719,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-sync-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3729,7 +3730,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-vault"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2 0.5.3",
  "async-trait",
@@ -5857,6 +5858,22 @@ dependencies = [
  "thiserror 2.0.21",
  "url",
  "windows",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "561cd99484561bc39c954768e7b41a66cebbe1ac3d9d081c34361f740c489e2c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 

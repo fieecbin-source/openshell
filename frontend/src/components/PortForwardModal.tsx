@@ -83,27 +83,32 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-3xl bg-surface-900 border border-surface-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-[85vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="w-full max-w-3xl bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden max-h-[85vh] text-[#1d1d1f] backdrop-blur-2xl animate-in zoom-in-95 duration-150">
         {/* 顶部标题栏 */}
-        <div className="h-12 px-6 border-b border-surface-800 flex items-center justify-between bg-surface-950/70">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-            </svg>
-            <h3 className="text-sm font-bold text-white">端口转发与 SOCKS5 代理</h3>
+        <div className="h-13 px-6 border-b border-black/[0.06] flex items-center justify-between bg-white/70">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-[#0071e3] shadow-sm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-[#1d1d1f] tracking-tight">端口转发与 SOCKS5 代理</h3>
+              <p className="text-[11px] text-[#86868b]">本地端口转发 (-L)、远程转发 (-R) 及动态 SOCKS5 代理 (-D)</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => setAddModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium shadow-sm transition"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0071e3] hover:bg-[#0077ed] text-white rounded-xl text-xs font-semibold shadow-sm transition active:scale-[0.98]"
             >
               <span>+ 新建规则</span>
             </button>
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-surface-800 transition"
+              className="p-1.5 text-[#86868b] hover:text-[#1d1d1f] rounded-lg hover:bg-black/[0.05] active:scale-95 transition"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -115,11 +120,11 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
         {/* 规则列表 */}
         <div className="flex-1 overflow-y-auto p-6 space-y-3">
           {loading ? (
-            <div className="py-12 text-center text-slate-500 text-xs">加载规则中...</div>
+            <div className="py-12 text-center text-[#86868b] text-xs">加载规则中...</div>
           ) : rules.length === 0 ? (
-            <div className="py-12 flex flex-col items-center justify-center text-slate-500 text-xs">
-              <p>暂无端口转发规则</p>
-              <p className="text-[11px] text-slate-600 mt-1">
+            <div className="py-12 flex flex-col items-center justify-center text-[#86868b] text-xs">
+              <p className="font-medium text-[#1d1d1f]">暂无端口转发规则</p>
+              <p className="text-[11px] text-[#86868b] mt-1">
                 点击右上角新建规则以创建本地转发、远程转发或动态 SOCKS5 代理
               </p>
             </div>
@@ -132,40 +137,40 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
               return (
                 <div
                   key={rule.id}
-                  className="bg-surface-950 border border-surface-800 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 hover:border-surface-700 transition"
+                  className="bg-[#f5f5f7] border border-black/[0.06] rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 hover:border-black/[0.12] transition shadow-apple-sm"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
-                      <span className="font-semibold text-xs text-white truncate">{rule.name}</span>
-                      <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-surface-800 text-emerald-400 border border-surface-700">
+                      <span className="font-semibold text-xs text-[#1d1d1f] truncate">{rule.name}</span>
+                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-md bg-white text-[#0071e3] border border-black/[0.08] shadow-apple-sm">
                         {rule.rule_type === "local" ? "本地 -L" : rule.rule_type === "remote" ? "远程 -R" : "动态 SOCKS5 -D"}
                       </span>
                       {isListening ? (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5 font-semibold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           运行中: {(status as any).details?.bound_addr || `${rule.bind_host}:${rule.bind_port}`}
                         </span>
                       ) : isError ? (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-red-50 text-red-600 border border-red-200">
                           错误: {(status as any).details}
                         </span>
                       ) : (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-800 text-slate-500">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-black/[0.05] text-[#86868b]">
                           未启动
                         </span>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                    <div className="flex items-center gap-2 text-xs font-mono text-[#424245]">
                       <span>{rule.bind_host}:{rule.bind_port}</span>
                       {rule.rule_type !== "dynamic" && (
                         <>
-                          <span className="text-slate-600">➔</span>
+                          <span className="text-[#86868b]">➔</span>
                           <span>{rule.dest_host}:{rule.dest_port}</span>
                         </>
                       )}
                       {rule.rule_type === "dynamic" && (
-                        <span className="text-slate-500 text-[11px] font-sans">
+                        <span className="text-[#86868b] text-[11px] font-sans">
                           (认证: {rule.socks_auth === "none" ? "无密码" : "用户名密码"})
                         </span>
                       )}
@@ -175,9 +180,9 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => toggleRule(rule, connId)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition active:scale-[0.98] ${
                         isListening
-                          ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20"
+                          ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 border border-amber-500/20"
                           : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm"
                       }`}
                     >
@@ -189,7 +194,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                           deleteRule(rule.id);
                         }
                       }}
-                      className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-surface-800 transition"
+                      className="p-1.5 text-[#86868b] hover:text-red-600 rounded-lg hover:bg-black/[0.05] active:scale-95 transition"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -204,27 +209,28 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
 
         {/* 新增规则抽屉/模态框 */}
         {addModalOpen && (
-          <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-lg bg-surface-900 border border-surface-700 rounded-2xl p-6 shadow-2xl animate-in zoom-in-95">
-              <h4 className="text-sm font-bold text-white mb-4">创建端口转发规则</h4>
+          <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-150">
+            <div className="w-full max-w-lg bg-white/95 border border-black/[0.08] rounded-2xl p-6 shadow-apple-lg text-[#1d1d1f] backdrop-blur-2xl animate-in zoom-in-95">
+              <h4 className="text-base font-semibold text-[#1d1d1f] tracking-tight mb-4">创建端口转发规则</h4>
 
               {errorMsg && (
-                <div className="mb-4 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
-                  {errorMsg}
+                <div className="mb-4 p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-600 flex items-center gap-1.5">
+                  <span>⚠️</span>
+                  <span>{errorMsg}</span>
                 </div>
               )}
 
               <div className="space-y-4 text-xs">
                 <div>
-                  <label className="block text-slate-300 mb-1 font-medium">规则类型</label>
+                  <label className="block text-[#1d1d1f] mb-1.5 font-semibold">规则类型</label>
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
                       onClick={() => setRuleType("local")}
-                      className={`py-2 px-3 rounded-lg border font-medium transition ${
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold transition active:scale-[0.98] ${
                         ruleType === "local"
-                          ? "bg-emerald-500/10 border-emerald-500 text-emerald-400"
-                          : "bg-surface-950 border-surface-800 text-slate-400 hover:border-surface-700"
+                          ? "bg-blue-50 border-[#0071e3] text-[#0071e3] shadow-apple-sm"
+                          : "bg-[#f5f5f7] border-black/[0.08] text-[#86868b] hover:text-[#1d1d1f]"
                       }`}
                     >
                       本地转发 (-L)
@@ -232,10 +238,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setRuleType("remote")}
-                      className={`py-2 px-3 rounded-lg border font-medium transition ${
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold transition active:scale-[0.98] ${
                         ruleType === "remote"
-                          ? "bg-emerald-500/10 border-emerald-500 text-emerald-400"
-                          : "bg-surface-950 border-surface-800 text-slate-400 hover:border-surface-700"
+                          ? "bg-blue-50 border-[#0071e3] text-[#0071e3] shadow-apple-sm"
+                          : "bg-[#f5f5f7] border-black/[0.08] text-[#86868b] hover:text-[#1d1d1f]"
                       }`}
                     >
                       远程转发 (-R)
@@ -243,10 +249,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setRuleType("dynamic")}
-                      className={`py-2 px-3 rounded-lg border font-medium transition ${
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold transition active:scale-[0.98] ${
                         ruleType === "dynamic"
-                          ? "bg-emerald-500/10 border-emerald-500 text-emerald-400"
-                          : "bg-surface-950 border-surface-800 text-slate-400 hover:border-surface-700"
+                          ? "bg-blue-50 border-[#0071e3] text-[#0071e3] shadow-apple-sm"
+                          : "bg-[#f5f5f7] border-black/[0.08] text-[#86868b] hover:text-[#1d1d1f]"
                       }`}
                     >
                       SOCKS5 代理 (-D)
@@ -255,56 +261,56 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 mb-1 font-medium">规则名称</label>
+                  <label className="block text-[#1d1d1f] mb-1.5 font-semibold">规则名称</label>
                   <input
                     type="text"
                     placeholder="例如: MySQL 隧道 / Web 预览"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg text-white outline-none focus:border-emerald-500"
+                    className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-300 mb-1 font-medium">监听地址 (Bind Host)</label>
+                    <label className="block text-[#1d1d1f] mb-1.5 font-semibold">监听地址 (Bind Host)</label>
                     <input
                       type="text"
                       value={bindHost}
                       onChange={(e) => setBindHost(e.target.value)}
-                      className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg font-mono text-white outline-none focus:border-emerald-500"
+                      className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl font-mono text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 mb-1 font-medium">监听端口 (Bind Port)</label>
+                    <label className="block text-[#1d1d1f] mb-1.5 font-semibold">监听端口 (Bind Port)</label>
                     <input
                       type="number"
                       value={bindPort}
                       onChange={(e) => setBindPort(Number(e.target.value))}
-                      className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg font-mono text-white outline-none focus:border-emerald-500"
+                      className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl font-mono text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                     />
                   </div>
                 </div>
 
                 {isExposeRisky && (
-                  <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl space-y-2">
-                    <div className="flex items-center gap-2 text-red-400 font-bold">
-                      <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl space-y-2">
+                    <div className="flex items-center gap-2 text-red-700 font-semibold">
+                      <svg className="w-4 h-4 shrink-0 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                       </svg>
                       <span>高危安全警告 (SEC-005)</span>
                     </div>
-                    <p className="text-[11px] text-red-300 leading-relaxed">
+                    <p className="text-[11px] text-red-700 leading-relaxed">
                       您将端口绑定到了 0.0.0.0，局域网与公网上的所有主机均可直接访问此端口！
                     </p>
-                    <label className="flex items-center gap-2 text-xs text-white cursor-pointer pt-1">
+                    <label className="flex items-center gap-2 text-xs text-[#1d1d1f] cursor-pointer pt-1">
                       <input
                         type="checkbox"
                         checked={exposeAck}
                         onChange={(e) => setExposeAck(e.target.checked)}
-                        className="rounded border-red-500/40 text-red-600 focus:ring-0"
+                        className="rounded border-red-500/40 text-red-600 focus:ring-0 accent-red-600"
                       />
-                      <span>我已知晓全网暴露风险，确认允许绑定到 0.0.0.0</span>
+                      <span className="font-medium text-red-800">我已知晓全网暴露风险，确认允许绑定到 0.0.0.0</span>
                     </label>
                   </div>
                 )}
@@ -312,21 +318,21 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                 {ruleType !== "dynamic" && (
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-slate-300 mb-1 font-medium">目标地址 (Dest Host)</label>
+                      <label className="block text-[#1d1d1f] mb-1.5 font-semibold">目标地址 (Dest Host)</label>
                       <input
                         type="text"
                         value={destHost}
                         onChange={(e) => setDestHost(e.target.value)}
-                        className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg font-mono text-white outline-none focus:border-emerald-500"
+                        className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl font-mono text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                       />
                     </div>
                     <div>
-                      <label className="block text-slate-300 mb-1 font-medium">目标端口 (Dest Port)</label>
+                      <label className="block text-[#1d1d1f] mb-1.5 font-semibold">目标端口 (Dest Port)</label>
                       <input
                         type="number"
                         value={destPort}
                         onChange={(e) => setDestPort(Number(e.target.value))}
-                        className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg font-mono text-white outline-none focus:border-emerald-500"
+                        className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl font-mono text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                       />
                     </div>
                   </div>
@@ -335,11 +341,11 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                 {ruleType === "dynamic" && (
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-slate-300 mb-1 font-medium">SOCKS5 认证模式</label>
+                      <label className="block text-[#1d1d1f] mb-1.5 font-semibold">SOCKS5 认证模式</label>
                       <select
                         value={socksAuth}
                         onChange={(e) => setSocksAuth(e.target.value as SocksAuth)}
-                        className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg text-white outline-none focus:border-emerald-500"
+                        className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                       >
                         <option value="none">无须密码认证 (No-Auth)</option>
                         <option value="user_pass">用户名与密码认证 (RFC 1929)</option>
@@ -348,13 +354,13 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
 
                     {socksAuth === "user_pass" && (
                       <div>
-                        <label className="block text-slate-300 mb-1 font-medium">认证用户名</label>
+                        <label className="block text-[#1d1d1f] mb-1.5 font-semibold">认证用户名</label>
                         <input
                           type="text"
                           placeholder="用户名"
                           value={socksUsername}
                           onChange={(e) => setSocksUsername(e.target.value)}
-                          className="w-full px-3 py-2 bg-surface-950 border border-surface-800 rounded-lg text-white outline-none focus:border-emerald-500"
+                          className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
                         />
                       </div>
                     )}
@@ -362,23 +368,23 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                 )}
 
                 <div className="pt-2">
-                  <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                  <label className="flex items-center gap-2 text-[#424245] cursor-pointer">
                     <input
                       type="checkbox"
                       checked={autoStart}
                       onChange={(e) => setAutoStart(e.target.checked)}
-                      className="rounded border-surface-700 text-emerald-500 focus:ring-0"
+                      className="rounded border-black/[0.2] text-[#0071e3] focus:ring-0 accent-[#0071e3]"
                     />
                     <span>连接会话时自动启动此转发规则</span>
                   </label>
                 </div>
               </div>
 
-              <div className="mt-6 flex justify-end gap-2">
+              <div className="mt-6 flex justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setAddModalOpen(false)}
-                  className="px-4 py-2 bg-surface-800 hover:bg-surface-700 text-slate-300 rounded-lg text-xs"
+                  className="px-4 py-2 bg-black/[0.04] hover:bg-black/[0.08] border border-black/[0.08] text-[#1d1d1f] rounded-xl text-xs font-semibold active:scale-[0.98] transition"
                 >
                   取消
                 </button>
@@ -386,7 +392,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                   type="button"
                   onClick={handleCreate}
                   disabled={submitting}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium shadow-sm transition disabled:opacity-50"
+                  className="px-4 py-2 bg-[#0071e3] hover:bg-[#0077ed] text-white rounded-xl text-xs font-semibold shadow-sm transition active:scale-[0.98] disabled:opacity-50"
                 >
                   {submitting ? "创建中..." : "确认创建"}
                 </button>

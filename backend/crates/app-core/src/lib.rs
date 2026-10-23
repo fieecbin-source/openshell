@@ -1,4 +1,5 @@
 pub mod app_services;
+pub mod card_service;
 pub mod connection_service;
 pub mod credit_tracker;
 pub mod event_bus;
@@ -8,7 +9,6 @@ pub mod session_service;
 pub mod sync_service;
 pub mod terminal_router;
 pub mod vault_service;
-pub mod card_service;
 
 pub use app_services::AppServices;
 pub use card_service::CardService;
