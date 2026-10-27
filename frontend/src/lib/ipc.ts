@@ -111,6 +111,19 @@ export async function renameGroup(id: string, name: string): Promise<Group> {
   return await invoke<Group>("group_rename", { id, name });
 }
 
+/** 移动分组到新父级并调整排序（拖拽移组 / 排序）；后端会做成环与深度校验 */
+export async function moveGroup(
+  id: string,
+  parentId: string | null,
+  sortOrder?: number
+): Promise<Group> {
+  return await invoke<Group>("group_move", {
+    id,
+    parentId: parentId || null,
+    sortOrder: sortOrder ?? null,
+  });
+}
+
 export async function deleteGroup(id: string): Promise<void> {
   await invoke("group_delete", { id });
 }

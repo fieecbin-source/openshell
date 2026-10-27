@@ -111,7 +111,7 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className="relative w-full max-w-lg rounded-2xl border border-black/[0.08] bg-white/95 p-6 shadow-apple-lg backdrop-blur-2xl text-[#1d1d1f] animate-in zoom-in-95 duration-150">
+      <div className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl border border-black/[0.08] bg-white/95 p-6 shadow-apple-lg backdrop-blur-2xl text-[#1d1d1f] animate-in zoom-in-95 duration-150">
         {/* 顶部标题栏与 Tab 切换 */}
         <div className="flex items-center justify-between pb-4 border-b border-black/[0.06]">
           <div className="flex items-center space-x-3">

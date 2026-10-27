@@ -5,6 +5,21 @@ export type GroupKind = "session" | "snippet";
 export type CredentialKind = "password" | "keyboard_interactive" | "passphrase";
 export type SavePolicy = "always" | "ask" | "never";
 
+/**
+ * 标签连接状态：
+ * connecting   首次建连中
+ * connected    已连接且通道可用
+ * reconnecting 已断开，正在按退避策略自动重连
+ * disconnected 已断开（等待手动重连 / 自动重连次数用尽）
+ * error        连接失败（凭据、网络、主机密钥等）
+ */
+export type TabStatus =
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "error";
+
 export interface SyncMeta {
   version: number;
   origin_device_id: string | null;
@@ -89,6 +104,8 @@ export interface SessionPatch {
   notes?: string | null;
   keepalive_sec?: number;
   protocol_options_json?: any | null;
+  /** 拖拽排序时使用（稀疏步进，1024 为间隔） */
+  sort_order?: number;
 }
 
 export interface Group {
@@ -141,6 +158,12 @@ export interface AppInfo {
   target: string;
   arch: string;
   data_dir: string;
+  /** 本地数据库 schema 版本（低于程序支持版本表示处于「已恢复」状态）。 */
+  schema_version: number;
+  /** 迁移失败并已从快照恢复：前端显示恢复横幅。 */
+  degraded: boolean;
+  /** 便携运行（可执行文件旁存在 openshell.portable）。 */
+  is_portable: boolean;
 }
 
 export interface ConnectSessionResult {
@@ -209,9 +232,12 @@ export interface ProcessMetrics {
   pid: number;
   user: string;
   cpu_percent: number;
-  mem_percent: number;
+  /** 后端字段名为 memory_percent（serde snake_case），历史前端误写成 mem_percent 导致渲染崩溃 */
+  memory_percent: number;
+  /** 进程短名（ps comm 列） */
+  name: string;
+  /** 完整命令行 */
   command: string;
-  args: string;
 }
 
 export interface HostMetrics {

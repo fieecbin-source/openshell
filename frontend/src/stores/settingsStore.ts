@@ -1,20 +1,11 @@
 import { create } from "zustand";
 import { settingsGet, settingsSet } from "../lib/ipc";
 
-export type TerminalTheme =
-  | "dark"
-  | "tokyo_night"
-  | "catppuccin_mocha"
-  | "catppuccin_latte"
-  | "dracula"
-  | "nord"
-  | "solarized"
-  | "monokai"
-  | "onedark"
-  | "gruvbox"
-  | "synthwave"
-  | "high_contrast"
-  | "clean_light";
+/**
+ * 主题 id。内置主题见 THEMES，导入的第三方主题形如 `custom_<timestamp>`，
+ * 因此这里不能再用字面量联合类型，否则导入的主题无法被选中应用。
+ */
+export type TerminalTheme = string;
 
 export interface TerminalThemeConfig {
   name: string;
@@ -356,14 +347,32 @@ export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
   },
 };
 
+/** 解析主题 id → 具体配色（优先用户导入的自定义主题） */
+export function resolveTheme(
+  theme: TerminalTheme,
+  customThemes: Record<string, TerminalThemeConfig> = {}
+): TerminalThemeConfig {
+  return customThemes[theme] || THEMES[theme] || THEMES.dark;
+}
+
+export type CursorStyle = "bar" | "block" | "underline";
+export type RendererKind = "dom" | "webgl";
+
 interface SettingsState {
   theme: TerminalTheme;
   customThemes: Record<string, TerminalThemeConfig>;
   fontSize: number;
   fontFamily: string;
   cursorBlink: boolean;
+  cursorStyle: CursorStyle;
+  /** 终端滚动缓冲行数（xterm 默认仅 1000 行，排查长日志时不够用） */
+  scrollback: number;
+  /** 渲染器：DOM 兼容性最好；WebGL 在高吞吐输出下更流畅，但需要关闭透明背景 */
+  renderer: RendererKind;
   logSessionOutput: boolean;
   settingsModalOpen: boolean;
+  /** 新建会话时 KeepAlive 的默认间隔（秒） */
+  keepaliveDefaultSec: number;
 
   /** 终端背景：空字符串表示不启用，内置壁纸使用 preset id，"custom" 表示自定义图片 */
   backgroundId: string;
@@ -379,7 +388,11 @@ interface SettingsState {
   setFontSize: (fontSize: number) => Promise<void>;
   setFontFamily: (fontFamily: string) => Promise<void>;
   setCursorBlink: (cursorBlink: boolean) => Promise<void>;
+  setCursorStyle: (cursorStyle: CursorStyle) => Promise<void>;
+  setScrollback: (scrollback: number) => Promise<void>;
+  setRenderer: (renderer: RendererKind) => Promise<void>;
   setLogSessionOutput: (logSessionOutput: boolean) => Promise<void>;
+  setKeepaliveDefaultSec: (sec: number) => Promise<void>;
   setSettingsModalOpen: (open: boolean) => void;
   saveCustomTheme: (id: string, config: TerminalThemeConfig) => Promise<void>;
 
@@ -389,14 +402,30 @@ interface SettingsState {
   setBackgroundBlur: (blur: number) => Promise<void>;
 }
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
-  theme: "clean_light",
-  customThemes: {},
+export const DEFAULT_SETTINGS = {
+  theme: "clean_light" as TerminalTheme,
   fontSize: 13,
   fontFamily: 'Menlo, Monaco, "Courier New", Consolas, monospace',
   cursorBlink: true,
+  cursorStyle: "bar" as CursorStyle,
+  scrollback: 5000,
+  renderer: "dom" as RendererKind,
   logSessionOutput: false,
+  keepaliveDefaultSec: 30,
+} as const;
+
+export const useSettingsStore = create<SettingsState>((set, get) => ({
+  theme: DEFAULT_SETTINGS.theme,
+  customThemes: {},
+  fontSize: DEFAULT_SETTINGS.fontSize,
+  fontFamily: DEFAULT_SETTINGS.fontFamily,
+  cursorBlink: DEFAULT_SETTINGS.cursorBlink,
+  cursorStyle: DEFAULT_SETTINGS.cursorStyle,
+  scrollback: DEFAULT_SETTINGS.scrollback,
+  renderer: DEFAULT_SETTINGS.renderer,
+  logSessionOutput: DEFAULT_SETTINGS.logSessionOutput,
   settingsModalOpen: false,
+  keepaliveDefaultSec: DEFAULT_SETTINGS.keepaliveDefaultSec,
   backgroundId: "",
   backgroundCustom: null,
   backgroundOpacity: 45,
@@ -406,16 +435,46 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const themeRec = await settingsGet("user", "terminal.theme");
       const fontRec = await settingsGet("user", "terminal.font_size");
+      // 历史 bug：字体族写入后从未读取，重启即被重置为默认值
+      const fontFamilyRec = await settingsGet("user", "terminal.font_family");
+      const cursorBlinkRec = await settingsGet("user", "terminal.cursor_blink");
+      const cursorStyleRec = await settingsGet("user", "terminal.cursor_style");
+      const scrollbackRec = await settingsGet("user", "terminal.scrollback");
+      const rendererRec = await settingsGet("user", "terminal.renderer");
       const logRec = await settingsGet("user", "terminal.log_session");
+      const keepaliveRec = await settingsGet("user", "terminal.keepalive_default_sec");
       const bgIdRec = await settingsGet("user", "terminal.background_id");
       const bgOpacityRec = await settingsGet("user", "terminal.background_opacity");
       const bgBlurRec = await settingsGet("user", "terminal.background_blur");
       const bgCustomRec = await settingsGet("user", "terminal.background_custom");
+      // 历史 bug：导入的自定义主题只写库不读取，重启后列表里就消失了
+      const customThemesRec = await settingsGet("user", "terminal.custom_themes");
 
       set({
-        theme: (themeRec?.value_json as TerminalTheme) || "dark",
-        fontSize: (fontRec?.value_json as number) || 13,
+        // 缺省值与初始 state 保持一致，避免首屏闪一下主题
+        customThemes:
+          customThemesRec?.value_json && typeof customThemesRec.value_json === "object"
+            ? (customThemesRec.value_json as Record<string, TerminalThemeConfig>)
+            : {},
+        theme: (themeRec?.value_json as TerminalTheme) || DEFAULT_SETTINGS.theme,
+        fontSize: (fontRec?.value_json as number) || DEFAULT_SETTINGS.fontSize,
+        fontFamily: (fontFamilyRec?.value_json as string) || DEFAULT_SETTINGS.fontFamily,
+        cursorBlink:
+          typeof cursorBlinkRec?.value_json === "boolean"
+            ? (cursorBlinkRec.value_json as boolean)
+            : DEFAULT_SETTINGS.cursorBlink,
+        cursorStyle:
+          (cursorStyleRec?.value_json as CursorStyle) || DEFAULT_SETTINGS.cursorStyle,
+        scrollback:
+          typeof scrollbackRec?.value_json === "number"
+            ? (scrollbackRec.value_json as number)
+            : DEFAULT_SETTINGS.scrollback,
+        renderer: (rendererRec?.value_json as RendererKind) || DEFAULT_SETTINGS.renderer,
         logSessionOutput: (logRec?.value_json as boolean) || false,
+        keepaliveDefaultSec:
+          typeof keepaliveRec?.value_json === "number"
+            ? (keepaliveRec.value_json as number)
+            : DEFAULT_SETTINGS.keepaliveDefaultSec,
         backgroundId: (bgIdRec?.value_json as string) || "",
         backgroundOpacity:
           typeof bgOpacityRec?.value_json === "number" ? (bgOpacityRec.value_json as number) : 45,
@@ -451,12 +510,46 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setCursorBlink: async (cursorBlink: boolean) => {
     set({ cursorBlink });
+    try {
+      // 历史 bug：光标闪烁只改内存不落库，重启后总是回到默认值
+      await settingsSet("user", "terminal.cursor_blink", cursorBlink);
+    } catch {}
+  },
+
+  setCursorStyle: async (cursorStyle: CursorStyle) => {
+    set({ cursorStyle });
+    try {
+      await settingsSet("user", "terminal.cursor_style", cursorStyle);
+    } catch {}
+  },
+
+  setScrollback: async (scrollback: number) => {
+    const clamped = Math.max(1000, Math.min(50000, Math.round(scrollback)));
+    set({ scrollback: clamped });
+    try {
+      await settingsSet("user", "terminal.scrollback", clamped);
+    } catch {}
+  },
+
+  setRenderer: async (renderer: RendererKind) => {
+    set({ renderer });
+    try {
+      await settingsSet("user", "terminal.renderer", renderer);
+    } catch {}
   },
 
   setLogSessionOutput: async (logSessionOutput: boolean) => {
     set({ logSessionOutput });
     try {
       await settingsSet("user", "terminal.log_session", logSessionOutput);
+    } catch {}
+  },
+
+  setKeepaliveDefaultSec: async (keepaliveDefaultSec: number) => {
+    const clamped = Math.max(0, Math.min(600, Math.round(keepaliveDefaultSec)));
+    set({ keepaliveDefaultSec: clamped });
+    try {
+      await settingsSet("user", "terminal.keepalive_default_sec", clamped);
     } catch {}
   },
 

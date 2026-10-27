@@ -1,27 +1,43 @@
 import React, { useRef, useState } from "react";
-import { THEMES, useSettingsStore, type TerminalTheme, type TerminalThemeConfig } from "../stores/settingsStore";
+import {
+  THEMES,
+  resolveTheme,
+  useSettingsStore,
+  type TerminalThemeConfig,
+} from "../stores/settingsStore";
 import { useVaultStore } from "../stores/vaultStore";
 import { formatFriendlyError } from "../lib/errors";
-import { WALLPAPERS } from "../lib/wallpapers";
+import { WALLPAPERS, getWallpaperStyle } from "../lib/wallpapers";
+import { AboutUpdateTab } from "../updater/AboutUpdateTab";
 
 const MAX_BACKGROUND_BYTES = 8 * 1024 * 1024;
 
 export const SettingsModal: React.FC = () => {
   const {
     theme,
+    customThemes,
     fontSize,
     fontFamily,
     cursorBlink,
+    cursorStyle,
+    scrollback,
+    renderer,
     logSessionOutput,
+    keepaliveDefaultSec,
     settingsModalOpen,
     backgroundId,
+    backgroundCustom,
     backgroundOpacity,
     backgroundBlur,
     setTheme,
     setFontSize,
     setFontFamily,
     setCursorBlink,
+    setCursorStyle,
+    setScrollback,
+    setRenderer,
     setLogSessionOutput,
+    setKeepaliveDefaultSec,
     setSettingsModalOpen,
     saveCustomTheme,
     setBackgroundId,
@@ -33,7 +49,9 @@ export const SettingsModal: React.FC = () => {
   const backgroundFileRef = useRef<HTMLInputElement>(null);
   const [backgroundMsg, setBackgroundMsg] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<"theme" | "terminal" | "background" | "security" | "export">("theme");
+  const [activeTab, setActiveTab] = useState<
+    "theme" | "terminal" | "background" | "security" | "export" | "about"
+  >("theme");
   const [importJson, setImportJson] = useState("");
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
@@ -48,7 +66,16 @@ export const SettingsModal: React.FC = () => {
 
   if (!settingsModalOpen) return null;
 
-  const currentThemeConfig = THEMES[theme] || THEMES.dark;
+  const currentThemeConfig = resolveTheme(theme, customThemes);
+
+  // 内置主题 + 用户导入的自定义主题，导入后必须出现在列表里才能真正被应用
+  const themeOptions: { id: string; config: TerminalThemeConfig; custom: boolean }[] = [
+    ...Object.keys(THEMES).map((id) => ({ id, config: THEMES[id], custom: false })),
+    ...Object.keys(customThemes).map((id) => ({ id, config: customThemes[id], custom: true })),
+  ];
+
+  // 背景预览：与 AppLayout / XtermView 使用同一套解析逻辑，做到「所见即所得」
+  const backgroundPreview = getWallpaperStyle(backgroundId, backgroundCustom);
 
   const handleExportTheme = () => {
     const jsonStr = JSON.stringify(currentThemeConfig, null, 2);
@@ -71,10 +98,14 @@ export const SettingsModal: React.FC = () => {
       }
       const customId = "custom_" + Date.now();
       await saveCustomTheme(customId, parsed);
-      setImportMsg(`成功导入主题 "${parsed.name}"！`);
+      // 导入后立刻应用，否则用户会以为「解析并应用」没有任何效果
+      await setTheme(customId);
+      setImportMsg(`成功导入并应用主题 "${parsed.name}"！`);
       setImportJson("");
     } catch (e: any) {
-      setImportMsg("解析 JSON 失败: " + e?.message);
+      console.error("主题 JSON 解析失败:", e);
+      const reason = e instanceof Error ? e.message : String(e);
+      setImportMsg(`主题文件不是合法的 JSON，请检查内容（技术细节：${reason.slice(0, 120)}）`);
     }
   };
 
@@ -137,7 +168,7 @@ export const SettingsModal: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-2xl bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden animate-in zoom-in-95 max-h-[85vh] text-[#1d1d1f] backdrop-blur-2xl">
         {/* 顶部标题栏 */}
-        <div className="h-13 px-6 border-b border-black/[0.06] flex items-center justify-between bg-white/70 shrink-0">
+        <div className="h-14 px-6 border-b border-black/[0.06] flex items-center justify-between gap-3 bg-white/70 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-[#0071e3] shadow-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -162,8 +193,8 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* 标签栏 (Apple 风格分段胶囊) */}
-        <div className="px-6 py-2.5 bg-black/[0.02] border-b border-black/[0.06] flex items-center shrink-0">
-          <div className="flex bg-black/[0.06] p-0.5 rounded-xl text-xs font-medium">
+        <div className="px-6 py-2.5 bg-black/[0.02] border-b border-black/[0.06] flex items-center shrink-0 overflow-x-auto">
+          <div className="flex shrink-0 bg-black/[0.06] p-0.5 rounded-xl text-xs font-medium">
             <button
               onClick={() => setActiveTab("theme")}
               className={`px-3.5 py-1.5 rounded-lg transition active:scale-[0.98] ${
@@ -172,7 +203,7 @@ export const SettingsModal: React.FC = () => {
                   : "text-[#86868b] hover:text-[#1d1d1f]"
               }`}
             >
-              配色主题 ({Object.keys(THEMES).length} 预设)
+              配色主题 ({themeOptions.length})
             </button>
             <button
               onClick={() => setActiveTab("terminal")}
@@ -214,11 +245,21 @@ export const SettingsModal: React.FC = () => {
             >
               主题导入 / 导出
             </button>
+            <button
+              onClick={() => setActiveTab("about")}
+              className={`px-3.5 py-1.5 rounded-lg transition active:scale-[0.98] ${
+                activeTab === "about"
+                  ? "bg-white text-[#1d1d1f] font-semibold shadow-apple-sm"
+                  : "text-[#86868b] hover:text-[#1d1d1f]"
+              }`}
+            >
+              关于与更新
+            </button>
           </div>
         </div>
 
         {/* 表单内容 */}
-        <div className="p-6 space-y-5 text-xs text-[#1d1d1f] overflow-y-auto flex-1">
+        <div className="p-6 space-y-5 text-xs text-[#1d1d1f] overflow-y-auto flex-1 min-h-0">
           {activeTab === "theme" && (
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -228,14 +269,13 @@ export const SettingsModal: React.FC = () => {
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                {(Object.keys(THEMES) as TerminalTheme[]).map((key) => {
-                  const t = THEMES[key];
-                  const isSelected = theme === key;
+                {themeOptions.map(({ id, config: t, custom }) => {
+                  const isSelected = theme === id;
                   return (
                     <button
-                      key={key}
+                      key={id}
                       type="button"
-                      onClick={() => setTheme(key)}
+                      onClick={() => setTheme(id)}
                       className={`p-3 rounded-xl border flex flex-col items-center gap-2 text-center transition active:scale-[0.98] ${
                         isSelected
                           ? "bg-blue-50/50 border-[#0071e3] shadow-apple-sm text-[#0071e3]"
@@ -252,8 +292,17 @@ export const SettingsModal: React.FC = () => {
                         <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.yellow }} />
                         <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.magenta }} />
                       </div>
-                      <span className={`text-[11px] truncate ${isSelected ? "font-bold text-[#0071e3]" : "font-medium text-[#424245]"}`}>
-                        {t.name}
+                      <span
+                        className={`flex items-center gap-1 max-w-full text-[11px] ${
+                          isSelected ? "font-bold text-[#0071e3]" : "font-medium text-[#424245]"
+                        }`}
+                      >
+                        <span className="truncate">{t.name}</span>
+                        {custom && (
+                          <span className="shrink-0 rounded bg-[#0071e3]/10 px-1 text-[9px] font-semibold text-[#0071e3]">
+                            导入
+                          </span>
+                        )}
                       </span>
                     </button>
                   );
@@ -304,6 +353,68 @@ export const SettingsModal: React.FC = () => {
                 />
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-[#f5f5f7] p-3.5 rounded-xl border border-black/[0.06]">
+                  <label className="block font-semibold text-[#1d1d1f] mb-1.5">光标形状</label>
+                  <select
+                    value={cursorStyle}
+                    onChange={(e) => setCursorStyle(e.target.value as "bar" | "block" | "underline")}
+                    className="w-full px-2.5 py-1.5 bg-white border border-black/[0.08] rounded-lg text-xs text-[#1d1d1f] outline-none focus:border-[#0071e3]"
+                  >
+                    <option value="bar">竖线 (bar)</option>
+                    <option value="block">方块 (block)</option>
+                    <option value="underline">下划线 (underline)</option>
+                  </select>
+                </div>
+
+                <div className="bg-[#f5f5f7] p-3.5 rounded-xl border border-black/[0.06]">
+                  <label className="block font-semibold text-[#1d1d1f] mb-1.5">滚动缓冲行数: {scrollback}</label>
+                  <input
+                    type="range"
+                    min={1000}
+                    max={20000}
+                    step={1000}
+                    value={scrollback}
+                    onChange={(e) => setScrollback(Number(e.target.value))}
+                    className="w-full accent-[#0071e3] bg-black/[0.08] rounded-lg cursor-pointer"
+                  />
+                  <p className="text-[10px] text-[#86868b] mt-1">大输出场景可调高，代价是更多内存占用</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-[#f5f5f7] p-3.5 rounded-xl border border-black/[0.06]">
+                  <label className="block font-semibold text-[#1d1d1f] mb-1.5">终端渲染方式</label>
+                  <select
+                    value={renderer}
+                    onChange={(e) => setRenderer(e.target.value as "dom" | "webgl")}
+                    className="w-full px-2.5 py-1.5 bg-white border border-black/[0.08] rounded-lg text-xs text-[#1d1d1f] outline-none focus:border-[#0071e3]"
+                  >
+                    <option value="dom">DOM（兼容性最好）</option>
+                    <option value="webgl">WebGL（高吞吐更流畅）</option>
+                  </select>
+                  <p className="text-[10px] text-[#86868b] mt-1">
+                    启用壁纸时会自动回落到 DOM；WebGL 上下文丢失时也会自动降级
+                  </p>
+                </div>
+
+                <div className="bg-[#f5f5f7] p-3.5 rounded-xl border border-black/[0.06]">
+                  <label className="block font-semibold text-[#1d1d1f] mb-1.5">
+                    默认 KeepAlive 间隔: {keepaliveDefaultSec === 0 ? "关闭" : `${keepaliveDefaultSec}s`}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={120}
+                    step={5}
+                    value={keepaliveDefaultSec}
+                    onChange={(e) => setKeepaliveDefaultSec(Number(e.target.value))}
+                    className="w-full accent-[#0071e3] bg-black/[0.08] rounded-lg cursor-pointer"
+                  />
+                  <p className="text-[10px] text-[#86868b] mt-1">仅对新建会话生效；连续失败达到次数上限判定断线</p>
+                </div>
+              </div>
+
               <div className="p-3.5 bg-[#f5f5f7] border border-black/[0.06] rounded-xl flex items-center justify-between shadow-apple-sm">
                 <div>
                   <h5 className="font-semibold text-[#1d1d1f] text-xs">自动记录会话屏幕日志</h5>
@@ -325,9 +436,9 @@ export const SettingsModal: React.FC = () => {
             <div className="space-y-5">
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <label className="font-semibold text-[#1d1d1f]">终端背景壁纸</label>
+                  <label className="font-semibold text-[#1d1d1f]">系统外观背景（壁纸 / 纯色）</label>
                   <span className="text-[11px] text-[#86868b]">
-                    壁纸会叠加在终端文字下方，不影响命令输入与输出
+                    同时作用于终端画布与整个主界面，选择后立即生效
                   </span>
                 </div>
 
@@ -361,9 +472,9 @@ export const SettingsModal: React.FC = () => {
                         <span
                           className="absolute inset-0"
                           style={{
-                            backgroundImage: w.image,
+                            backgroundImage: w.color ? "none" : w.image,
                             backgroundSize: "cover",
-                            backgroundColor: currentThemeConfig.background,
+                            backgroundColor: w.color || currentThemeConfig.background,
                           }}
                         />
                         <span className="absolute inset-x-0 bottom-0 py-1 text-[10px] font-semibold text-white bg-black/45 backdrop-blur-sm">
@@ -406,6 +517,30 @@ export const SettingsModal: React.FC = () => {
                 {backgroundMsg && (
                   <div className="mt-2 text-[11px] text-[#86868b]">{backgroundMsg}</div>
                 )}
+
+                {/* 实时预览：与主界面 / 终端使用完全相同的渲染参数 */}
+                <div className="mt-3 relative h-24 rounded-xl overflow-hidden border border-black/[0.08] bg-[#f5f5f7]">
+                  {backgroundPreview && (
+                    <div
+                      className="absolute inset-0 transition-all duration-200"
+                      style={{
+                        backgroundImage: backgroundPreview.backgroundImage,
+                        backgroundSize: backgroundPreview.backgroundSize,
+                        backgroundPosition: "center",
+                        backgroundColor:
+                          backgroundPreview.backgroundColor || currentThemeConfig.background,
+                        filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
+                        transform: backgroundBlur > 0 ? "scale(1.06)" : undefined,
+                        opacity: Math.max(0, Math.min(100, backgroundOpacity)) / 100,
+                      }}
+                    />
+                  )}
+                  <div className="relative h-full flex items-center justify-center">
+                    <span className="rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-[#1d1d1f] shadow-apple-sm backdrop-blur-sm">
+                      {backgroundPreview ? "背景预览 · 主界面 + 终端" : "未启用背景（使用纯白终端底色）"}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -448,7 +583,7 @@ export const SettingsModal: React.FC = () => {
 
               {!backgroundId && (
                 <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-[11px] text-amber-800">
-                  当前未启用壁纸。选择任意预设或上传图片后，终端会立即应用。
+                  当前未启用背景。选择任意壁纸 / 纯色预设或上传图片后，主界面与终端会立即应用，并写入本地设置下次启动继续生效。
                 </div>
               )}
             </div>
@@ -566,9 +701,11 @@ export const SettingsModal: React.FC = () => {
               </div>
             </div>
           )}
+
+          {activeTab === "about" && <AboutUpdateTab />}
         </div>
 
-        <div className="h-13 px-6 border-t border-black/[0.06] bg-white/70 flex items-center justify-end shrink-0">
+        <div className="h-14 px-6 border-t border-black/[0.06] bg-white/70 flex items-center justify-end gap-2 shrink-0">
           <button
             onClick={() => setSettingsModalOpen(false)}
             className="px-4 py-2 bg-[#0071e3] hover:bg-[#0077ed] text-white rounded-xl text-xs font-semibold shadow-sm transition active:scale-[0.98]"

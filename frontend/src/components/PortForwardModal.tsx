@@ -33,6 +33,9 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
   const [destPort, setDestPort] = useState<number>(80);
   const [socksAuth, setSocksAuth] = useState<SocksAuth>("none");
   const [socksUsername, setSocksUsername] = useState("");
+  // 动态转发的 SOCKS5 口令。后端要求「选了用户名口令认证就必须给出非空口令」，
+  // 否则会拒绝启动（历史上口令被写死为 None，等于任意凭据都放行）。
+  const [socksPassword, setSocksPassword] = useState("");
   const [exposeAck, setExposeAck] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -53,6 +56,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
       setErrorMsg("绑定 0.0.0.0 具有全网暴露风险，必须确认安全风险方可创建！");
       return;
     }
+    if (ruleType === "dynamic" && socksAuth === "user_pass" && (!socksUsername.trim() || !socksPassword)) {
+      setErrorMsg("选择用户名口令认证时必须填写用户名与口令，否则无法启动代理");
+      return;
+    }
 
     setSubmitting(true);
     setErrorMsg(null);
@@ -66,7 +73,8 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
         dest_host: ruleType === "dynamic" ? null : destHost.trim() || null,
         dest_port: ruleType === "dynamic" ? null : Number(destPort),
         socks_auth: socksAuth,
-        socks_username: socksAuth === "user_pass" ? socksUsername : null,
+        socks_username: socksAuth === "user_pass" ? socksUsername.trim() : null,
+        socks_password_ref: socksAuth === "user_pass" ? socksPassword : null,
         expose_warning_ack: exposeAck,
         auto_start: autoStart,
       };
@@ -87,7 +95,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-3xl bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden max-h-[85vh] text-[#1d1d1f] backdrop-blur-2xl animate-in zoom-in-95 duration-150">
         {/* 顶部标题栏 */}
-        <div className="h-13 px-6 border-b border-black/[0.06] flex items-center justify-between bg-white/70">
+        <div className="h-14 px-6 border-b border-black/[0.06] flex items-center justify-between gap-3 bg-white/70 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-[#0071e3] shadow-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -119,7 +127,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
         </div>
 
         {/* 规则列表 */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-3">
           {loading ? (
             <div className="py-12 text-center text-[#86868b] text-xs">加载规则中...</div>
           ) : rules.length === 0 ? (
@@ -215,12 +223,15 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
 
         {/* 新增规则抽屉/模态框 */}
         {addModalOpen && (
-          <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-150">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-150">
             <div className="w-full max-w-lg bg-white/95 border border-black/[0.08] rounded-2xl p-6 shadow-apple-lg text-[#1d1d1f] backdrop-blur-2xl animate-in zoom-in-95">
               <h4 className="text-base font-semibold text-[#1d1d1f] tracking-tight mb-4">创建端口转发规则</h4>
 
               {errorMsg && (
-                <div className="mb-4 p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-600 flex items-center gap-1.5">
+                <div
+              role="alert"
+              className="mb-4 flex items-start gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 text-xs font-medium text-red-800 shadow-apple-sm"
+            >
                   <span>⚠️</span>
                   <span>{errorMsg}</span>
                 </div>
@@ -359,16 +370,31 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                     </div>
 
                     {socksAuth === "user_pass" && (
-                      <div>
-                        <label className="block text-[#1d1d1f] mb-1.5 font-semibold">认证用户名</label>
-                        <input
-                          type="text"
-                          placeholder="用户名"
-                          value={socksUsername}
-                          onChange={(e) => setSocksUsername(e.target.value)}
-                          className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
-                        />
-                      </div>
+                      <>
+                        <div>
+                          <label className="block text-[#1d1d1f] mb-1.5 font-semibold">认证用户名</label>
+                          <input
+                            type="text"
+                            placeholder="用户名"
+                            value={socksUsername}
+                            onChange={(e) => setSocksUsername(e.target.value)}
+                            className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[#1d1d1f] mb-1.5 font-semibold">认证口令</label>
+                          <input
+                            type="password"
+                            placeholder="口令（必填）"
+                            value={socksPassword}
+                            onChange={(e) => setSocksPassword(e.target.value)}
+                            className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] outline-none focus:border-[#0071e3] focus:bg-white transition font-mono"
+                          />
+                          <p className="mt-1 text-[10px] text-[#86868b]">
+                            口令随规则保存在本地数据库（尚未接入保险库加密），请避免复用重要账号口令。
+                          </p>
+                        </div>
+                      </>
                     )}
                   </div>
                 )}

@@ -429,7 +429,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
     if (name.endsWith(".sh") || name.endsWith(".py") || name.endsWith(".rs") || name.endsWith(".js") || name.endsWith(".json")) {
       return <span className="text-emerald-400 text-sm">📄</span>;
     }
-    return <span className="text-slate-400 text-sm">📄</span>;
+    return <span className="text-slate-300 text-sm">📄</span>;
   };
 
   return (
@@ -544,7 +544,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                       {crumb.label}
                     </button>
                     {idx < breadcrumbs.length - 1 && (
-                      <span className="text-slate-600 shrink-0">/</span>
+                      <span className="text-slate-400 shrink-0">/</span>
                     )}
                   </React.Fragment>
                 ))}
@@ -605,7 +605,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
         </div>
 
         {/* 次工具条：搜索过滤框、显示隐藏文件、选中项统计 */}
-        <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="flex items-center justify-between text-xs text-slate-300">
           <div className="flex items-center space-x-2 w-72">
             <div className="relative flex-1">
               <input
@@ -613,12 +613,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 value={filterQuery}
                 onChange={(e) => setFilterQuery(e.target.value)}
                 placeholder="过滤当前目录文件名..."
-                className="w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1 text-xs text-white placeholder-slate-600 outline-none focus:border-indigo-500"
+                className="w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1 text-xs text-white placeholder-slate-400 outline-none focus:border-indigo-500"
               />
               {filterQuery && (
                 <button
                   onClick={() => setFilterQuery("")}
-                  className="absolute right-2 top-1.5 text-slate-500 hover:text-slate-300"
+                  className="absolute right-2 top-1.5 text-slate-300 hover:text-slate-300"
                 >
                   ✕
                 </button>
@@ -629,7 +629,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
               className={`p-1.5 rounded-md border transition ${
                 showHidden
                   ? "bg-indigo-600/20 border-indigo-500/50 text-indigo-300"
-                  : "bg-surface-800 border-surface-700 text-slate-400 hover:text-white"
+                  : "bg-surface-800 border-surface-700 text-slate-300 hover:text-white"
               }`}
               title="显示/隐藏以点开头的隐藏文件 (Ctrl+H)"
             >
@@ -637,7 +637,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             </button>
           </div>
 
-          <div className="flex items-center space-x-3 text-[11px] text-slate-500 font-mono">
+          <div className="flex items-center space-x-3 text-[11px] text-slate-300 font-mono">
             {selectedPaths.length > 0 && (
               <span className="text-emerald-400 font-semibold">
                 已选中 {selectedPaths.length} 项
@@ -649,7 +649,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       </div>
 
       {/* 文件表格表头 */}
-      <div className="grid grid-cols-12 gap-2 border-b border-surface-800 bg-surface-900/60 px-4 py-2 text-xs font-semibold text-slate-400 shrink-0">
+      <div className="grid grid-cols-12 gap-2 border-b border-surface-800 bg-surface-900/60 px-4 py-2 text-xs font-semibold text-slate-300 shrink-0">
         <div
           onClick={() => setSort("name")}
           className="col-span-5 flex items-center gap-1 cursor-pointer hover:text-white transition"
@@ -683,17 +683,17 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       {/* 虚拟滚动文件列表主体 */}
       <div ref={parentRef} className="flex-1 overflow-y-auto relative">
         {remoteLoading && visibleFiles.length === 0 ? (
-          <div className="flex h-full items-center justify-center space-x-2 text-slate-500">
+          <div className="flex h-full items-center justify-center space-x-2 text-slate-300">
             <svg className="w-5 h-5 animate-spin text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             <span className="text-xs">正在读取远程目录...</span>
           </div>
         ) : visibleFiles.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center text-slate-500">
+          <div className="flex h-full flex-col items-center justify-center text-slate-300">
             <span className="text-3xl mb-2">📁</span>
             <span className="text-xs">此目录为空，或无匹配项</span>
-            <span className="text-[11px] text-slate-600 mt-1">
+            <span className="text-[11px] text-slate-400 mt-1">
               可直接将本地文件拖拽至此上传
             </span>
           </div>
@@ -727,7 +727,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   className={`grid grid-cols-12 gap-2 items-center px-4 text-xs font-mono transition cursor-pointer border-b border-surface-900 ${
                     isSelected
                       ? "bg-indigo-600/25 text-white border-indigo-500/30"
-                      : "text-slate-300 hover:bg-surface-900/60"
+                      : "text-slate-100 hover:bg-surface-900/60"
                   }`}
                 >
                   {/* 名称 */}
@@ -739,17 +739,17 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   </div>
 
                   {/* 大小 */}
-                  <div className="col-span-2 text-right text-slate-400">
+                  <div className="col-span-2 text-right text-slate-300">
                     {isDir ? "-" : formatSize(entry.size)}
                   </div>
 
                   {/* 修改时间 */}
-                  <div className="col-span-3 text-center text-slate-400">
+                  <div className="col-span-3 text-center text-slate-300">
                     {formatDate(entry.modified_at)}
                   </div>
 
                   {/* 权限 */}
-                  <div className="col-span-2 text-right text-slate-400">
+                  <div className="col-span-2 text-right text-slate-300">
                     {formatPermissions(entry.permissions)}
                   </div>
                 </div>
@@ -976,7 +976,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setNewDirModalOpen(false)}
-                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-400 hover:text-white"
+                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-300 hover:text-white"
               >
                 取消
               </button>
@@ -1020,7 +1020,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setNewFileModalOpen(false)}
-                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-400 hover:text-white"
+                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-300 hover:text-white"
               >
                 取消
               </button>
@@ -1063,7 +1063,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setRenameModalOpen(false)}
-                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-400 hover:text-white"
+                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-300 hover:text-white"
               >
                 取消
               </button>
@@ -1093,35 +1093,35 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             </h4>
             <div className="space-y-1.5 text-slate-300">
               <div>
-                <span className="text-slate-500">名称: </span>
+                <span className="text-slate-300">名称: </span>
                 <span className="text-white font-bold">{propertiesTarget.name}</span>
               </div>
               <div className="break-all">
-                <span className="text-slate-500">绝对路径: </span>
+                <span className="text-slate-300">绝对路径: </span>
                 <span>{propertiesTarget.path}</span>
               </div>
               <div>
-                <span className="text-slate-500">类型: </span>
+                <span className="text-slate-300">类型: </span>
                 <span>{propertiesTarget.file_type}</span>
               </div>
               <div>
-                <span className="text-slate-500">尺寸: </span>
+                <span className="text-slate-300">尺寸: </span>
                 <span>{propertiesTarget.size} 字节 ({formatSize(propertiesTarget.size)})</span>
               </div>
               <div>
-                <span className="text-slate-500">权限: </span>
+                <span className="text-slate-300">权限: </span>
                 <span>{formatPermissions(propertiesTarget.permissions)}</span>
               </div>
               <div>
-                <span className="text-slate-500">所有者 (UID:GID): </span>
+                <span className="text-slate-300">所有者 (UID:GID): </span>
                 <span>{propertiesTarget.uid ?? "-"} : {propertiesTarget.gid ?? "-"}</span>
               </div>
               <div>
-                <span className="text-slate-500">最后修改时间: </span>
+                <span className="text-slate-300">最后修改时间: </span>
                 <span>{formatDate(propertiesTarget.modified_at)}</span>
               </div>
               <div>
-                <span className="text-slate-500">最后访问时间: </span>
+                <span className="text-slate-300">最后访问时间: </span>
                 <span>{formatDate(propertiesTarget.accessed_at)}</span>
               </div>
             </div>

@@ -252,7 +252,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-3xl bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden max-h-[85vh] text-[#1d1d1f] backdrop-blur-2xl animate-in zoom-in-95 duration-150">
         {/* 顶部标题栏 */}
-        <div className="h-13 px-6 border-b border-black/[0.06] flex items-center justify-between bg-white/70">
+        <div className="h-14 px-6 border-b border-black/[0.06] flex items-center justify-between gap-3 bg-white/70 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-[#0071e3] shadow-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -322,9 +322,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
         </div>
 
         {/* 内容区域 */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
           {errorMsg && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-600 flex items-center gap-2">
+            <div className="p-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 text-xs font-medium text-red-800 shadow-apple-sm flex items-start gap-2">
               <span>⚠️</span>
               <span>{errorMsg}</span>
             </div>

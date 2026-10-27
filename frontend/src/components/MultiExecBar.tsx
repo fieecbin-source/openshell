@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useTerminalStore } from "../stores/terminalStore";
-import { writeTerminal } from "../lib/ipc";
+import { sendSerial, writeTerminal } from "../lib/ipc";
 
 interface MultiExecBarProps {
   onClose: () => void;
@@ -20,26 +20,35 @@ const DANGEROUS_PATTERNS = [
 
 export const MultiExecBar: React.FC<MultiExecBarProps> = ({ onClose }) => {
   const { tabs } = useTerminalStore();
-  const connectedTabs = tabs.filter((t) => t.status === "connected");
+  const connectedTabs = useMemo(
+    () => tabs.filter((t) => t.status === "connected"),
+    [tabs]
+  );
 
-  const [selectedTabIds, setSelectedTabIds] = useState<string[]>(
+  // 只记录「用户手动勾选过」的标签，实际生效的选中集在下面与已连接标签求交集。
+  // 历史实现把初始快照直接塞进 state，标签关闭后 id 仍残留，
+  // 会导致向已失效的 tabId 广播，并且全选按钮的文案永远错乱。
+  const [pickedTabIds, setPickedTabIds] = useState<string[]>(() =>
     connectedTabs.map((t) => t.tabId)
   );
+  const selectedTabIds = useMemo(() => {
+    const live = new Set(connectedTabs.map((t) => t.tabId));
+    return pickedTabIds.filter((id) => live.has(id));
+  }, [pickedTabIds, connectedTabs]);
+  const allSelected =
+    connectedTabs.length > 0 && selectedTabIds.length === connectedTabs.length;
+
   const [command, setCommand] = useState("");
   const [dangerModal, setDangerModal] = useState<string | null>(null);
 
   const toggleSelectTab = (tabId: string) => {
-    setSelectedTabIds((prev) =>
+    setPickedTabIds((prev) =>
       prev.includes(tabId) ? prev.filter((id) => id !== tabId) : [...prev, tabId]
     );
   };
 
   const handleSelectAll = () => {
-    if (selectedTabIds.length === connectedTabs.length) {
-      setSelectedTabIds([]);
-    } else {
-      setSelectedTabIds(connectedTabs.map((t) => t.tabId));
-    }
+    setPickedTabIds(allSelected ? [] : connectedTabs.map((t) => t.tabId));
   };
 
   const checkDangerous = (cmd: string): boolean => {
@@ -57,9 +66,17 @@ export const MultiExecBar: React.FC<MultiExecBarProps> = ({ onClose }) => {
   };
 
   const dispatchCommand = (cmd: string) => {
-    const bytes = new TextEncoder().encode(cmd + "\n");
-    for (const tabId of selectedTabIds) {
-      writeTerminal(tabId, bytes).catch(console.warn);
+    const selected = new Set(selectedTabIds);
+    for (const tab of connectedTabs) {
+      if (!selected.has(tab.tabId)) continue;
+      if (tab.protocol === "serial") {
+        // 串口会话没有 SSH PTY 通道，必须走串口发送接口，否则广播对它完全无效
+        const serialBytes = new TextEncoder().encode(cmd + "\r\n");
+        sendSerial(tab.cardId || tab.tabId, serialBytes).catch(console.warn);
+      } else {
+        const bytes = new TextEncoder().encode(cmd + "\n");
+        writeTerminal(tab.tabId, bytes).catch(console.warn);
+      }
     }
     setCommand("");
     setDangerModal(null);
@@ -79,7 +96,7 @@ export const MultiExecBar: React.FC<MultiExecBarProps> = ({ onClose }) => {
             onClick={handleSelectAll}
             className="text-[11px] text-apple-blue hover:underline ml-2 font-medium"
           >
-            {selectedTabIds.length === connectedTabs.length ? "取消全选" : "全选"}
+            {allSelected ? "取消全选" : "全选"}
           </button>
         </div>
 

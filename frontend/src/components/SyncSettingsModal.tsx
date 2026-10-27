@@ -87,9 +87,9 @@ export const SyncSettingsModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-lg bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden animate-in zoom-in-95 backdrop-blur-2xl text-[#1d1d1f]">
+      <div className="w-full max-w-lg max-h-[85vh] bg-white/95 border border-black/[0.08] rounded-2xl shadow-apple-lg flex flex-col overflow-hidden animate-in zoom-in-95 backdrop-blur-2xl text-[#1d1d1f]">
         {/* 顶部标题栏 */}
-        <div className="h-13 px-6 border-b border-black/[0.06] flex items-center justify-between bg-white/70">
+        <div className="h-14 px-6 border-b border-black/[0.06] flex items-center justify-between gap-3 bg-white/70 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-[#0071e3] shadow-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -113,7 +113,7 @@ export const SyncSettingsModal: React.FC = () => {
         </div>
 
         {/* 模态框主体 */}
-        <div className="p-6 space-y-4 text-xs text-[#1d1d1f] overflow-y-auto max-h-[75vh]">
+        <div className="p-6 space-y-4 text-xs text-[#1d1d1f] overflow-y-auto flex-1 min-h-0">
           {/* E2EE 说明横幅 */}
           <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/60 rounded-xl flex items-start gap-2.5 text-emerald-900 shadow-apple-sm">
             <svg className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -126,7 +126,7 @@ export const SyncSettingsModal: React.FC = () => {
           </div>
 
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-600 rounded-xl text-xs flex items-center justify-between">
+            <div className="p-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 text-xs font-medium text-red-800 shadow-apple-sm flex items-start justify-between gap-2">
               <span>⚠️ {error}</span>
             </div>
           )}

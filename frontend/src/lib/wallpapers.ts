@@ -1,16 +1,23 @@
 /**
- * 内置终端壁纸。
+ * 内置终端 / 界面壁纸。
  *
- * 全部使用本地纯 CSS 渐变绘制，不依赖网络、不占安装体积，也不会因为
- * 分辨率不同而模糊。配色刻意控制在低对比度暗色区间，叠加终端背景遮罩后
- * 不会影响代码阅读。
+ * 全部使用本地 CSS 绘制（渐变或纯色），不依赖网络、不占安装体积，也不会因为
+ * 分辨率不同而模糊。配色刻意控制在低对比度区间，叠加半透明遮罩后不会影响阅读。
  */
 
 export interface WallpaperPreset {
   id: string;
   name: string;
-  /** 直接用于 style.backgroundImage */
+  /** 直接用于 style.backgroundImage；纯色预设为 "none" */
   image: string;
+  /** 纯色预设的背景色；渐变预设留空 */
+  color?: string;
+}
+
+export interface WallpaperStyle {
+  backgroundImage: string;
+  backgroundColor?: string;
+  backgroundSize?: string;
 }
 
 export const WALLPAPERS: WallpaperPreset[] = [
@@ -39,7 +46,7 @@ export const WALLPAPERS: WallpaperPreset[] = [
       "linear-gradient(90deg, rgba(148,163,184,0.055) 1px, transparent 1px)," +
       "radial-gradient(120% 90% at 50% 0%, rgba(148,163,184,0.12) 0%, rgba(148,163,184,0) 60%)," +
       "linear-gradient(180deg, #111318 0%, #0c0e12 100%)",
-    // 网格尺寸由 XtermView 的 backgroundSize 决定
+    // 网格尺寸由 WALLPAPER_SIZES 决定
   },
   {
     id: "mountain_dusk",
@@ -91,6 +98,13 @@ export const WALLPAPERS: WallpaperPreset[] = [
       "radial-gradient(100% 80% at 50% 0%, rgba(148,163,184,0.10) 0%, rgba(148,163,184,0) 60%)," +
       "linear-gradient(180deg, #14161a 0%, #0b0c0f 100%)",
   },
+  // ---- 纯色背景（不叠加任何纹理，最省 GPU、最干净）----
+  { id: "solid_slate", name: "纯色·石青", image: "none", color: "#1f2937" },
+  { id: "solid_navy", name: "纯色·藏青", image: "none", color: "#111a2e" },
+  { id: "solid_forest", name: "纯色·墨绿", image: "none", color: "#11241b" },
+  { id: "solid_plum", name: "纯色·梅紫", image: "none", color: "#241a2b" },
+  { id: "solid_mist", name: "纯色·雾灰", image: "none", color: "#eceef1" },
+  { id: "solid_ivory", name: "纯色·米白", image: "none", color: "#f6f4ee" },
 ];
 
 /** 网格类壁纸需要显式 tile 尺寸，其余铺满 */
@@ -101,4 +115,29 @@ export const WALLPAPER_SIZES: Record<string, string> = {
 
 export function getWallpaper(id: string): WallpaperPreset | undefined {
   return WALLPAPERS.find((w) => w.id === id);
+}
+
+/**
+ * 把设置里的 backgroundId / 自定义图片统一解析成可直接铺到 DOM 的样式。
+ * 返回 null 表示「不启用背景」。
+ */
+export function getWallpaperStyle(
+  id: string,
+  customDataUrl?: string | null
+): WallpaperStyle | null {
+  if (!id) return null;
+  if (id === "custom") {
+    return customDataUrl
+      ? { backgroundImage: `url(${customDataUrl})`, backgroundSize: "cover" }
+      : null;
+  }
+  const preset = getWallpaper(id);
+  if (!preset) return null;
+  if (preset.image === "none") {
+    return { backgroundImage: "none", backgroundColor: preset.color };
+  }
+  return {
+    backgroundImage: preset.image,
+    backgroundSize: WALLPAPER_SIZES[preset.id] || "cover",
+  };
 }

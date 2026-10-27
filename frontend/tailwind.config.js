@@ -69,6 +69,26 @@ export default {
         'apple-md': '0 4px 14px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04)',
         'apple-lg': '0 10px 30px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04)',
         'apple-xl': '0 20px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06)',
+      },
+      // 更新弹窗与顶栏徽标专用的轻量动效（150-200ms，避免拖慢交互）
+      keyframes: {
+        'fade-in': {
+          from: { opacity: '0' },
+          to: { opacity: '1' },
+        },
+        'zoom-in': {
+          from: { opacity: '0', transform: 'scale(0.96) translateY(6px)' },
+          to: { opacity: '1', transform: 'scale(1) translateY(0)' },
+        },
+        'pulse-dot': {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.35' },
+        },
+      },
+      animation: {
+        'fade-in': 'fade-in 150ms ease-out',
+        'zoom-in': 'zoom-in 200ms ease-out',
+        'pulse-dot': 'pulse-dot 2s ease-in-out infinite',
       }
     },
   },

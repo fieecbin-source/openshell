@@ -77,7 +77,9 @@ describe("useSyncStore", () => {
     vi.mocked(invoke).mockRejectedValueOnce(new Error("Network timeout"));
 
     await expect(useSyncStore.getState().syncNow()).rejects.toThrow("Network timeout");
-    expect(useSyncStore.getState().error).toBe("Network timeout");
+    // 展示给用户的 error 必须是中文友好文案，不能直接暴露 "Network timeout" 这类技术原文
+    expect(useSyncStore.getState().error).toMatch(/连接超时/);
+    expect(useSyncStore.getState().error).not.toContain("Network timeout");
     expect(useSyncStore.getState().syncing).toBe(false);
   });
 });

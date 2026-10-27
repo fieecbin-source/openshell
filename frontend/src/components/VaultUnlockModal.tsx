@@ -2,11 +2,13 @@ import React, { useState } from "react";
 import { useVaultStore } from "../stores/vaultStore";
 import { formatFriendlyError } from "../lib/errors";
 
+/** 与后端 vault 的最小长度保持一致 */
+const MIN_MASTER_PASSWORD_LEN = 5;
+
 export const VaultUnlockModal: React.FC = () => {
   const { status, init, unlock, isLoading, error } = useVaultStore();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [rememberKeychain, setRememberKeychain] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   if (!status || status.state === "unlocked") {
@@ -20,8 +22,8 @@ export const VaultUnlockModal: React.FC = () => {
     setLocalError(null);
 
     if (isUninitialized) {
-      if (!password) {
-        setLocalError("请输入应用主密码（不限位数要求）");
+      if (password.length < MIN_MASTER_PASSWORD_LEN) {
+        setLocalError(`主密码至少需要 ${MIN_MASTER_PASSWORD_LEN} 位`);
         return;
       }
       if (password !== confirmPassword) {
@@ -29,7 +31,9 @@ export const VaultUnlockModal: React.FC = () => {
         return;
       }
       try {
-        await init(password, rememberKeychain);
+        // 第二个参数为历史遗留的「记住在系统钥匙串」标志。
+        // 当前实现并未接入系统钥匙串（不做虚假声明），因此固定传 false。
+        await init(password, false);
         setPassword("");
         setConfirmPassword("");
       } catch (err: any) {
@@ -41,7 +45,8 @@ export const VaultUnlockModal: React.FC = () => {
         return;
       }
       try {
-        await unlock(password, rememberKeychain);
+        // 注意：解锁时不做长度校验，避免历史短密码用户被锁在门外
+        await unlock(password, false);
         setPassword("");
       } catch (err: any) {
         setLocalError(formatFriendlyError(err));
@@ -74,7 +79,7 @@ export const VaultUnlockModal: React.FC = () => {
             </h2>
             <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
               {isUninitialized
-                ? "首次使用，请设置主密码以加密保护会话凭据与密钥（不限制位数）"
+                ? "首次使用，请设置主密码以加密保护会话凭据与密钥（至少 5 位，忘记后无法恢复）"
                 : "请输入主密码以解密会话凭据"}
             </p>
           </div>
@@ -110,17 +115,9 @@ export const VaultUnlockModal: React.FC = () => {
             </div>
           )}
 
-          <div className="flex items-center space-x-2 pt-0.5">
-            <input
-              type="checkbox"
-              id="keychain"
-              checked={rememberKeychain}
-              onChange={(e) => setRememberKeychain(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300 text-apple-blue focus:ring-apple-blue"
-            />
-            <label htmlFor="keychain" className="text-xs text-slate-600 select-none">
-              在系统钥匙串中记住密码 (自动解锁)
-            </label>
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-2.5 text-[11px] leading-relaxed text-slate-500">
+            主密码仅在本机用于派生加密密钥（Argon2id），不会上传。
+            每 15 分钟无操作会自动锁定保险库，重新输密码即可解锁。
           </div>
 
           {(localError || error) && (

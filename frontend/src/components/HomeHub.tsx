@@ -50,14 +50,11 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="text-2xl">🖥️</span>
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">机器管理与连接中心</h1>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">管理中心</h1>
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-mono">
                 {sessions.length} 台主机
               </span>
             </div>
-            <p className="text-xs text-slate-500">
-              点击已配置好的机器卡片即可一键极速连接进入服务器终端，或点击新建连接添加新机器。
-            </p>
           </div>
 
           {/* 核心入口：醒目的大号“新建连接”按钮与快捷工具 */}
