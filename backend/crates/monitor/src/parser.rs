@@ -354,27 +354,50 @@ fn parse_df(df: &str) -> Vec<DiskMountMetrics> {
     mounts
 }
 
-fn parse_ps(ps: &str) -> Vec<ProcessMetrics> {
-    let mut list = Vec::new();
-    let lines: Vec<&str> = ps.lines().collect();
-    if lines.is_empty() {
-        return list;
+/// 从命令行里取可执行文件名，用于 ps 输出没有独立 comm 列时的回退展示。
+fn short_name(command_line: &str) -> String {
+    let first = command_line.split_whitespace().next().unwrap_or("");
+    let base = first.rsplit('/').next().unwrap_or(first);
+    if base.is_empty() {
+        command_line.to_string()
+    } else {
+        base.to_string()
     }
+}
 
-    for line in lines.iter().skip(1) {
+/// 解析 ps 输出。
+///
+/// 远端环境差异很大，不能假设只有一种格式：
+/// - `ps -eo pid,user,pcpu,pmem,comm,args`（procps / BSD，本项目的首选命令）
+/// - `ps aux`（BusyBox、macOS：USER PID %CPU %MEM VSZ RSS ... COMMAND）
+/// - `ps -ef`（无 CPU/MEM 列：UID PID PPID C STIME TTY TIME CMD）
+/// - 裸 `ps`（BusyBox：PID USER TIME COMMAND，无 CPU/MEM 列）
+///
+/// 旧实现固定 `skip(1)` 跳过表头并强制要求 5 列以上，导致 BusyBox/Alpine
+/// 这类只有 4 列的 `ps` 输出被整段丢弃 —— 表现就是「进程列表一直是空的」。
+fn parse_ps(ps: &str) -> Vec<ProcessMetrics> {
+    let mut list: Vec<ProcessMetrics> = Vec::new();
+
+    for line in ps.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
         let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() >= 5 {
-            let pid = fields[0].parse::<u32>().unwrap_or(0);
-            let user = fields[1].to_string();
-            let cpu_percent = fields[2].parse::<f64>().unwrap_or(0.0);
-            let memory_percent = fields[3].parse::<f64>().unwrap_or(0.0);
-            let name = fields[4].to_string();
-            let command = if fields.len() > 5 {
-                fields[5..].join(" ")
-            } else {
-                name.clone()
-            };
+        if fields.len() < 4 {
+            continue;
+        }
 
+        let push = |list: &mut Vec<ProcessMetrics>,
+                    pid: u32,
+                    user: String,
+                    cpu_percent: f64,
+                    memory_percent: f64,
+                    name: String,
+                    command: String| {
+            if pid == 0 {
+                return;
+            }
             list.push(ProcessMetrics {
                 pid,
                 user,
@@ -383,9 +406,91 @@ fn parse_ps(ps: &str) -> Vec<ProcessMetrics> {
                 name,
                 command,
             });
+        };
+
+        // 形态 1：PID 在第一列（ps -eo ... / ps -ef / busybox ps）
+        if let Ok(pid) = fields[0].parse::<u32>() {
+            let user = fields[1].to_string();
+            let cpu_ok = fields[2].parse::<f64>().is_ok();
+            let mem_ok = fields[3].parse::<f64>().is_ok();
+
+            if cpu_ok && mem_ok && fields.len() >= 5 {
+                // ps -eo pid,user,pcpu,pmem,comm,args
+                let name = fields[4].to_string();
+                let command = if fields.len() > 5 {
+                    fields[5..].join(" ")
+                } else {
+                    name.clone()
+                };
+                push(
+                    &mut list,
+                    pid,
+                    user,
+                    fields[2].parse().unwrap_or(0.0),
+                    fields[3].parse().unwrap_or(0.0),
+                    name,
+                    command,
+                );
+            } else {
+                // busybox: PID USER TIME COMMAND（无 CPU / MEM 列）
+                let command = fields[3..].join(" ");
+                push(
+                    &mut list,
+                    pid,
+                    user,
+                    0.0,
+                    0.0,
+                    short_name(&command),
+                    command,
+                );
+            }
+            continue;
+        }
+
+        // 形态 2：USER/UID 在第一列
+        if let Ok(pid) = fields[1].parse::<u32>() {
+            // ps aux 的 %CPU/%MEM 一定是带小数点的百分比；ps -ef 的第 4 列是整数 C，
+            // 用它区分，避免把 ps -ef 的长命令行整体裁掉。
+            let aux_like = fields.len() >= 11
+                && fields[2].parse::<f64>().is_ok()
+                && fields[3].parse::<f64>().is_ok()
+                && (fields[2].contains('.') || fields[3].contains('.'));
+
+            if aux_like {
+                // ps aux
+                let command = fields[10..].join(" ");
+                push(
+                    &mut list,
+                    pid,
+                    fields[0].to_string(),
+                    fields[2].parse().unwrap_or(0.0),
+                    fields[3].parse().unwrap_or(0.0),
+                    short_name(&command),
+                    command,
+                );
+            } else if fields.len() >= 8 {
+                // ps -ef
+                let command = fields[7..].join(" ");
+                push(
+                    &mut list,
+                    pid,
+                    fields[0].to_string(),
+                    0.0,
+                    0.0,
+                    short_name(&command),
+                    command,
+                );
+            }
         }
     }
 
+    // 统一按 CPU 占用降序，保证面板顶部就是最吃 CPU 的进程
+    list.sort_by(|a, b| {
+        b.cpu_percent
+            .partial_cmp(&a.cpu_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    list.truncate(30);
     list
 }
 
@@ -439,5 +544,34 @@ mod tests {
         assert_eq!(procs[0].user, "root");
         assert_eq!(procs[0].cpu_percent, 2.5);
         assert_eq!(procs[0].command, "nginx: master process");
+    }
+
+    /// BusyBox（Alpine 等）裸 ps 只有 4 列，旧实现会整段丢弃。
+    #[test]
+    fn test_parse_ps_busybox_columns() {
+        let sample = "PID   USER     TIME  COMMAND\n    1 root      0:02 init\n  230 root      0:00 /usr/sbin/sshd -D\n";
+        let procs = parse_ps(sample);
+        assert_eq!(procs.len(), 2);
+        assert_eq!(procs[0].pid, 1);
+        assert_eq!(procs[0].name, "init");
+        let sshd = procs.iter().find(|p| p.pid == 230).expect("sshd 应被解析");
+        assert_eq!(sshd.command, "/usr/sbin/sshd -D");
+        assert_eq!(sshd.name, "sshd");
+    }
+
+    /// ps aux（BusyBox / macOS）：USER 在第一列，COMMAND 从第 11 列开始。
+    #[test]
+    fn test_parse_ps_aux_format() {
+        let sample = "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n\
+root         1  0.0  0.1 169312 12000 ?        Ss   Oct01   0:05 /sbin/init splash\n\
+mysql      902  5.0  8.5 1200312 340000 ?      Sl   10:00   3:12 /usr/sbin/mysqld --defaults-file=/etc/my.cnf\n";
+        let procs = parse_ps(sample);
+        assert_eq!(procs.len(), 2);
+        // 按 CPU 降序：mysqld 在前
+        assert_eq!(procs[0].pid, 902);
+        assert_eq!(procs[0].cpu_percent, 5.0);
+        assert_eq!(procs[0].memory_percent, 8.5);
+        assert_eq!(procs[0].name, "mysqld");
+        assert_eq!(procs[1].user, "root");
     }
 }

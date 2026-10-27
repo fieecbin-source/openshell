@@ -59,6 +59,15 @@ impl SshConnectionManager {
         let conns = self.connections.read().await;
         conns.keys().cloned().collect()
     }
+
+    /// 仅当连接仍登记在管理器中时才移除，返回是否真的移除了。
+    ///
+    /// 用于「连接被远端关闭」的清理路径：如果用户已经主动断开（条目已被
+    /// `disconnect` 移除），这里返回 false，调用方就不会重复发 Closed 事件。
+    pub async fn remove_if_active(&self, c: &ConnectionId) -> bool {
+        let mut conns = self.connections.write().await;
+        conns.remove(c).is_some()
+    }
 }
 
 impl Default for SshConnectionManager {

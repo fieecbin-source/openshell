@@ -93,9 +93,12 @@ pub async fn handle_socks5_handshake(
                 .map_err(|e| DomainError::new(ErrorCode::Io, format!("read pass failed: {e}")))?;
             let pass = String::from_utf8_lossy(&pbuf).to_string();
 
+            // 只有同时配置了期望用户名与口令才可能通过校验。
+            // 缺少任一项时必须拒绝：否则「配置了认证」的动态转发会对任意凭据放行，
+            // 配合 0.0.0.0 监听就等价于一个无需认证的开放代理。
             let matched = match (expected_user, expected_pass) {
                 (Some(eu), Some(ep)) => user == eu && pass == ep,
-                _ => true,
+                _ => false,
             };
 
             if matched {
@@ -339,5 +342,45 @@ mod tests {
         let (target_host, target_port) = server_task.await.expect("task");
         assert_eq!(target_host, "127.0.0.1");
         assert_eq!(target_port, 22);
+    }
+
+    /// 回归：配置了 USERPASS 认证但未提供期望凭据时必须拒绝，而不是放行任意口令。
+    #[tokio::test]
+    async fn test_socks5_userpass_without_expected_credentials_is_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            handle_socks5_handshake(&mut stream, SocksAuth::Userpass, None, None).await
+        });
+
+        let mut client = TcpStream::connect(addr).await.expect("connect");
+        client
+            .write_all(&[0x05, 0x01, 0x02])
+            .await
+            .expect("send methods");
+        let mut resp = [0u8; 2];
+        client
+            .read_exact(&mut resp)
+            .await
+            .expect("read method resp");
+        assert_eq!(resp, [0x05, 0x02]);
+
+        let mut subneg = vec![0x01, 5];
+        subneg.extend_from_slice(b"admin");
+        subneg.push(9);
+        subneg.extend_from_slice(b"anything1");
+        client.write_all(&subneg).await.expect("send subneg");
+
+        let mut subneg_resp = [0u8; 2];
+        client
+            .read_exact(&mut subneg_resp)
+            .await
+            .expect("read subneg resp");
+        assert_eq!(subneg_resp, [0x01, 0x01]); // 认证失败
+
+        let result = server_task.await.expect("task");
+        assert!(result.is_err());
     }
 }

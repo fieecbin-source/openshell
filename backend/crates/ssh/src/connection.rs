@@ -24,6 +24,8 @@ pub struct ConnectOptions {
     pub private_key_passphrase: Option<String>,
     pub host_key_policy: HostKeyPolicy,
     pub keepalive_sec: u64,
+    /// 连续多少次 keepalive 失败后判定连接已失联（默认 3）
+    pub keepalive_max_miss: u32,
     pub timeout_sec: u64,
 }
 
@@ -31,10 +33,20 @@ pub struct SshConnection {
     pub connection_id: ConnectionId,
     pub session_id: SessionId,
     handle: Arc<Mutex<russh::client::Handle<OpenShellClientHandler>>>,
-    _keepalive_task: Option<JoinHandle<()>>,
+    /// 连接被判定关闭（远端断开 / 保活失联）时置为 true
+    closed_tx: Arc<tokio::sync::watch::Sender<bool>>,
+    _health_task: Option<JoinHandle<()>>,
 }
 
 impl SshConnection {
+    /// 订阅连接关闭信号。
+    ///
+    /// 上层（连接服务）据此在远端断开 / 保活连续失败时收到通知，
+    /// 清理连接表并向界面发送 `ConnectionState::Closed`。
+    pub fn closed_channel(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.closed_tx.subscribe()
+    }
+
     pub async fn connect(
         opts: ConnectOptions,
         known_host_repo: Option<Arc<dyn KnownHostRepository>>,
@@ -78,10 +90,7 @@ impl SshConnection {
         match opts.auth_method {
             AuthMethod::Password => {
                 let pass = opts.password.ok_or_else(|| {
-                    DomainError::new(
-                        ErrorCode::AuthFailed,
-                        "密码认证需要提供登录密码",
-                    )
+                    DomainError::new(ErrorCode::AuthFailed, "密码认证需要提供登录密码")
                 })?;
                 let mut authenticated = false;
                 // 首先尝试标准 SSH 密码认证
@@ -107,7 +116,9 @@ impl SshConnection {
                             } => {
                                 let responses = vec![pass.clone(); prompts.len()];
                                 if let Ok(russh::client::KeyboardInteractiveAuthResponse::Success) =
-                                    handle.authenticate_keyboard_interactive_respond(responses).await
+                                    handle
+                                        .authenticate_keyboard_interactive_respond(responses)
+                                        .await
                                 {
                                     authenticated = true;
                                 }
@@ -126,10 +137,7 @@ impl SshConnection {
             }
             AuthMethod::PublicKey => {
                 let pem_bytes = opts.private_key_pem.ok_or_else(|| {
-                    DomainError::new(
-                        ErrorCode::AuthFailed,
-                        "公钥认证需要提供有效私钥",
-                    )
+                    DomainError::new(ErrorCode::AuthFailed, "公钥认证需要提供有效私钥")
                 })?;
                 let pem_str = std::str::from_utf8(&pem_bytes).map_err(|e| {
                     DomainError::new(
@@ -181,7 +189,12 @@ impl SshConnection {
                 // - Some(Some(alg))：服务器支持 SHA-2，使用返回的算法；
                 // - None：服务器未公布（多为旧版 OpenSSH），走 ssh-rsa/SHA-1 兼容路径。
                 // 不能强行指定 Sha256，否则仅支持 ssh-rsa 的旧服务器会直接拒绝认证。
-                let best_hash = handle.best_supported_rsa_hash().await.ok().flatten().flatten();
+                let best_hash = handle
+                    .best_supported_rsa_hash()
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten();
                 let key = Arc::new(privkey);
                 let is_rsa = key.algorithm().is_rsa();
 
@@ -276,34 +289,70 @@ impl SshConnection {
 
         let handle_arc = Arc::new(Mutex::new(handle));
 
-        // 3. Keepalive 保活循环
-        let keepalive_task = if opts.keepalive_sec > 0 {
+        // 3. 连接健康监视 + KeepAlive
+        //
+        // 历史实现只在 keepalive_sec > 0 时启动任务，单次失败就退出，且
+        // `keepalive_max_miss` 完全没被使用；更关键的是任务退出后没有任何人知道，
+        // 界面会一直显示「已连接」，实际早已哑死。
+        //
+        // 现在的行为：
+        //  - 即使关闭 keepalive，也每 30 秒轮询 `is_closed()` 做断线探测；
+        //  - 连续 keepalive 失败达到 `keepalive_max_miss` 才判定失联（容忍偶发丢包）；
+        //  - 任务结束时通过 watch 通道广播「连接已关闭」，由连接服务发事件并清表。
+        let (closed_tx, _closed_rx) = tokio::sync::watch::channel(false);
+        let closed_tx = Arc::new(closed_tx);
+        let health_handle = {
             let handle_clone = Arc::clone(&handle_arc);
-            let interval_dur = Duration::from_secs(opts.keepalive_sec);
-            Some(tokio::spawn(async move {
-                let mut interval = tokio::time::interval(interval_dur);
+            let closed_tx = Arc::clone(&closed_tx);
+            let keepalive_sec = opts.keepalive_sec;
+            let max_miss = opts.keepalive_max_miss.max(1);
+            tokio::spawn(async move {
+                let check_secs = if keepalive_sec > 0 { keepalive_sec } else { 30 };
+                let mut interval = tokio::time::interval(Duration::from_secs(check_secs));
                 interval.tick().await; // 第一拍跳过
+                let mut misses: u32 = 0;
                 loop {
                     interval.tick().await;
-                    let locked = handle_clone.lock().await;
-                    if locked.is_closed() {
-                        break;
-                    }
-                    if locked.send_keepalive(false).await.is_err() {
-                        tracing::warn!("keepalive failed or disconnected");
+                    let lost = {
+                        let locked = handle_clone.lock().await;
+                        if locked.is_closed() {
+                            true
+                        } else if keepalive_sec > 0 {
+                            match locked.send_keepalive(false).await {
+                                Ok(()) => {
+                                    misses = 0;
+                                    false
+                                }
+                                Err(err) => {
+                                    misses = misses.saturating_add(1);
+                                    tracing::warn!(
+                                        misses,
+                                        max_miss,
+                                        error = %err,
+                                        "ssh keepalive failed"
+                                    );
+                                    misses >= max_miss
+                                }
+                            }
+                        } else {
+                            false
+                        }
+                    };
+                    if lost {
                         break;
                     }
                 }
-            }))
-        } else {
-            None
+                // watch 会保存最后一次值，订阅者即使晚于此处订阅也不会漏掉通知
+                let _ = closed_tx.send(true);
+            })
         };
 
         Ok(Self {
             connection_id: opts.connection_id,
             session_id: opts.session_id,
             handle: handle_arc,
-            _keepalive_task: keepalive_task,
+            closed_tx,
+            _health_task: Some(health_handle),
         })
     }
 
@@ -313,9 +362,12 @@ impl SshConnection {
             .channel_open_session()
             .await
             .map_err(map_russh_error)?;
+        // want_reply = true：让 PTY 请求的成败可见。
+        // 旧实现传 false，服务器拒绝 PTY（例如 sshd 关闭了 tty 分配）时被静默忽略，
+        // 之后终端表现为「能输入但没有任何回显」，极难排查。
         channel
             .request_pty(
-                false,
+                true,
                 "xterm-256color",
                 size.cols as u32,
                 size.rows as u32,
@@ -330,18 +382,42 @@ impl SshConnection {
     }
 
     pub async fn open_exec(&self, cmd: &str) -> DomainResult<ExecOutput> {
-        let handle = self.handle.lock().await;
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(map_russh_error)?;
-        channel.exec(true, cmd).await.map_err(map_russh_error)?;
+        // 只在「打开通道 + 发送 exec 请求」期间持有连接锁。
+        //
+        // 旧实现把整条命令的执行循环都包在锁里：一条长命令（服务器监控采集、
+        // 用户自定义脚本）执行期间，同连接的新终端、SFTP 通道、keepalive 心跳
+        // 甚至 connection_close 都会被阻塞，最长可达数十秒。
+        let mut channel = {
+            let handle = self.handle.lock().await;
+            // 内层不需要 mut：exec 之后才在锁外消费通道
+            let channel = handle
+                .channel_open_session()
+                .await
+                .map_err(map_russh_error)?;
+            channel.exec(true, cmd).await.map_err(map_russh_error)?;
+            channel
+        };
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code = None;
+        let mut eof_seen = false;
 
-        while let Some(msg) = channel.wait().await {
+        loop {
+            // 收到 Eof 后不能立刻 break：exit-status 是独立的 channel request，
+            // 部分 sshd 会把它排在 Eof 之后。旧实现在 Eof 处直接跳出循环，
+            // 导致 exit_code 恒为 None（前端据此判定命令失败，把正常输出当报错）。
+            // 这里在 Eof 之后再做一次短超时等待，专门捞取迟到的 ExitStatus。
+            let next = if eof_seen {
+                match tokio::time::timeout(Duration::from_millis(300), channel.wait()).await {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                }
+            } else {
+                channel.wait().await
+            };
+
+            let Some(msg) = next else { break };
             match msg {
                 ChannelMsg::Data { data } => {
                     stdout.extend_from_slice(&data);
@@ -352,7 +428,10 @@ impl SshConnection {
                 ChannelMsg::ExitStatus { exit_status } => {
                     exit_code = Some(exit_status);
                 }
-                ChannelMsg::Eof | ChannelMsg::Close => {
+                ChannelMsg::Eof => {
+                    eof_seen = true;
+                }
+                ChannelMsg::Close => {
                     break;
                 }
                 _ => {}

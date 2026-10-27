@@ -70,7 +70,10 @@ impl HostKeyVerifier {
                 if kh.status == KnownHostStatus::Revoked {
                     return Err(DomainError::new(
                         ErrorCode::HostkeyMismatch,
-                        format!("服务器 {}:{} 的主机公钥已被显式标记为撤销 (Revoked)，已阻止连接", self.host, self.port),
+                        format!(
+                            "服务器 {}:{} 的主机公钥已被显式标记为撤销 (Revoked)，已阻止连接",
+                            self.host, self.port
+                        ),
                     ));
                 }
 

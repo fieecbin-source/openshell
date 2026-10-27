@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio::task::JoinHandle;
 
-const DEFAULT_COMMAND: &str = r#"echo "===STAT==="; cat /proc/stat 2>/dev/null; echo "===MEM==="; cat /proc/meminfo 2>/dev/null; echo "===NET==="; cat /proc/net/dev 2>/dev/null; echo "===DF==="; df -kP 2>/dev/null; echo "===LOAD==="; cat /proc/loadavg 2>/dev/null || uptime; echo "===PS==="; ps -eo pid,user,%cpu,%mem,comm,args --sort=-%cpu 2>/dev/null | head -n 30; echo "===UPTIME==="; cat /proc/uptime 2>/dev/null"#;
+const DEFAULT_COMMAND: &str = r#"echo "===STAT==="; cat /proc/stat 2>/dev/null; echo "===MEM==="; cat /proc/meminfo 2>/dev/null; echo "===NET==="; cat /proc/net/dev 2>/dev/null; echo "===DF==="; df -kP 2>/dev/null; echo "===LOAD==="; cat /proc/loadavg 2>/dev/null || uptime; echo "===PS==="; ( ps -eo pid,user,pcpu,pmem,comm,args --sort=-pcpu 2>/dev/null || ps -eo pid,user,pcpu,pmem,comm,args 2>/dev/null || ps aux 2>/dev/null || ps -ef 2>/dev/null || ps 2>/dev/null ) | head -n 40; echo "===UPTIME==="; cat /proc/uptime 2>/dev/null"#;
 
 /// 监控引擎。
 #[derive(Clone)]
@@ -66,8 +66,8 @@ impl MonitorEngine {
             let mut current_interval = interval_sec;
 
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(current_interval)).await;
-
+                // 先采样再休眠：首屏（CPU / 进程面板）立即有数据，
+                // 否则前端要等到第一个间隔（默认 3s）之后才能拿到快照。
                 let output = conn.open_exec(DEFAULT_COMMAND).await;
                 match output {
                     Ok(out) => {
@@ -100,6 +100,8 @@ impl MonitorEngine {
                         }
                     }
                 }
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(current_interval)).await;
             }
         });
 
