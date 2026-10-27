@@ -7,6 +7,11 @@
     "tauri": "node frontend/node_modules/@tauri-apps/cli/tauri.js",
     "typecheck": "pnpm --filter @openshell/frontend typecheck",
     "test": "pnpm --filter @openshell/frontend test",
-    "desktop:build": "node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle"
+    "desktop:build": "node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle",
+    "version:check": "node scripts/version.mjs --check",
+    "version:write": "node scripts/version.mjs",
+    "release:check": "node scripts/release.mjs --check",
+    "check:copy": "node scripts/check-updater-copy.mjs",
+    "check:package": "node scripts/check-package.mjs"
   }
 }

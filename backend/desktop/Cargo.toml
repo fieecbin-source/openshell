@@ -10,7 +10,10 @@ path = "src/main.rs"
 
 [lib]
 name = "openshell_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 只保留 rlib：`staticlib` / `cdylib` 是 Tauri 移动端（iOS/Android）模板留下的产物类型，
+# 桌面构建用不到；而 Windows-GNU 工具链链接 cdylib 时会因为需要导出数万个 Rust 符号
+# 直接失败（`ld: export ordinal too large`）。如后续要构建移动端，请仅在对应目标下恢复。
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -28,6 +31,7 @@ openshell-importer = { workspace = true }
 openshell-sync-protocol = { workspace = true }
 openshell-extension-sample = { workspace = true }
 openshell-serial = { workspace = true }
+openshell-updater = { workspace = true }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

@@ -14,6 +14,7 @@ members = [
   "backend/crates/extension-sample",
   "backend/crates/app-core",
   "backend/crates/serial",
+  "backend/crates/updater",
   "backend/desktop",
   "backend/server",
 ]
@@ -40,6 +41,7 @@ openshell-sync-protocol = { path = "backend/crates/sync-protocol" }
 openshell-sync-client = { path = "backend/crates/sync-client" }
 openshell-extension-sample = { path = "backend/crates/extension-sample" }
 openshell-serial = { path = "backend/crates/serial" }
+openshell-updater = { path = "backend/crates/updater" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

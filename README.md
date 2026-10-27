@@ -60,9 +60,28 @@ OpenShell 是一款轻量、高性能、高安全的下一代跨平台桌面运�
 
 | 平台 | 安装包格式 | 适用系统 |
 |---|---|---|
-| **Windows** | `OpenShell-Setup-1.0.0.exe` (NSIS) / `.msi` | Windows 10 / 11 / Server 2019+ (x86_64) |
-| **macOS** | `OpenShell-1.0.0.dmg` (Universal) | macOS 12 Monterey 及以上（Apple Silicon & Intel） |
-| **Linux** | `OpenShell-1.0.0.AppImage` / `.deb` | 主流 Linux 发行版（Ubuntu, Debian, Fedora, Arch 等） |
+| **Windows** | `OpenShell-<version>-windows-x86_64.exe` (NSIS) / `.msi` | Windows 10 / 11 / Server 2019+ (x86_64) |
+| **macOS** | `OpenShell-<version>-macos-universal.dmg` (Universal) | macOS 12 Monterey 及以上（Apple Silicon & Intel） |
+| **Linux** | `OpenShell-<version>-linux-x86_64.AppImage` / `.deb` | 主流 Linux 发行版（Ubuntu, Debian, Fedora, Arch 等） |
+
+每个 Release 同时提供 `SHA256SUMS.txt` 校验清单与 `update-meta.json`、`latest.json` 更新元数据。
+
+---
+
+## 🔄 内置更新与数据保护
+
+客户端自带应用内更新（无需手动下载重装）：
+
+- **检查**：点击顶栏更新图标，或在「设置 → 关于与更新」中检查；默认启动 30 秒后自动检查、每 6 小时一次。
+- **下载**：断点续传 + 进度/速度显示 + 磁盘空间预检，校验收到的安装包 sha256（下载后与安装前各一次）。
+- **安装**：安装前自动把本地数据库快照到用户数据目录的 `backups/`，然后再拉起安装器。
+- **数据永不随更新丢失**：连接配置、密钥与历史记录都在用户数据目录，与安装目录隔离；
+  schema 升级失败会自动回滚并从快照恢复，本地数据版本高于客户端时拒绝覆盖。
+- **可替换数据源**：内置 GitHub Release 源，支持备用清单源（`latest.json`）、下载镜像与代理设置，
+  方便在内网或 GitHub 不稳定时使用。
+
+安装包完整性、`update-meta.json` 字段、状态机与已知限制详见 [docs/UPDATE.md](docs/UPDATE.md)；
+发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 ---
 
@@ -105,6 +124,17 @@ cargo test --workspace
 
 # 构建桌面可执行文件
 pnpm desktop:build
+```
+
+### 版本与发布
+
+```bash
+# 改版本号只改 frontend/package.json，然后同步其余两处
+pnpm version:write
+pnpm version:check
+
+# 发布前检查（版本 + tag + CHANGELOG 一致性）
+pnpm release:check
 ```
 
 ---

@@ -24,6 +24,12 @@ pub struct AppInfo {
     pub target: &'static str,
     pub arch: &'static str,
     pub data_dir: String,
+    /// 本地数据库实际的 schema 版本（低于程序支持的版本表示处于「已恢复」状态）。
+    pub schema_version: u32,
+    /// 迁移失败并已从快照恢复：前端显示横幅，提示用户确认数据后继续使用。
+    pub degraded: bool,
+    /// 便携运行（可执行文件旁存在 `openshell.portable` 标记文件）。
+    pub is_portable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,7 +55,21 @@ pub async fn app_info(state: tauri::State<'_, Arc<AppServices>>) -> Result<AppIn
         target: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         data_dir: state.paths.data_dir.to_string_lossy().to_string(),
+        schema_version: state.migration.schema_version,
+        degraded: state.migration.was_recovered(),
+        is_portable: is_portable(),
     })
+}
+
+/// 便携模式判定：可执行文件旁存在 `openshell.portable` 时提示前端关闭自动更新。
+pub(crate) fn is_portable() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|dir| dir.join("openshell.portable").exists())
+        })
+        .unwrap_or(false)
 }
 
 // ==========================================
@@ -230,6 +250,29 @@ pub async fn group_rename(
     state
         .session
         .rename_group(&id, name)
+        .await
+        .map_err(Into::into)
+}
+
+/// 移动分组到新的父级并调整排序（拖拽移组 / 拖拽排序）。
+///
+/// 仓储层 `move_to` 已内置成环检测与 8 层深度上限，这里只做参数编解码。
+/// `parent_id` 为 `None` 表示移到根层级。
+#[tauri::command]
+pub async fn group_move(
+    state: tauri::State<'_, Arc<AppServices>>,
+    id: String,
+    parent_id: Option<String>,
+    sort_order: Option<i64>,
+) -> Result<Group, IpcError> {
+    let id = GroupId::from_string(id)?;
+    let parent_id = match parent_id {
+        Some(p) => Some(GroupId::from_string(p)?),
+        None => None,
+    };
+    state
+        .session
+        .move_group(&id, parent_id, sort_order.unwrap_or(1024))
         .await
         .map_err(Into::into)
 }

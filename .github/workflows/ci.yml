@@ -2,23 +2,32 @@ name: CI (Dev / Pull Request)
 
 on:
   push:
-    branches: [ dev ]
+    # 默认分支是 main：不加上它的话，合并到 main 之后不会再跑 CI
+    branches: [ dev, main ]
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - 'deploy/**'
+      - 'scripts/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - '.cargo/**'
       - 'rust-toolchain.toml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/cd.yml'
   pull_request:
-    branches: [ dev ]
+    branches: [ dev, main ]
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - 'deploy/**'
+      - 'scripts/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - '.cargo/**'
       - 'rust-toolchain.toml'
       - '.github/workflows/ci.yml'
@@ -61,6 +70,74 @@ jobs:
 
       - name: Run Workspace Tests
         run: cargo test --workspace
+
+  # 桌面壳（Tauri）只在 Windows + MSVC 上真正跑得起来：
+  # 本机 gnu/llvm-mingw 混用会导致测试二进制加载失败（0xC0000139），
+  # 因此这里用官方推荐的 windows-latest + MSVC 作为「desktop 测试」的权威结果。
+  desktop-windows:
+    name: Desktop Tests (Windows / MSVC)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Setup Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Run Desktop Shell Tests
+        # 覆盖 IPC 参数校验、安装前快照、安装前二次 sha256、延迟退出等逻辑
+        run: cargo test -p openshell-desktop -p openshell-updater -p openshell-store
+
+      - name: Run Desktop Shell Clippy
+        run: cargo clippy -p openshell-desktop --all-targets -- -D warnings
+
+  frontend-ci:
+    name: Frontend Typecheck, Tests & Packaging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version Consistency (three sources)
+        run: node scripts/version.mjs --check
+
+      - name: Updater Copy Centralization
+        run: node scripts/check-updater-copy.mjs
+
+      - name: Typecheck
+        run: pnpm --filter @openshell/frontend typecheck
+
+      - name: Unit Tests
+        run: pnpm --filter @openshell/frontend test
+
+      - name: Build Frontend Bundle
+        run: pnpm --filter @openshell/frontend build
+
+      - name: Check Build Artifacts (no secrets / stray dirs)
+        run: node scripts/check-package.mjs
 
   docker-build-check:
     name: Dockerfile Build Validation

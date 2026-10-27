@@ -24,3 +24,10 @@ impl From<DomainError> for IpcError {
         }
     }
 }
+
+/// 更新模块的错误沿用同一套 IPC 形态（`UPDATE_*` 错误码由 `UpdaterError` 映射而来）。
+impl From<openshell_updater::UpdaterError> for IpcError {
+    fn from(err: openshell_updater::UpdaterError) -> Self {
+        DomainError::from(err).into()
+    }
+}

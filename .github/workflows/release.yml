@@ -1,111 +1,219 @@
-name: Release (Multi-platform Tauri Client & Updater)
+name: Release (Multi-platform Desktop)
 
+# 打 v* tag → 三平台构建 → 规整资产名 → 生成 sha256/元数据 → 草稿 Release（人工编辑后发布）
+# 发布后 → 把 latest.json 同步到 updater-meta 分支，供 jsDelivr 备用源使用。
 on:
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag Name (e.g. v1.0.0)'
+        description: 'Release tag (must match frontend/package.json version)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# 默认最小权限：只读。写权限仅由需要的 job 单独申请（见 publish / sync-updater-meta）。
+permissions:
+  contents: read
+
 jobs:
-  build-desktop-client:
-    name: Build Client (${{ matrix.platform }})
-    permissions:
-      contents: write
+  verify:
+    name: Verify version & changelog
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Version consistency (package.json / Cargo.toml / tauri.conf.json)
+        run: node scripts/version.mjs --check
+
+      - name: Tag matches version
+        run: node scripts/release.mjs check --tag "${{ github.event.inputs.tag_name || github.ref_name }}"
+
+  build:
+    name: Build (${{ matrix.label }})
+    if: github.event_name != 'release'
+    needs: verify
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'windows-latest'
+          - os: windows-latest
+            label: windows-x86_64
+            platform: windows
+            arch: x86_64
             args: '--target x86_64-pc-windows-msvc'
-            name: 'windows-x86_64'
-          - platform: 'macos-latest'
+            rust_targets: ''
+          - os: macos-latest
+            label: macos-universal
+            platform: macos
+            arch: universal
             args: '--target universal-apple-darwin'
-            name: 'macos-universal'
-          - platform: 'ubuntu-22.04'
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - os: ubuntu-22.04
+            label: linux-x86_64
+            platform: linux
+            arch: x86_64
             args: '--target x86_64-unknown-linux-gnu'
-            name: 'linux-x86_64'
-
-    runs-on: ${{ matrix.platform }}
+            rust_targets: ''
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js & pnpm
-        uses: pnpm/action-setup@v3
+      - uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'pnpm'
 
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
 
-      - name: Setup Rust Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             . -> target
 
       - name: Install System Dependencies (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev \
-            libudev-dev \
-            build-essential \
-            curl \
-            wget \
-            file
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libudev-dev build-essential curl wget file
 
-      - name: Install Frontend Dependencies & Build Bundle
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm --filter @openshell/frontend build
+
+      - name: Build desktop bundles
+        run: pnpm tauri build ${{ matrix.args }}
+
+      - name: Normalize asset names
+        shell: bash
         run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter @openshell/frontend build
+          VERSION=$(node scripts/version.mjs --print)
+          node scripts/release.mjs assets \
+            --root target \
+            --version "$VERSION" \
+            --platform ${{ matrix.platform }} \
+            --arch ${{ matrix.arch }} \
+            --out artifacts
 
-      - name: Build Tauri Desktop Package & Sign
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@v4
         with:
-          projectPath: '.'
-          tagName: ${{ github.event.inputs.tag_name || github.ref_name }}
-          releaseName: 'OpenShell ${{ github.event.inputs.tag_name || github.ref_name }}'
-          releaseBody: |
-            ## OpenShell Desktop Client v1.0.0
-            
-            跨平台原生 SSH / 终端 / SFTP / 监控客户端（Windows / macOS / Linux）。
-            
-            ### 安装包资产清单
-            - **Windows**: `.msi` (Windows Installer), `.exe` (NSIS Setup)
-            - **macOS**: `.dmg` (Universal Binary for Apple Silicon & Intel)
-            - **Linux**: `.AppImage` (单可执行文件), `.deb` (Debian / Ubuntu)
-            - **Updater**: 包含 `latest.json` 与数字签名的自动更新清单
-            
-            ### 校验与安全
-            所有发布包均通过洁净室架构审计与零明文凭据落盘验证。
-          releaseDraft: false
-          prerelease: false
-          args: ${{ matrix.args }}
+          name: assets-${{ matrix.label }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    if: github.event_name != 'release'
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate categorized release notes
+        shell: bash
+        run: |
+          VERSION=$(node scripts/version.mjs --print)
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          node scripts/release.mjs notes ${PREV:+--from "$PREV"} --out artifacts/release-notes.md
+
+      - name: Generate checksums & manifests
+        shell: bash
+        run: |
+          VERSION=$(node scripts/version.mjs --print)
+          node scripts/release.mjs manifest \
+            --dir artifacts \
+            --version "$VERSION" \
+            --tag "${GITHUB_REF_NAME}"
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          name: OpenShell ${{ github.event.inputs.tag_name || github.ref_name }}
+          body_path: artifacts/release-notes.md
+          draft: true
+          # 含 `-` 的 tag（如 v1.0.2-rc.1）一律标记为预发布：
+          # 预发布不会写正式 latest.json（见 sync-updater-meta 的条件）
+          prerelease: ${{ contains(github.event.inputs.tag_name || github.ref_name, '-') }}
+          files: |
+            artifacts/OpenShell-*
+            artifacts/SHA256SUMS.txt
+            artifacts/update-meta.json
+            artifacts/latest.json
+
+      - name: Remind manual editing
+        run: |
+          echo "::notice ::草稿 Release 已创建。请按 .github/release-template.md 人工校对说明后再点击 Publish。"
+
+  # 预发布（rc/beta）**不**写入正式 latest.json 源，避免污染稳定通道用户的检测源。
+  # 测试通道客户端直接读 GitHub 的 prerelease（update-meta.json），不需要这份清单。
+  sync-updater-meta:
+    name: Sync latest.json to updater-meta branch
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download latest.json from the published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p meta
+          gh release download "${{ github.event.release.tag_name }}" \
+            --pattern 'latest.json' --dir meta --clobber
+
+      - name: Push to updater-meta
+        run: |
+          git config user.name "openshell-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          # 用独立 worktree 构建只有 latest.json 的孤儿分支，避免动到主工作区
+          git worktree add --detach meta-branch HEAD
+          cd meta-branch
+          git checkout --orphan updater-meta
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p updater
+          cp ../meta/latest.json updater/latest.json
+          git add updater/latest.json
+          git commit -m "chore(updater): sync latest.json for ${{ github.event.release.tag_name }}"
+          git push origin updater-meta --force
