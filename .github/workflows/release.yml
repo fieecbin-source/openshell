@@ -183,7 +183,15 @@ jobs:
             artifacts/OpenShell-*
             artifacts/SHA256SUMS.txt
             artifacts/update-meta.json
-            artifacts/latest.json
+
+      # latest.json 是「正式检测源 / 备用源」用的清单，只随稳定版发布；
+      # 预发布附带它会误导用户以为稳定通道已更新。
+      - name: Attach latest.json (stable releases only)
+        if: ${{ !contains(github.event.inputs.tag_name || github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" artifacts/latest.json --clobber
 
       - name: Remind manual editing
         run: |

@@ -10,7 +10,27 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const API_URL: &str = "https://api.github.com/repos/fieecbin-source/openshell/releases/latest";
-const EXE: &str = "OpenShell-1.1.0-windows-x86_64.exe";
+
+/// 当前主机可安装的资产名。
+///
+/// 资源匹配是按「平台 + 架构」打分的，测试若写死 `.exe`，在 Linux/macOS 的 CI 上
+/// 会匹配不到资产（`asset == None`）。这里跟随宿主机，保证三个平台都成立。
+fn exe_name() -> &'static str {
+    if cfg!(windows) {
+        "OpenShell-1.1.0-windows-x86_64.exe"
+    } else if cfg!(target_os = "macos") {
+        "OpenShell-1.1.0-macos-universal.dmg"
+    } else {
+        "OpenShell-1.1.0-linux-x86_64.AppImage"
+    }
+}
+
+fn exe_url() -> String {
+    format!(
+        "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/{}",
+        exe_name()
+    )
+}
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const META_URL: &str =
     "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/update-meta.json";
@@ -102,9 +122,9 @@ fn release_body(with_windows_asset: bool, notes: &str) -> String {
     ];
     if with_windows_asset {
         assets.push(serde_json::json!({
-            "name": EXE,
+            "name": exe_name(),
             "size": 52_428_800u64,
-            "browser_download_url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/OpenShell-1.1.0-windows-x86_64.exe"
+            "browser_download_url": exe_url()
         }));
     }
     serde_json::json!({
@@ -121,7 +141,7 @@ fn release_body(with_windows_asset: bool, notes: &str) -> String {
 }
 
 fn sums_body() -> String {
-    format!("{HASH}  {EXE}\n")
+    format!("{HASH}  {}\n", exe_name())
 }
 
 struct Harness {
@@ -172,7 +192,7 @@ async fn detects_update_and_resolves_checksum() {
     assert!(!outcome.from_cache);
     assert_eq!(outcome.decision, NotifyDecision::Notify);
     let asset = outcome.result.asset.expect("asset");
-    assert_eq!(asset.name, EXE);
+    assert_eq!(asset.name, exe_name());
     assert_eq!(asset.sha256.as_deref(), Some(HASH));
     assert!(asset.is_auto_installable());
     assert!(outcome.result.notes_html.contains("自动更新"));
@@ -388,8 +408,8 @@ async fn falls_back_to_manifest_source_when_github_fails() {
                 "notes": "- 来自备用源",
                 "release_page": "https://github.com/fieecbin-source/openshell/releases/tag/v1.1.0",
                 "assets": [{
-                    "name": EXE,
-                    "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/OpenShell-1.1.0-windows-x86_64.exe",
+                    "name": exe_name(),
+                    "url": exe_url(),
                     "size": 1024,
                     "sha256": HASH,
                     "platform": "windows",
