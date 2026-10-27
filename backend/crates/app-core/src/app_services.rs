@@ -13,9 +13,14 @@ use openshell_forward::ForwardManager;
 use openshell_monitor::MonitorEngine;
 use openshell_sftp::{CwdTracker, SftpClient, SftpSession, TransferManager};
 use openshell_ssh::SshConnectionManager;
+use openshell_store::backup::{
+    self, BackupInfo, BackupReason, DEFAULT_KEEP_BACKUPS, MAX_KEEP_BACKUPS,
+};
+use openshell_store::meta;
 use openshell_store::{
-    CredentialRepo, GroupRepo, KnownHostRepo, PortForwardRepo, SecretRepo, SessionRepo,
-    SettingsRepo, SnippetRepo, SshKeyRepo, Store, VaultRepo,
+    open_with_migration, CredentialRepo, GroupRepo, KnownHostRepo, MigrationOptions,
+    MigrationReport, PortForwardRepo, SecretRepo, SessionRepo, SettingsRepo, SnippetRepo,
+    SshKeyRepo, Store, VaultRepo, SCHEMA_VERSION,
 };
 use openshell_vault::VaultManager;
 use std::collections::HashMap;
@@ -24,6 +29,12 @@ use std::sync::Arc;
 
 use crate::card_service::CardService;
 use openshell_serial::SerialService;
+
+/// 当前客户端版本，与 Cargo workspace 版本同源（由 `scripts/version.mjs` 保证一致）。
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// 设置表中「自动备份保留份数」的键（scope = `user`）。
+pub const SETTING_BACKUP_KEEP: &str = "update.backupKeep";
 
 pub struct AppServices {
     pub paths: AppPaths,
@@ -47,16 +58,27 @@ pub struct AppServices {
     pub extensions: Arc<ExtensionRegistry>,
     pub card: Arc<CardService>,
     pub serial: Arc<SerialService>,
+    /// 启动时的迁移/恢复情况（迁移失败已回滚时 `was_recovered()` 为 true，前端据此提示）。
+    pub migration: MigrationReport,
 }
 
 impl AppServices {
     /// 以指定应用数据目录启动装配根。
+    ///
+    /// 迁移失败会自动用迁移前快照恢复并以旧 schema 启动，因此这里的 `Err`
+    /// 只代表「数据目录不可用」或「本地数据比程序更新」，两种情况都不应继续运行。
     pub fn new(data_dir: PathBuf) -> DomainResult<Self> {
         let paths = AppPaths::new(data_dir);
-        let store = Store::open(&paths.db_path)?;
-        store.migrate()?;
+        std::fs::create_dir_all(&paths.backups_dir)?;
+        // 迁移阶段还没法读设置（库未打开），先用默认保留份数；用户自定义值在启动后裁剪时生效。
+        let opts = MigrationOptions {
+            app_version: APP_VERSION.to_string(),
+            backups_dir: paths.backups_dir.clone(),
+            keep_backups: DEFAULT_KEEP_BACKUPS,
+        };
+        let (store, migration) = open_with_migration(&paths.db_path, &opts)?;
 
-        Self::init_with_store(paths, store)
+        Self::init_with_store(paths, store, migration)
     }
 
     /// 内存模式（测试使用）。
@@ -65,10 +87,44 @@ impl AppServices {
         let store = Store::open_in_memory()?;
         store.migrate()?;
 
-        Self::init_with_store(paths, store)
+        Self::init_with_store(paths, store, MigrationReport::default())
     }
 
-    fn init_with_store(paths: AppPaths, store: Store) -> DomainResult<Self> {
+    /// 立即创建一份数据快照（安装更新前、用户手动备份时调用）。
+    ///
+    /// `reason` 决定文件名与是否参与保留策略裁剪（手动快照永不自动删除）。
+    pub fn backup_now(&self, reason: BackupReason) -> DomainResult<BackupInfo> {
+        let info = backup::create(&self.store, &self.paths.backups_dir, APP_VERSION, reason)?;
+        if reason.is_prunable() {
+            let keep = self.backup_keep();
+            if let Err(err) = backup::prune(&self.paths.backups_dir, keep) {
+                tracing::warn!(error = %err, "failed to prune old backups");
+            }
+        }
+        Ok(info)
+    }
+
+    /// 列出本目录下的全部快照（新 → 旧）。
+    pub fn list_backups(&self) -> DomainResult<Vec<BackupInfo>> {
+        backup::list(&self.paths.backups_dir)
+    }
+
+    /// 自动快照保留份数，来自设置表，缺省 5，取值范围 1..=20。
+    pub fn backup_keep(&self) -> usize {
+        self.settings_repo
+            .get("user", None, SETTING_BACKUP_KEEP)
+            .ok()
+            .flatten()
+            .and_then(|record| record.value_json.as_u64())
+            .map(|raw| (raw as usize).clamp(1, MAX_KEEP_BACKUPS))
+            .unwrap_or(DEFAULT_KEEP_BACKUPS)
+    }
+
+    fn init_with_store(
+        paths: AppPaths,
+        store: Store,
+        migration: MigrationReport,
+    ) -> DomainResult<Self> {
         let vault_repo = Arc::new(VaultRepo::new(store.clone()));
         let group_repo = Arc::new(GroupRepo::new(store.clone()));
         let session_repo = Arc::new(SessionRepo::new(store.clone()));
@@ -127,9 +183,53 @@ impl AppServices {
         let card_service = Arc::new(CardService::new(session_repo.clone(), event_bus.clone()));
         let serial_service = Arc::new(SerialService::new());
 
+        // 升级后首次启动：留一份「迁移已完成」的快照，作为后续问题的回退锚点。
+        // 迁移失败已回滚（schema 仍是旧版本）时不写 app_meta —— 旧库还没有这张表。
+        if migration.was_recovered() {
+            tracing::warn!(
+                snapshot = migration
+                    .recovered_from
+                    .as_ref()
+                    .map(|b| b.file_name.as_str())
+                    .unwrap_or(""),
+                "started with restored pre-migration snapshot"
+            );
+        } else if migration.schema_version == SCHEMA_VERSION {
+            match meta::record_startup(&store, APP_VERSION) {
+                Ok(Some(previous)) if previous != APP_VERSION => {
+                    match backup::create(
+                        &store,
+                        &paths.backups_dir,
+                        APP_VERSION,
+                        BackupReason::PostUpgrade,
+                    ) {
+                        Ok(info) => {
+                            tracing::info!(
+                                from = %previous,
+                                to = APP_VERSION,
+                                file = %info.file_name,
+                                "app upgraded, post-upgrade snapshot created"
+                            );
+                            if let Err(err) =
+                                backup::prune(&paths.backups_dir, DEFAULT_KEEP_BACKUPS)
+                            {
+                                tracing::warn!(error = %err, "failed to prune backups after upgrade");
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed to create post-upgrade snapshot")
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => tracing::warn!(error = %err, "failed to record app version"),
+            }
+        }
+
         Ok(Self {
             paths,
             store,
+            migration,
             vault: vault_service,
             session: session_service,
             connection: connection_service,

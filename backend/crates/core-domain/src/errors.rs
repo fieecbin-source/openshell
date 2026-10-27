@@ -52,6 +52,20 @@ pub enum ErrorCode {
     // 更新
     UpdateSignature,
     UpdateDownload,
+    /// 检测更新失败（网络、限流、清单异常等），可重试。
+    UpdateCheckFailed,
+    /// 当前平台/架构在 Release 中找不到匹配的安装包。
+    UpdateAssetNotFound,
+    /// 下载文件的 sha256 与清单不一致。
+    UpdateChecksumMismatch,
+    /// 发布清单没有提供 sha256，或提供的值不是合法的 64 位十六进制，无法校验安装包。
+    UpdateChecksumMissing,
+    /// 本地磁盘空间不足以完成下载或安装。
+    UpdateInsufficientDisk,
+    /// 安装器启动失败。
+    UpdateInstallFailed,
+    /// 本地数据由更高版本的客户端写入，当前版本拒绝降级覆盖。
+    SchemaNewerThanApp,
 }
 
 impl ErrorCode {
@@ -97,6 +111,13 @@ impl ErrorCode {
             RegistrationClosed => "REGISTRATION_CLOSED",
             UpdateSignature => "UPDATE_SIGNATURE",
             UpdateDownload => "UPDATE_DOWNLOAD",
+            UpdateCheckFailed => "UPDATE_CHECK_FAILED",
+            UpdateAssetNotFound => "UPDATE_ASSET_NOT_FOUND",
+            UpdateChecksumMismatch => "UPDATE_CHECKSUM_MISMATCH",
+            UpdateChecksumMissing => "UPDATE_CHECKSUM_MISSING",
+            UpdateInsufficientDisk => "UPDATE_INSUFFICIENT_DISK",
+            UpdateInstallFailed => "UPDATE_INSTALL_FAILED",
+            SchemaNewerThanApp => "SCHEMA_NEWER_THAN_APP",
         }
     }
 
@@ -104,7 +125,13 @@ impl ErrorCode {
         use ErrorCode::*;
         matches!(
             self,
-            Network | Timeout | Dns | ServerUnreachable | RateLimited | ForwardBind
+            Network
+                | Timeout
+                | Dns
+                | ServerUnreachable
+                | RateLimited
+                | ForwardBind
+                | UpdateCheckFailed
         )
     }
 }

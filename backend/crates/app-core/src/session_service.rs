@@ -436,19 +436,21 @@ impl SessionService {
         let key = self.ssh_key_repo.get(id).await?;
         let secret = match self.secret_repo.get(&key.secret_id)? {
             Some(secret) => secret,
-            None => self.secret_repo.restore_if_deleted(&key.secret_id)?.ok_or_else(|| {
-                DomainError::not_found(
+            None => self
+                .secret_repo
+                .restore_if_deleted(&key.secret_id)?
+                .ok_or_else(|| {
+                    DomainError::not_found(
                     "该私钥的加密内容缺失，无法设置口令。请在「私钥管理」中重新导入该私钥文件。",
                 )
-            })?,
+                })?,
         };
         let pem_bytes = self.vault_manager.decrypt_secret(&secret)?;
         let pem = String::from_utf8(pem_bytes)
             .map_err(|_| DomainError::new(ErrorCode::Validation, "私钥内容不是有效的文本格式"))?;
 
-        openshell_ssh::russh::keys::decode_secret_key(&pem, Some(passphrase)).map_err(|_| {
-            DomainError::validation("私钥口令不正确，无法解密该私钥，请重新输入。")
-        })?;
+        openshell_ssh::russh::keys::decode_secret_key(&pem, Some(passphrase))
+            .map_err(|_| DomainError::validation("私钥口令不正确，无法解密该私钥，请重新输入。"))?;
 
         let cred = self
             .create_credential(

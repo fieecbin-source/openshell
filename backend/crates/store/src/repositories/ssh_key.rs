@@ -7,8 +7,8 @@ use crate::repositories::secret::{insert_secret_row, soft_delete_secret};
 use crate::Store;
 use async_trait::async_trait;
 use openshell_core_domain::{
-    now_ms, CredentialId, DomainError, DomainResult, SecretId, SecretMaterial, SecretRecord, SshKey,
-    SshKeyId, SshKeyRepository,
+    now_ms, CredentialId, DomainError, DomainResult, SecretId, SecretMaterial, SecretRecord,
+    SshKey, SshKeyId, SshKeyRepository,
 };
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 

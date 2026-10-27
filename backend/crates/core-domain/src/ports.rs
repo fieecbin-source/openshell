@@ -194,11 +194,19 @@ pub trait ChannelOpener: Send + Sync {
 }
 
 /// 应用数据目录。
+///
+/// 所有持久化数据（数据库、备份、日志、更新缓存）都必须落在这个目录下，
+/// 它由宿主（Tauri）通过 `app_data_dir()` 提供，与安装目录严格分离：
+/// 覆盖安装、更新、卸载都不会触碰这里的文件。
 #[derive(Debug, Clone)]
 pub struct AppPaths {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
     pub log_dir: PathBuf,
+    /// 数据快照备份目录（更新前自动快照 + 用户手动快照）。
+    pub backups_dir: PathBuf,
+    /// 更新模块工作目录（下载临时文件、状态缓存、更新日志）。
+    pub updater_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -206,6 +214,8 @@ impl AppPaths {
         Self {
             db_path: data_dir.join("openshell.db"),
             log_dir: data_dir.join("logs"),
+            backups_dir: data_dir.join("backups"),
+            updater_dir: data_dir.join("updater"),
             data_dir,
         }
     }

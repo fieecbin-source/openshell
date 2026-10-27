@@ -10,11 +10,11 @@ pub mod sync_service;
 pub mod terminal_router;
 pub mod vault_service;
 
-pub use app_services::AppServices;
+pub use app_services::{AppServices, APP_VERSION};
 pub use card_service::CardService;
 pub use connection_service::{ConnectOverrides, ConnectionService};
 pub use credit_tracker::{CreditTracker, FlowAction};
-pub use event_bus::EventBus;
+pub use event_bus::{forward_events, EventBus};
 pub use extension_registry::ExtensionRegistry;
 pub use op_registry::{CancellationToken, OpRegistry};
 pub use session_service::SessionService;

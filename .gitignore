@@ -60,12 +60,23 @@ app-icon.png
 *.log
 tmp/
 .cache/
+# 构建副产物：llvm-dlltool 有时会在仓库根目录留下 0 字节 .dll 桩文件
+/*.dll
+# 发布脚本产出的资产目录与断点续传临时文件（不应入库）
+/artifacts/
+*.part
 *.db
 *.db-shm
 *.db-wal
 
 # Local-only design/spec documents (not published)
-docs/
+# 注意用 `docs/*` 而不是 `docs/`：后者会让下面的例外规则失效（目录被整体排除后无法再包含文件）
+docs/*
+# 例外：被 README / 发布流程引用的文档必须入库，否则会出现死链与文档丢失
+!docs/UPDATE.md
+!docs/RELEASING.md
+!docs/E2E_UPGRADE.md
+# docs/ACCEPTANCE.md 含本机路径与演练记录，继续本地保留
 
 # Build artifacts & IDE assistant caches
 bin/

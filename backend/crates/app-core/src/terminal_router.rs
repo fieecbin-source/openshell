@@ -90,11 +90,15 @@ impl TerminalRouter {
                                     let _ = out_tx.send(frame).await;
                                     batch_buf.clear();
                                 }
+                                // 注意：不要伪造退出码。历史实现固定写 Some(0)，
+                                // 前端据此显示「正常退出」，掩盖了 sshd 被杀 / 网络中断。
+                                // 真实退出码需要从 SSH 通道的 exit-status 消息获取，
+                                // 目前桥接层拿不到，因此显式传 None 表示「未知」。
                                 event_bus_clone.emit(AppEvent::TerminalNotice {
                                     tab_id: tab_id_clone.clone(),
                                     kind: TerminalNoticeKind::Exit,
-                                    value: None,
-                                    exit_code: Some(0),
+                                    value: Some("remote session closed".to_string()),
+                                    exit_code: None,
                                     paused: None,
                                     dropped_bytes: None,
                                 });
@@ -104,7 +108,6 @@ impl TerminalRouter {
                                 batch_buf.extend_from_slice(&read_buf[..n]);
                                 // 攒够 16 KiB 立即发送
                                 if batch_buf.len() >= 16384 {
-                                    let frame = encode_data_frame(&batch_buf);
                                     let action = tracker_clone.on_send(batch_buf.len());
                                     match action {
                                         FlowAction::Paused => {
@@ -118,6 +121,10 @@ impl TerminalRouter {
                                             });
                                         }
                                         FlowAction::DropOldest(dropped) => {
+                                            // 硬上限持续超限：真的丢弃当前批次。
+                                            // 旧实现只扣计数器、帧照样发送，记账与实际发送量错位，
+                                            // 内存并不会被回收，「丢弃」形同虚设。
+                                            batch_buf.clear();
                                             event_bus_clone.emit(AppEvent::TerminalNotice {
                                                 tab_id: tab_id_clone.clone(),
                                                 kind: TerminalNoticeKind::Flow,
@@ -126,9 +133,11 @@ impl TerminalRouter {
                                                 paused: None,
                                                 dropped_bytes: Some(dropped),
                                             });
+                                            continue;
                                         }
                                         _ => {}
                                     }
+                                    let frame = encode_data_frame(&batch_buf);
                                     if out_tx.send(frame).await.is_err() {
                                         break;
                                     }
@@ -143,18 +152,34 @@ impl TerminalRouter {
                     _ = flush_interval.tick() => {
                         // 距上次 flush ≥ 8 ms
                         if !batch_buf.is_empty() {
-                            let frame = encode_data_frame(&batch_buf);
                             let action = tracker_clone.on_send(batch_buf.len());
-                            if let FlowAction::Paused = action {
-                                event_bus_clone.emit(AppEvent::TerminalNotice {
-                                    tab_id: tab_id_clone.clone(),
-                                    kind: TerminalNoticeKind::Flow,
-                                    value: None,
-                                    exit_code: None,
-                                    paused: Some(true),
-                                    dropped_bytes: None,
-                                });
+                            match action {
+                                FlowAction::Paused => {
+                                    event_bus_clone.emit(AppEvent::TerminalNotice {
+                                        tab_id: tab_id_clone.clone(),
+                                        kind: TerminalNoticeKind::Flow,
+                                        value: None,
+                                        exit_code: None,
+                                        paused: Some(true),
+                                        dropped_bytes: None,
+                                    });
+                                }
+                                FlowAction::DropOldest(dropped) => {
+                                    // 与上面的 16 KiB 快路径一致：真丢当前批次，不发送
+                                    batch_buf.clear();
+                                    event_bus_clone.emit(AppEvent::TerminalNotice {
+                                        tab_id: tab_id_clone.clone(),
+                                        kind: TerminalNoticeKind::Flow,
+                                        value: Some("output buffer truncated".to_string()),
+                                        exit_code: None,
+                                        paused: None,
+                                        dropped_bytes: Some(dropped),
+                                    });
+                                    continue;
+                                }
+                                _ => {}
                             }
+                            let frame = encode_data_frame(&batch_buf);
                             if out_tx.send(frame).await.is_err() {
                                 break;
                             }
@@ -181,7 +206,13 @@ impl TerminalRouter {
             abort_handle: join_handle.abort_handle(),
         };
 
-        self.terminals.write().insert(tab_id, active);
+        // 同一 tabId 重复挂载（前端重连、重新打开同一会话）时必须先终止旧任务。
+        // 只覆盖 map 项不会 abort 旧的 JoinHandle：旧 SSH 通道继续存活并继续往同一个
+        // 前端 Channel 灌数据，表现为「重连后出现两套输出」且通道/任务泄漏。
+        let previous = self.terminals.write().insert(tab_id, active);
+        if let Some(old) = previous {
+            old.abort_handle.abort();
+        }
         Ok(())
     }
 

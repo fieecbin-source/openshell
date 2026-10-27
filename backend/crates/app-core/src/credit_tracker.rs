@@ -65,9 +65,13 @@ impl CreditTracker {
     }
 
     /// 等待直到信用窗口恢复（非暂停态）。
+    ///
+    /// 用短超时轮询兜底：`notify_waiters()` 不会留存许可，
+    /// 若恢复信号恰好发生在「读到 is_paused == true」与「await notified()」之间，
+    /// 单纯 await 会永久挂起，终端从此不再刷新。
     pub async fn wait_for_resume(&self) {
         while self.is_paused.load(Ordering::SeqCst) {
-            self.notify.notified().await;
+            let _ = tokio::time::timeout(Duration::from_millis(50), self.notify.notified()).await;
         }
     }
 
@@ -110,9 +114,24 @@ impl CreditTracker {
     pub fn on_ack(&self, bytes: usize) -> FlowAction {
         let b = bytes as i64;
         self.credit.fetch_add(b, Ordering::SeqCst);
-        let current_unacked = self.unacked_bytes.load(Ordering::SeqCst);
-        let new_unacked = (current_unacked - b).max(0);
-        self.unacked_bytes.store(new_unacked, Ordering::SeqCst);
+
+        // 原子地扣减未确认字节：旧实现是 load + store，两个并发 ack 会互相覆盖，
+        // 未确认字节被少扣，信用窗口越用越大，背压最终失效（大输出时内存暴涨）。
+        // 这里用 compare_exchange 循环而非 fetch_update/try_update，
+        // 既保证 MSRV 1.80 兼容，也避免新版 Rust 的弃用警告。
+        let mut current = self.unacked_bytes.load(Ordering::SeqCst);
+        let new_unacked = loop {
+            let next = (current - b).max(0);
+            match self.unacked_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break next,
+                Err(actual) => current = actual,
+            }
+        };
 
         // 如果低于恢复阈值且当前处于暂停状态，恢复读取
         if new_unacked <= RESUME_THRESHOLD && self.is_paused.swap(false, Ordering::SeqCst) {

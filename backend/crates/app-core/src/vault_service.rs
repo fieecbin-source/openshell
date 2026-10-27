@@ -73,7 +73,9 @@ impl VaultService {
                     state: state_str.to_string(),
                     vault_id: Some(v.id.to_string()),
                     auto_lock_minutes: 15,
-                    keychain_enabled: v.keychain_ref.is_some(),
+                    // 系统钥匙串尚未接入：无论如何都返回 false，
+                    // 避免界面显示「已记住密码」这种虚假安全声明。
+                    keychain_enabled: false,
                     last_opened_at: v.last_opened_at,
                 })
             }
@@ -83,7 +85,7 @@ impl VaultService {
     pub fn init(
         &self,
         master_password: &str,
-        remember_in_keychain: bool,
+        _remember_in_keychain: bool,
         kdf_params: Option<KdfParams>,
     ) -> DomainResult<VaultStatus> {
         let existing = self.vault_repo.load()?;
@@ -96,11 +98,10 @@ impl VaultService {
 
         let now = now_ms();
         let vault_id = VaultId::new();
-        let keychain_ref = if remember_in_keychain {
-            Some(format!("vault:{}", vault_id))
-        } else {
-            None
-        };
+        // 历史实现会在用户勾选后写入 `vault:<id>` 这样的「引用」字符串，
+        // 但从未真正保存/读取系统钥匙串，属于虚假安全声明。
+        // 这里不再写入，字段保留为 None；后续接入 keyring 时再赋值。
+        let keychain_ref: Option<String> = None;
 
         let record = VaultRecord {
             id: vault_id.clone(),
@@ -220,9 +221,12 @@ impl SecretResolver for VaultService {
         let cred = self.credential_repo.get(id).await?;
         let secret = match self.secret_repo.get(&cred.secret_id)? {
             Some(secret) => secret,
-            None => self.secret_repo.restore_if_deleted(&cred.secret_id)?.ok_or_else(|| {
-                DomainError::not_found("该凭据的加密内容缺失，请重新保存该登录凭据后再连接。")
-            })?,
+            None => self
+                .secret_repo
+                .restore_if_deleted(&cred.secret_id)?
+                .ok_or_else(|| {
+                    DomainError::not_found("该凭据的加密内容缺失，请重新保存该登录凭据后再连接。")
+                })?,
         };
 
         let plaintext = self.vault_manager.decrypt_secret(&secret)?;
@@ -258,11 +262,14 @@ impl SecretResolver for VaultService {
         let key = self.ssh_key_repo.get(id).await?;
         let secret = match self.secret_repo.get(&key.secret_id)? {
             Some(secret) => secret,
-            None => self.secret_repo.restore_if_deleted(&key.secret_id)?.ok_or_else(|| {
-                DomainError::not_found(
+            None => self
+                .secret_repo
+                .restore_if_deleted(&key.secret_id)?
+                .ok_or_else(|| {
+                    DomainError::not_found(
                     "该私钥的加密内容缺失，无法用于连接。请在「私钥管理」中重新导入该私钥文件。",
                 )
-            })?,
+                })?,
         };
 
         let pem_bytes = self.vault_manager.decrypt_secret(&secret)?;

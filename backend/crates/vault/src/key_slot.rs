@@ -12,7 +12,11 @@ pub const SLOT_AAD: &[u8] = b"openshell-vault-key-v1";
 /// key_check 中加密的固定明文。
 pub const KEY_CHECK_PLAINTEXT: &[u8] = b"openshell-key-check-v1";
 /// 主密码最小长度。
-pub const MIN_PASSWORD_LEN: usize = 1;
+///
+/// 5 位：本地工具场景下优先降低使用门槛（Argon2id 仍能延缓离线爆破）。
+/// 注意：该限制只作用于 **新建 / 修改** 主密码的路径（`create_with_key`），
+/// `unlock` 不做长度校验，避免历史短密码用户被永久锁在门外。
+pub const MIN_PASSWORD_LEN: usize = 5;
 
 /// 直接对应 `vault` 行字段的密钥槽数据（salt / wrapped / key_check 分开）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,10 +121,15 @@ impl KeySlot {
     }
 }
 
-/// 校验主密码非空（不限制密码位数，支持任意长度密码）。
+/// 校验主密码强度（仅用于创建 / 修改主密码，未用于解锁）。
 pub fn validate_password(password: &str) -> DomainResult<()> {
     if password.is_empty() {
         return Err(error::validation("主密码不能为空"));
+    }
+    if password.chars().count() < MIN_PASSWORD_LEN {
+        return Err(error::validation(format!(
+            "主密码至少需要 {MIN_PASSWORD_LEN} 位"
+        )));
     }
     Ok(())
 }
@@ -192,9 +201,22 @@ mod tests {
 
     #[test]
     fn password_length_is_validated() {
+        // 空密码与短于最小长度的密码都被拒绝（创建/修改主密码路径）
         assert!(validate_password("").is_err());
-        assert!(validate_password("1").is_ok());
+        assert!(validate_password("1").is_err());
+        assert!(validate_password("1234").is_err());
+        // 恰好达到下限（5 位）即通过
+        assert!(validate_password("12345").is_ok());
         assert!(validate_password("0123456789").is_ok());
+    }
+
+    #[test]
+    fn unlock_does_not_enforce_password_length() {
+        // 历史 vault 可能使用短密码，解锁路径不能做长度校验，否则老用户会被锁在门外。
+        // 短密码应当走正常的「解密失败」分支，而不是「参数校验失败」。
+        let (slot, _key) = KeySlot::create(PASSWORD, fast_kdf()).unwrap();
+        let err = slot.unlock("ab").unwrap_err();
+        assert_eq!(err.code, ErrorCode::VaultDecryptFailed);
     }
 
     #[test]

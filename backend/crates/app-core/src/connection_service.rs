@@ -61,6 +61,13 @@ impl ConnectionService {
         overrides: Option<ConnectOverrides>,
     ) -> DomainResult<ConnectionId> {
         let cancel_token = self.op_registry.register(request_id);
+        // 无论从哪个分支提前返回，都要把 request_id 从注册表里摘除。
+        // 历史实现只在部分路径手动 remove，凭据解析失败 / 主机为空等早期错误会让
+        // 令牌永久留在 HashMap 中（每次失败的连接尝试泄漏一条）。
+        let _op_guard = OpTokenGuard {
+            registry: self.op_registry.as_ref(),
+            request_id,
+        };
         if cancel_token.is_cancelled() {
             return Err(DomainError::new(
                 ErrorCode::Cancelled,
@@ -170,6 +177,8 @@ impl ConnectionService {
             private_key_passphrase,
             host_key_policy: session.host_key_policy,
             keepalive_sec: session.keepalive_sec.max(0) as u64,
+            // 连续失败达到会话配置的次数才判定失联，避免偶发丢包直接断连
+            keepalive_max_miss: session.keepalive_max_miss.max(1) as u32,
             timeout_sec: 30,
         };
 
@@ -209,6 +218,8 @@ impl ConnectionService {
                             next_retry_ms: None,
                             error: None,
                         });
+                        // 连接建立即开始监视其关闭，保证界面状态最终与真实链路一致
+                        self.spawn_close_monitor(cid.clone());
                         Ok(cid)
                     }
                     Err(e) => {
@@ -243,5 +254,56 @@ impl ConnectionService {
     /// 列出所有活动连接。
     pub async fn list_connections(&self) -> Vec<ConnectionId> {
         self.ssh_manager.list().await
+    }
+
+    /// 监视连接关闭：远端退出、sshd 被杀、网络中断或保活连续失败时，
+    /// 清理连接表并向前端发送 `ConnectionState::Closed`。
+    ///
+    /// 历史实现完全不发送该事件，界面会永远停留在「已连接」，
+    /// 用户只能看到终端不再响应（哑死）。
+    fn spawn_close_monitor(&self, connection_id: ConnectionId) {
+        let manager = self.ssh_manager.clone();
+        let bus = self.event_bus.clone();
+        let cid = connection_id.clone();
+
+        tokio::spawn(async move {
+            let mut rx = match manager.get(&cid).await {
+                Ok(conn) => conn.closed_channel(),
+                Err(_) => return,
+            };
+
+            // watch 会保存最后一次值，若订阅时连接已关闭则 changed() 不会触发，
+            // 需要先看当前值。
+            if !*rx.borrow() {
+                // 发送端被 drop 时 changed() 返回 Err，同样视为已关闭
+                let _ = rx.changed().await;
+            }
+
+            // 只有仍登记在管理器中才发事件：用户主动断开时条目已被移除，
+            // 这里返回 false，避免重复发送 Closed。
+            if manager.remove_if_active(&cid).await {
+                tracing::warn!(connection_id = %cid, "ssh connection closed or lost");
+                bus.emit(AppEvent::ConnectionState {
+                    connection_id: cid,
+                    state: ConnectionState::Closed,
+                    attempt: 1,
+                    next_retry_ms: None,
+                    error: Some("与服务器的连接已断开（远端关闭或心跳失联）".to_string()),
+                });
+            }
+        });
+    }
+}
+
+/// `connect_session` 的取消令牌守卫：无论从哪个分支提前返回，
+/// 都会把 `request_id` 从操作注册表中移除。
+struct OpTokenGuard<'a> {
+    registry: &'a OpRegistry,
+    request_id: &'a str,
+}
+
+impl Drop for OpTokenGuard<'_> {
+    fn drop(&mut self) {
+        self.registry.remove(self.request_id);
     }
 }
