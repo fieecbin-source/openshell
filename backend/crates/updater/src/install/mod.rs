@@ -113,6 +113,20 @@ mod tests {
     use super::*;
     use crate::model::UpdateAsset;
 
+    /// 当前主机能真正安装的资产名（让策略选择测试在任何 OS 上都成立）。
+    ///
+    /// Linux 用 `.deb` 而不是 `.AppImage`：AppImage 自更新需要知道运行中的可执行文件路径，
+    /// 这里没有提供 `exe_path`，用它会得到「不支持」。
+    fn host_asset_name() -> &'static str {
+        if cfg!(windows) {
+            "OpenShell-1.1.0-windows-x86_64.exe"
+        } else if cfg!(target_os = "macos") {
+            "OpenShell-1.1.0-macos-universal.dmg"
+        } else {
+            "OpenShell-1.1.0-linux-x86_64.deb"
+        }
+    }
+
     fn asset(name: &str) -> UpdateAsset {
         UpdateAsset {
             name: name.to_string(),
@@ -135,10 +149,10 @@ mod tests {
         assert_eq!(described[0], (StrategyKind::PluginUpdater, false));
         assert_eq!(described[1], (StrategyKind::SelfInstall, true));
 
-        let picked = manager
-            .select(&asset("OpenShell-1.1.0-windows-x86_64.exe"))
-            .expect("pick");
+        let picked = manager.select(&asset(host_asset_name())).expect("pick");
         assert_eq!(picked.kind(), StrategyKind::SelfInstall);
+        // 插件策略即便被注册，也永远排在后面且不会被选中
+        assert!(!plugin_updater::PluginUpdater.is_enabled());
     }
 
     #[tokio::test]

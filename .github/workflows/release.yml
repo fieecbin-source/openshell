@@ -52,23 +52,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # bundles 只保留「能接受预发布版本号」的格式：
+          #   - msi(WiX) 要求预发布段全为数字（rc.1 不行）
+          #   - rpm 不允许版本号里出现 `-`
+          # NSIS / dmg / AppImage / deb 都可以正常打包 prerelease。
           - os: windows-latest
             label: windows-x86_64
             platform: windows
             arch: x86_64
             args: '--target x86_64-pc-windows-msvc'
+            bundles: 'nsis'
             rust_targets: ''
           - os: macos-latest
             label: macos-universal
             platform: macos
             arch: universal
             args: '--target universal-apple-darwin'
+            bundles: 'dmg'
             rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
           - os: ubuntu-22.04
             label: linux-x86_64
             platform: linux
             arch: x86_64
             args: '--target x86_64-unknown-linux-gnu'
+            bundles: 'appimage,deb'
             rust_targets: ''
     steps:
       - uses: actions/checkout@v4
@@ -106,7 +113,7 @@ jobs:
         run: pnpm --filter @openshell/frontend build
 
       - name: Build desktop bundles
-        run: pnpm tauri build ${{ matrix.args }}
+        run: pnpm tauri build ${{ matrix.args }} --bundles ${{ matrix.bundles }}
 
       - name: Normalize asset names
         shell: bash
