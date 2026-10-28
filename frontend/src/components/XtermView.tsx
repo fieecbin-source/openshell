@@ -476,7 +476,8 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
             backgroundSize: wallpaper.backgroundSize,
             backgroundPosition: "center",
             backgroundRepeat: "repeat",
-            backgroundColor: currentTheme.background,
+            // 纯色预设没有图片，必须用预设色，否则会退回主题底色导致「选了没变化」
+            backgroundColor: wallpaper.backgroundColor || currentTheme.background,
             filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
             transform: backgroundBlur > 0 ? "scale(1.06)" : undefined,
             opacity: Math.max(0, Math.min(100, backgroundOpacity)) / 100,

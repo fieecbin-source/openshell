@@ -7,7 +7,14 @@ import {
 } from "../stores/settingsStore";
 import { useVaultStore } from "../stores/vaultStore";
 import { formatFriendlyError } from "../lib/errors";
-import { WALLPAPERS, getWallpaperStyle } from "../lib/wallpapers";
+import {
+  WALLPAPER_PRESETS,
+  WALLPAPER_SIZES,
+  SOLID_PRESETS,
+  getBackgroundLabel,
+  getWallpaperStyle,
+  isLightColor,
+} from "../lib/wallpapers";
 import { AboutUpdateTab } from "../updater/AboutUpdateTab";
 
 const MAX_BACKGROUND_BYTES = 8 * 1024 * 1024;
@@ -48,6 +55,8 @@ export const SettingsModal: React.FC = () => {
 
   const backgroundFileRef = useRef<HTMLInputElement>(null);
   const [backgroundMsg, setBackgroundMsg] = useState<string | null>(null);
+  /** 背景选择器分组：全部 / 壁纸 / 纯色 */
+  const [bgFilter, setBgFilter] = useState<"all" | "wallpaper" | "solid">("all");
 
   const [activeTab, setActiveTab] = useState<
     "theme" | "terminal" | "background" | "security" | "export" | "about"
@@ -435,73 +444,168 @@ export const SettingsModal: React.FC = () => {
           {activeTab === "background" && (
             <div className="space-y-5">
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <label className="font-semibold text-[#1d1d1f]">系统外观背景（壁纸 / 纯色）</label>
-                  <span className="text-[11px] text-[#86868b]">
-                    同时作用于终端画布与整个主界面，选择后立即生效
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <label className="font-semibold text-[#1d1d1f]">系统外观背景</label>
+                    <p className="text-[11px] text-[#86868b] mt-0.5">
+                      同时作用于终端画布与整个主界面，选择后立即生效
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-blue-200/70 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-[#0071e3]">
+                    当前：{getBackgroundLabel(backgroundId)}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setBackgroundId("")}
-                    className={`h-16 rounded-xl border flex items-center justify-center text-[11px] font-semibold transition active:scale-[0.98] ${
-                      backgroundId === ""
-                        ? "border-[#0071e3] text-[#0071e3] bg-blue-50/50 shadow-apple-sm"
-                        : "border-black/[0.08] bg-[#f5f5f7] text-[#86868b] hover:border-black/[0.15]"
-                    }`}
-                  >
-                    无背景
-                  </button>
-
-                  {WALLPAPERS.map((w) => {
-                    const selected = backgroundId === w.id;
-                    return (
+                {/* 分类筛选 + 快捷操作 */}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex bg-black/[0.06] p-0.5 rounded-xl text-[11px] font-medium">
+                    {(
+                      [
+                        ["all", `全部 ${WALLPAPER_PRESETS.length + SOLID_PRESETS.length}`],
+                        ["wallpaper", `壁纸 ${WALLPAPER_PRESETS.length}`],
+                        ["solid", `纯色 ${SOLID_PRESETS.length}`],
+                      ] as const
+                    ).map(([id, label]) => (
                       <button
-                        key={w.id}
+                        key={id}
                         type="button"
-                        onClick={() => setBackgroundId(w.id)}
-                        title={w.name}
-                        className={`relative h-16 rounded-xl border overflow-hidden transition active:scale-[0.98] ${
-                          selected
-                            ? "border-[#0071e3] ring-2 ring-[#0071e3]/25 shadow-apple-sm"
-                            : "border-black/[0.08] hover:border-black/[0.2]"
+                        onClick={() => setBgFilter(id)}
+                        className={`px-2.5 py-1 rounded-lg transition active:scale-[0.98] ${
+                          bgFilter === id
+                            ? "bg-white text-[#1d1d1f] font-semibold shadow-apple-sm"
+                            : "text-[#86868b] hover:text-[#1d1d1f]"
                         }`}
                       >
-                        <span
-                          className="absolute inset-0"
-                          style={{
-                            backgroundImage: w.color ? "none" : w.image,
-                            backgroundSize: "cover",
-                            backgroundColor: w.color || currentThemeConfig.background,
-                          }}
-                        />
-                        <span className="absolute inset-x-0 bottom-0 py-1 text-[10px] font-semibold text-white bg-black/45 backdrop-blur-sm">
-                          {w.name}
-                        </span>
-                        {selected && (
-                          <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-[#0071e3] ring-2 ring-white" />
-                        )}
+                        {label}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => backgroundFileRef.current?.click()}
-                    className={`h-16 rounded-xl border border-dashed flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition active:scale-[0.98] ${
-                      backgroundId === "custom"
-                        ? "border-[#0071e3] text-[#0071e3] bg-blue-50/50"
-                        : "border-black/[0.15] text-[#86868b] hover:border-[#0071e3] hover:text-[#0071e3] bg-[#f5f5f7]"
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                    自定义图片
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setBackgroundId("")}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition active:scale-[0.98] ${
+                        backgroundId === ""
+                          ? "border-[#0071e3] text-[#0071e3] bg-blue-50/60"
+                          : "border-black/[0.08] text-[#86868b] hover:border-black/[0.2] hover:text-[#1d1d1f]"
+                      }`}
+                    >
+                      无背景
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => backgroundFileRef.current?.click()}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition active:scale-[0.98] ${
+                        backgroundId === "custom"
+                          ? "border-[#0071e3] text-[#0071e3] bg-blue-50/60"
+                          : "border-black/[0.08] text-[#86868b] hover:border-black/[0.2] hover:text-[#1d1d1f]"
+                      }`}
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      {backgroundId === "custom" ? "更换图片" : "上传图片"}
+                    </button>
+                  </div>
                 </div>
+
+                {/* 壁纸：多层渐变 / 纹理，卡片更大更易辨识 */}
+                {(bgFilter === "all" || bgFilter === "wallpaper") && (
+                  <div className="mt-4">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <span className="text-[11px] font-semibold text-[#1d1d1f]">渐变 / 纹理壁纸</span>
+                      <span className="text-[10px] text-[#86868b]">低对比度配色，不干扰代码阅读</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      {WALLPAPER_PRESETS.map((w) => {
+                        const selected = backgroundId === w.id;
+                        return (
+                          <button
+                            key={w.id}
+                            type="button"
+                            onClick={() => setBackgroundId(w.id)}
+                            title={w.name}
+                            className={`relative aspect-[16/10] rounded-xl border overflow-hidden transition active:scale-[0.98] ${
+                              selected
+                                ? "border-[#0071e3] ring-2 ring-[#0071e3]/25 shadow-apple-sm"
+                                : "border-black/[0.08] hover:border-black/[0.25]"
+                            }`}
+                          >
+                            <span
+                              className="absolute inset-0"
+                              style={{
+                                backgroundImage: w.image,
+                                backgroundSize: WALLPAPER_SIZES[w.id] || "cover",
+                                backgroundColor: currentThemeConfig.background,
+                              }}
+                            />
+                            <span className="absolute inset-x-0 bottom-0 px-1.5 py-1 text-left text-[10px] font-semibold text-white bg-gradient-to-t from-black/70 via-black/25 to-transparent">
+                              {w.name}
+                            </span>
+                            {selected && (
+                              <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#0071e3] text-white shadow-apple-sm">
+                                <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 纯色：色板 + 名称，浅色自动切换深色文字 */}
+                {(bgFilter === "all" || bgFilter === "solid") && (
+                  <div className="mt-4">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <span className="text-[11px] font-semibold text-[#1d1d1f]">纯色</span>
+                      <span className="text-[10px] text-[#86868b]">不叠加纹理，最省 GPU</span>
+                    </div>
+                    <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                      {SOLID_PRESETS.map((w) => {
+                        const selected = backgroundId === w.id;
+                        const light = isLightColor(w.color);
+                        return (
+                          <button
+                            key={w.id}
+                            type="button"
+                            onClick={() => setBackgroundId(w.id)}
+                            title={`${w.name} · ${w.color}`}
+                            className={`relative h-14 rounded-xl border overflow-hidden transition active:scale-[0.97] ${
+                              selected
+                                ? "border-[#0071e3] ring-2 ring-[#0071e3]/25 shadow-apple-sm"
+                                : "border-black/[0.08] hover:border-black/[0.3]"
+                            }`}
+                            style={{ backgroundColor: w.color }}
+                          >
+                            <span
+                              className={`absolute inset-x-0 bottom-0 py-0.5 text-center text-[10px] font-semibold ${
+                                light
+                                  ? "bg-black/[0.04] text-[#1d1d1f]/75"
+                                  : "bg-white/[0.08] text-white/85"
+                              }`}
+                            >
+                              {w.name}
+                            </span>
+                            {selected && (
+                              <svg
+                                className={`absolute right-1 top-1 h-3.5 w-3.5 ${light ? "text-[#0071e3]" : "text-white"}`}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <input
                   ref={backgroundFileRef}

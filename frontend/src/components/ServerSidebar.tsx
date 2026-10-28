@@ -259,7 +259,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             {onOpenMonitor && (
               <button
                 onClick={onOpenMonitor}
-                className="p-1 rounded-lg text-slate-600 hover:text-apple-blue hover:bg-slate-100 transition"
+                className="flex items-center gap-0.5 rounded-lg border border-blue-200/70 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-[#0071e3] hover:border-blue-300 hover:bg-blue-100 transition"
                 title="打开全屏服务器监控大屏"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

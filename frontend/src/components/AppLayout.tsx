@@ -165,6 +165,19 @@ export const AppLayout: React.FC = () => {
   const terminalHostHeight =
     terminalIsSsh && sessionViewMode === "split" ? `${splitRatio}%` : "100%";
 
+  /**
+   * 打开全屏服务器监控大屏（恢复最初版本顶栏的「服务器监控」入口）。
+   *
+   * 大屏覆盖层只在「终端可见」时渲染，若当前处于 SFTP 全屏 / 容器工作区，
+   * 必须先切回终端布局再打开，否则会出现「点了没反应」的错觉。
+   */
+  const handleOpenMonitor = () => {
+    if (!terminalIsSsh || !activeTab?.connectionId) return;
+    setContainerWorkspaceOpen(false);
+    if (sessionViewMode !== "terminal") setSessionViewMode("terminal");
+    setMonitorOpen(true);
+  };
+
   const handleConnectSession = async (session: Session) => {
     const existing = tabs.find((t) => t.sessionId === session.id);
     if (existing) {
@@ -309,6 +322,25 @@ export const AppLayout: React.FC = () => {
               )}
 
             </>
+          )}
+
+          {/* 全屏服务器监控大屏入口：常驻顶栏，蓝色高对比，避免像旧版那样灰得看不见 */}
+          {isConnected && terminalIsSsh && activeTab?.connectionId && (
+            <button
+              onClick={handleOpenMonitor}
+              className="flex items-center space-x-1 rounded-xl border border-blue-200/80 bg-blue-50 px-2.5 py-1 font-semibold text-[#0071e3] hover:border-blue-300 hover:bg-blue-100 transition shadow-apple-sm"
+              title="打开全屏服务器监控大屏"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                />
+              </svg>
+              <span className="hidden md:inline">监控大屏</span>
+            </button>
           )}
 
           <button
@@ -464,7 +496,7 @@ export const AppLayout: React.FC = () => {
                     {sidebarView === "server" ? (
                       <ServerSidebar
                         tab={activeTab}
-                        onOpenMonitor={() => setMonitorOpen(true)}
+                        onOpenMonitor={handleOpenMonitor}
                         onOpenContainer={(containerId) => {
                           setContainerFocusId(containerId);
                           setContainerWorkspaceOpen(true);
