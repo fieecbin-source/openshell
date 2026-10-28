@@ -8,10 +8,14 @@ import { formatFriendlyError } from "../lib/errors";
  * —— 每个人填自己的公网 / 内网服务端都能用。
  */
 const normalizeServerUrl = (raw: string): string => {
-  let value = raw.trim();
+  const value = raw.trim();
   if (!value) return value;
-  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
-  return value.replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(value)) return value.replace(/\/+$/, "");
+  // 没写协议时按端口推断：带 8085 这类非 443 端口说明是明文直连，其余默认 https
+  const host = value.split("/")[0];
+  const port = /:(\d+)$/.exec(host)?.[1];
+  const scheme = port && port !== "443" ? "http" : "https";
+  return `${scheme}://${value}`.replace(/\/+$/, "");
 };
 
 export const SyncSettingsModal: React.FC = () => {
@@ -287,8 +291,8 @@ export const SyncSettingsModal: React.FC = () => {
                   className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] font-mono placeholder-[#86868b]/60 focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
                 />
                 <p className="mt-1 text-[10px] leading-relaxed text-[#86868b]">
-                  填你自己的服务端即可，支持任意公网 / 内网地址；可省略 <code className="font-mono">https://</code>
-                  （默认补 https），带尾斜杠会自动去掉。用 IP 直连且无证书时请写 <code className="font-mono">http://1.2.3.4:8080</code>。
+                  填你自己的服务端即可，支持任意公网 / 内网地址；可省略协议（带 8085 等非 443
+                  端口按 http 处理，其余默认 https），尾部多余的 <code className="font-mono">/</code> 会自动去掉。
                 </p>
               </div>
 
