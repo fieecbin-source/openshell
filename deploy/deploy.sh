@@ -143,13 +143,51 @@ ${COMPOSE_CMD} pull caddy || true
 log_info "Building openshell-server image..."
 ${COMPOSE_CMD} build --pull openshell-server
 
-# 4.1 端口占用预检：提前报错，而不是等 compose 抛出 "port is already allocated"
-if command -v ss >/dev/null 2>&1; then
-    if ss -lntH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${SERVER_PORT}\$"; then
-        log_error "端口 ${SERVER_PORT} 已被占用。请在 .env 中改 SERVER_PORT（如 8086）或释放该端口。"
-        ss -lntp 2>/dev/null | grep -E "[:.]${SERVER_PORT}\s" || true
-        exit 1
+# 4.1 端口占用自愈
+#     最常见的失败场景：上一次部署的 openshell-server 还在跑，端口被它自己占着，
+#     旧脚本直接报错退出 —— 结果就是「服务一直停在老版本，永远升不上去」。
+#     这里先把占用者区分为「自己的容器」和「别人的服务」：
+#       * 自己的容器 → 停掉释放端口，随后 up -d 会用新镜像重建（命名卷不变，数据保留）
+#       * 别人的服务 → 拒绝动手，打印出来让人工处理
+port_busy() {
+    command -v ss >/dev/null 2>&1 || return 1
+    ss -lntH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${SERVER_PORT}\$"
+}
+
+# 只认带 compose 标签的自家容器，避免误杀同端口上别人的服务
+our_containers_on_port() {
+    docker ps -q \
+        --filter "publish=${SERVER_PORT}" \
+        --filter "label=com.docker.compose.service=openshell-server" 2>/dev/null || true
+}
+
+if port_busy; then
+    HOLDER_IDS="$(our_containers_on_port)"
+    if [ -n "${HOLDER_IDS}" ]; then
+        log_warn "端口 ${SERVER_PORT} 被上一次部署的 openshell-server 占用，先停止旧容器再拉起新版本："
+        docker ps --filter "publish=${SERVER_PORT}" --format '    - {{.Names}} ({{.Image}})' || true
+        # shellcheck disable=SC2086
+        docker rm -sf ${HOLDER_IDS} >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5; do
+            port_busy || break
+            sleep 1
+        done
     fi
+fi
+
+# 换过 compose 项目名时 --remove-orphans 管不到旧容器，这里按 compose 标签兜底清理
+STALE_IDS="$(docker ps -aq --filter "label=com.docker.compose.service=openshell-server" 2>/dev/null || true)"
+if [ -n "${STALE_IDS}" ]; then
+    log_info "清理残留的 openshell-server 容器（数据在命名卷中，不受影响）..."
+    # shellcheck disable=SC2086
+    docker rm -sf ${STALE_IDS} >/dev/null 2>&1 || true
+fi
+
+if port_busy; then
+    log_error "端口 ${SERVER_PORT} 被非 OpenShell 进程占用，需人工处理（或改 .env 的 SERVER_PORT，如 8086）。"
+    ss -lntp 2>/dev/null | grep -E "[:.]${SERVER_PORT}\s" || true
+    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' | head -20 || true
+    exit 1
 fi
 
 # 5. Launch containers
