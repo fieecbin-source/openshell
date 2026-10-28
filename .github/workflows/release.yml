@@ -43,6 +43,19 @@ jobs:
       - name: Tag matches version
         run: node scripts/release.mjs check --tag "${{ github.event.inputs.tag_name || github.ref_name }}"
 
+      # 发布守卫 1：仓库里一旦混入本地数据库/环境文件，先在这里拦住，
+      # 否则它们可能被 frontendDist 或 bundler 一起打进安装包。
+      - name: Reject tracked local data / secret files
+        shell: bash
+        run: |
+          found=$(git ls-files | grep -Ei '(^|/)\.env$|\.(db|db-wal|db-shm|sqlite|sqlite3|osvault|pem|key)$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::仓库中存在不应发布的本地数据/密钥文件："
+            echo "$found"
+            exit 1
+          fi
+          echo "ok: no tracked local data or secret files"
+
   build:
     name: Build (${{ matrix.label }})
     if: github.event_name != 'release'
@@ -160,6 +173,22 @@ jobs:
           PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
           node scripts/release.mjs notes ${PREV:+--from "$PREV"} --out artifacts/release-notes.md
 
+      # 发布守卫 2：上传前确认产物里只有安装包与清单，任何本地数据库、
+      # 环境文件、日志、密钥都不允许出现在 release 资产里。
+      - name: Assert artifacts contain no local data
+        shell: bash
+        run: |
+          found=$(find artifacts -maxdepth 1 -type f \
+            \( -name '*.db' -o -name '*.db-*' -o -name '*.sqlite*' \
+               -o -name '.env*' -o -name '*.osvault' -o -name '*.log' \
+               -o -name '*.pem' -o -name '*.key' \) || true)
+          if [ -n "$found" ]; then
+            echo "::error::发布物中包含本地数据文件，已阻止上传："
+            echo "$found"
+            exit 1
+          fi
+          echo "ok: artifacts are clean"
+
       - name: Generate checksums & manifests
         shell: bash
         run: |
@@ -179,6 +208,9 @@ jobs:
           # 含 `-` 的 tag（如 v1.0.2-rc.1）一律标记为预发布：
           # 预发布不会写正式 latest.json（见 sync-updater-meta 的条件）
           prerelease: ${{ contains(github.event.inputs.tag_name || github.ref_name, '-') }}
+          # 同名资产已存在时报错而不是静默覆盖：保证每个版本首次构建出的
+          # 产物（及其 sha256）永久对应那个 release，重跑不会替换已发布的二进制。
+          overwrite_files: false
           files: |
             artifacts/OpenShell-*
             artifacts/SHA256SUMS.txt

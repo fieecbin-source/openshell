@@ -7,7 +7,7 @@
 `frontend/package.json`、`Cargo.toml`、`backend/desktop/tauri.conf.json` 三处版本一致
 （`pnpm version:write` 负责同步，`pnpm version:check` 负责校验）。
 
-## [1.0.2-rc.1] - 2026-10-27
+## [1.0.0] - 2026-10-28
 
 ### 新增
 
