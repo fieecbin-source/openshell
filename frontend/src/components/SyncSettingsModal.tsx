@@ -2,6 +2,18 @@ import React, { useEffect, useState } from "react";
 import { useSyncStore } from "../stores/syncStore";
 import { formatFriendlyError } from "../lib/errors";
 
+/**
+ * 统一服务端地址：用户可能只填 `sync.example.com`、带尾斜杠或带空格。
+ * 客户端会自行拼接 `/v1/...`，所以这里只补协议、去尾斜杠，不做任何域名白名单限制
+ * —— 每个人填自己的公网 / 内网服务端都能用。
+ */
+const normalizeServerUrl = (raw: string): string => {
+  let value = raw.trim();
+  if (!value) return value;
+  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+  return value.replace(/\/+$/, "");
+};
+
 export const SyncSettingsModal: React.FC = () => {
   const {
     config,
@@ -44,12 +56,19 @@ export const SyncSettingsModal: React.FC = () => {
   const handleSubmitAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setSyncFeedback(null);
+    const target = normalizeServerUrl(serverUrl);
+    if (!/^https?:\/\/[^\s/]+/i.test(target)) {
+      setSyncFeedback("服务端地址格式不正确，示例：https://sync.example.com 或 http://1.2.3.4:8080");
+      return;
+    }
+    // 回填规范化后的地址，避免用户看到的与实际使用的不同
+    setServerUrl(target);
     try {
       if (mode === "register") {
-        await register(serverUrl, email, password, inviteCode || undefined);
+        await register(target, email, password, inviteCode || undefined);
         setSyncFeedback("注册并登录成功！");
       } else {
-        await login(serverUrl, email, password);
+        await login(target, email, password);
         setSyncFeedback("登录成功！");
       }
     } catch {
@@ -72,7 +91,7 @@ export const SyncSettingsModal: React.FC = () => {
   const handleAutoSyncToggle = async (val: boolean) => {
     setAutoSync(val);
     try {
-      await saveConfig(serverUrl, val);
+      await saveConfig(normalizeServerUrl(serverUrl), val);
     } catch {}
   };
 
@@ -267,6 +286,10 @@ export const SyncSettingsModal: React.FC = () => {
                   placeholder="https://sync.example.com"
                   className="w-full px-3 py-2 bg-[#f5f5f7] border border-black/[0.08] rounded-xl text-[#1d1d1f] font-mono placeholder-[#86868b]/60 focus:outline-none focus:border-[#0071e3] focus:bg-white transition"
                 />
+                <p className="mt-1 text-[10px] leading-relaxed text-[#86868b]">
+                  填你自己的服务端即可，支持任意公网 / 内网地址；可省略 <code className="font-mono">https://</code>
+                  （默认补 https），带尾斜杠会自动去掉。用 IP 直连且无证书时请写 <code className="font-mono">http://1.2.3.4:8080</code>。
+                </p>
               </div>
 
               <div>
