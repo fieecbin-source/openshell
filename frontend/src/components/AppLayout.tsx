@@ -178,6 +178,23 @@ export const AppLayout: React.FC = () => {
     setMonitorOpen(true);
   };
 
+  /**
+   * 切换视图模式前先收起大屏。
+   *
+   * 大屏只覆盖工作区，顶栏的「终端 / 分屏 / SFTP」按钮仍然可点：如果切到 SFTP 时
+   * 不收起大屏，它会因为「终端不可见」而隐身，再切回终端又立刻复活 ——
+   * 用户看到的就是「进了大屏就回不到终端」。
+   */
+  const handleChangeViewMode = (mode: "terminal" | "split" | "sftp") => {
+    setMonitorOpen(false);
+    setSessionViewMode(mode);
+  };
+
+  // 切换标签时同样收起：大屏属于「某个会话的临时视图」，不该跟着标签串台。
+  useEffect(() => {
+    setMonitorOpen(false);
+  }, [activeTabId]);
+
   const handleConnectSession = async (session: Session) => {
     const existing = tabs.find((t) => t.sessionId === session.id);
     if (existing) {
@@ -286,7 +303,7 @@ export const AppLayout: React.FC = () => {
               {activeTab?.protocol !== "serial" && (
                 <div className="flex items-center rounded-xl border border-slate-200/80 bg-slate-100/90 p-0.5 text-xs font-medium shadow-apple-sm">
                   <button
-                    onClick={() => setSessionViewMode("terminal")}
+                    onClick={() => handleChangeViewMode("terminal")}
                     className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
                       sessionViewMode === "terminal"
                         ? "bg-white text-apple-blue font-bold shadow-apple-sm"
@@ -297,7 +314,7 @@ export const AppLayout: React.FC = () => {
                     📟 终端
                   </button>
                   <button
-                    onClick={() => setSessionViewMode("split")}
+                    onClick={() => handleChangeViewMode("split")}
                     className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
                       sessionViewMode === "split"
                         ? "bg-white text-apple-blue font-bold shadow-apple-sm"
@@ -308,7 +325,7 @@ export const AppLayout: React.FC = () => {
                     ◫ 分屏
                   </button>
                   <button
-                    onClick={() => setSessionViewMode("sftp")}
+                    onClick={() => handleChangeViewMode("sftp")}
                     className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
                       sessionViewMode === "sftp"
                         ? "bg-white text-apple-blue font-bold shadow-apple-sm"
@@ -534,7 +551,8 @@ export const AppLayout: React.FC = () => {
 
                 {/* 资源监控覆盖层 */}
                 {monitorOpen && terminalIsSsh && !!activeTab?.connectionId && sessionTerminalVisible && (
-                  <div className="absolute inset-0 z-20 overflow-hidden bg-white">
+                  // 大屏固定深色底：父层先铺深色，避免挂载瞬间闪出白底
+                  <div className="absolute inset-0 z-20 overflow-hidden bg-[#070c16]">
                     <OverlayBoundary resetKey={`monitor|${activeTab!.connectionId}`}>
                       <MonitorDashboard
                         connId={activeTab!.connectionId!}
