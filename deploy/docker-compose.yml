@@ -17,19 +17,35 @@ services:
       - RELAY_ENABLED=${RELAY_ENABLED:-false}
       - RELAY_ALLOWED_NETS=${RELAY_ALLOWED_NETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32}
       - RUST_LOG=openshell_server=info,tower_http=info
+    # 直接对外暴露 API：宿主机高位端口 → 容器 8080。
+    # 默认 8085，可被 .env 的 SERVER_PORT 覆盖；不占用 80/443，避免与机器上已有站点冲突。
+    ports:
+      - "${SERVER_PORT:-8085}:8080"
+    healthcheck:
+      # alpine 运行镜像自带 busybox wget，无需额外安装 curl
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
     volumes:
       - server-data:/data
     networks:
       - openshell-net
 
+  # 可选 TLS 反代：只有 ENABLE_TLS=true 时才启动（docker compose --profile tls）。
+  # 需要 80/443 空闲且域名已解析到本机（Caddy 自动申请证书）。
+  # 若机器 80/443 已被其它站点占用，请保持关闭，客户端用 http://域名:8085 直连。
   caddy:
+    profiles: ["tls"]
     image: caddy:2.8-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
     environment:
       - DOMAIN=${DOMAIN:-localhost}
+      - SITE_ADDRESS=${SITE_ADDRESS:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

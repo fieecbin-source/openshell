@@ -1,4 +1,8 @@
-{$DOMAIN:localhost} {
+# 可选 TLS 站点（仅在 ENABLE_TLS=true、docker compose --profile tls 时启用）。
+# SITE_ADDRESS 支持两种写法：
+#   1) 纯域名（如 sync.example.com）：Caddy 自动申请 Let's Encrypt 证书，占用 80/443；
+#   2) 显式协议+端口（如 http://sync.example.com:8085）：只做 HTTP 反代，不申请证书。
+{$SITE_ADDRESS:localhost} {
     encode zstd gzip
 
     header {

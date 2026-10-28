@@ -73,6 +73,48 @@ if [ ! -f .env ]; then
     fi
 fi
 
+# 2.1 示例里的固定 BOOTSTRAP_TOKEN 必须换掉，否则等于公开了注册令牌
+if grep -q '^BOOTSTRAP_TOKEN=secret_admin_bootstrap_token_123' .env; then
+    NEW_TOKEN=$(openssl rand -hex 16 2>/dev/null || tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 24 || true)
+    if [ -n "${NEW_TOKEN}" ]; then
+        sed -i "s/^BOOTSTRAP_TOKEN=.*/BOOTSTRAP_TOKEN=${NEW_TOKEN}/" .env
+        # 仓库是公开的，CI 日志会公开展示：这里只提示位置，绝不打印令牌本身
+        log_warn "已生成随机 BOOTSTRAP_TOKEN，值保存在 .env（注册时填到“邀请码”栏）。"
+    fi
+fi
+
+# 2.2 读取端口与 TLS 开关（缺省值需与 docker-compose.yml 保持一致）
+env_value() {
+    local key="$1"
+    local fallback="$2"
+    local raw
+    raw=$(grep -E "^${key}=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r' || true)
+    if [ -z "${raw}" ]; then
+        echo "${fallback}"
+    else
+        echo "${raw}"
+    fi
+}
+
+SERVER_PORT="$(env_value SERVER_PORT 8085)"
+ENABLE_TLS="$(env_value ENABLE_TLS false)"
+DOMAIN_VALUE="$(env_value DOMAIN sync.example.com)"
+
+PROFILE_ARGS=""
+if [ "${ENABLE_TLS}" = "true" ]; then
+    PROFILE_ARGS="--profile tls"
+    if [ "${DOMAIN_VALUE}" = "sync.example.com" ]; then
+        log_warn "ENABLE_TLS=true 但 DOMAIN 仍是示例值，Caddy 申请证书会失败；请改成你自己的域名。"
+    fi
+else
+    # 未启用 TLS 时清掉可能残留的 caddy 容器，释放 80/443
+    if ${COMPOSE_CMD} ps -a --format '{{.Name}}' 2>/dev/null | grep -q 'caddy'; then
+        log_info "TLS 反代未启用：清理残留 caddy 容器（释放 80/443）..."
+        ${COMPOSE_CMD} --profile tls rm -sf caddy >/dev/null 2>&1 || true
+    fi
+fi
+log_info "API 暴露端口: ${SERVER_PORT}  |  TLS 反代: ${ENABLE_TLS}"
+
 # 3. Hot Backup SQLite Database if service is currently running
 BACKUP_DIR="${SCRIPT_DIR}/backups"
 mkdir -p "${BACKUP_DIR}"
@@ -101,9 +143,18 @@ ${COMPOSE_CMD} pull caddy || true
 log_info "Building openshell-server image..."
 ${COMPOSE_CMD} build --pull openshell-server
 
+# 4.1 端口占用预检：提前报错，而不是等 compose 抛出 "port is already allocated"
+if command -v ss >/dev/null 2>&1; then
+    if ss -lntH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${SERVER_PORT}\$"; then
+        log_error "端口 ${SERVER_PORT} 已被占用。请在 .env 中改 SERVER_PORT（如 8086）或释放该端口。"
+        ss -lntp 2>/dev/null | grep -E "[:.]${SERVER_PORT}\s" || true
+        exit 1
+    fi
+fi
+
 # 5. Launch containers
 log_info "Starting containers..."
-${COMPOSE_CMD} up -d --remove-orphans
+${COMPOSE_CMD} ${PROFILE_ARGS} up -d --remove-orphans
 
 # 6. Automated Health & Readiness Check
 log_info "Waiting for openshell-server to become ready..."
@@ -137,8 +188,37 @@ fi
 log_info "Cleaning up unused container images..."
 docker image prune -f || true
 
+# 7.1 从宿主机侧再验一次对外端口（客户端实际访问的路径）
+EXTERNAL_URL=""
+if [ "${ENABLE_TLS}" = "true" ]; then
+    EXTERNAL_URL="https://${DOMAIN_VALUE}"
+else
+    EXTERNAL_URL="http://<你的域名>"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+    HEALTH_OUT=$(curl -fsS --max-time 5 "http://127.0.0.1:${SERVER_PORT}/healthz" 2>/dev/null || true)
+    if echo "${HEALTH_OUT}" | grep -q '"status"'; then
+        log_success "对外端口 ${SERVER_PORT} 健康检查通过：${HEALTH_OUT}"
+    else
+        log_warn "对外端口 ${SERVER_PORT} 暂未响应，请检查防火墙 / 安全组是否放行该端口。"
+    fi
+fi
+
 # 8. Print deployment status
 log_success "=========================================================="
 log_success " OpenShell container deployment completed successfully! "
 log_success "=========================================================="
-${COMPOSE_CMD} ps
+${COMPOSE_CMD} ${PROFILE_ARGS} ps
+
+echo ""
+if [ "${ENABLE_TLS}" = "true" ]; then
+    log_success "客户端服务端地址填写：https://${DOMAIN_VALUE}"
+else
+    log_success "客户端服务端地址填写：http://<你的域名>:${SERVER_PORT}"
+    log_info "（也可用公网 IP：http://<公网IP>:${SERVER_PORT}；请确保防火墙/安全组放行 ${SERVER_PORT}）"
+    log_warn "8085 为明文 HTTP：业务数据仍是 E2EE 密文，但登录令牌会明文传输；有 80/443 时可改用 ENABLE_TLS=true。"
+fi
+if [ -f .env ] && [ "$(grep -c '^BOOTSTRAP_TOKEN=.\+' .env 2>/dev/null || true)" -gt 0 ]; then
+    log_info "首次注册所需的 BOOTSTRAP_TOKEN 在 .env 中查看：grep BOOTSTRAP_TOKEN .env"
+fi

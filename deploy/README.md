@@ -31,12 +31,17 @@ nano .env
 
 修改 `.env` 中的关键配置：
 ```dotenv
-DOMAIN=sync.yourdomain.com
+# 对外端口（高位端口，默认 8085，不占用 80/443）
+SERVER_PORT=8085
+# 是否启用 Caddy 自动 HTTPS（需要 80/443 空闲 + 域名已解析）
+ENABLE_TLS=false
 JWT_SECRET=YOUR_SUPER_SECRET_RANDOM_KEY_AT_LEAST_32_CHARS_LONG
 BOOTSTRAP_TOKEN=your_one_time_bootstrap_token
 ```
 
 ### 2.2 启动服务
+
+默认只启动 `openshell-server`，直接暴露在 `${SERVER_PORT}`（默认 8085）：
 
 ```bash
 docker compose up -d
@@ -46,9 +51,28 @@ docker compose up -d
 ```bash
 docker compose ps
 docker compose logs -f openshell-server
-curl -fsSL https://sync.yourdomain.com/healthz
+curl -fsSL http://127.0.0.1:8085/healthz
 # 响应：{"status":"ok","version":"0.1.0","uptime_sec":12,"time":"2026-10-22T08:00:00.000Z"}
 ```
+
+客户端「服务端地址」填：`http://<你的域名>:8085`（或 `http://<公网IP>:8085`），
+并确保云厂商安全组 / 本机防火墙放行 8085。
+
+### 2.3 可选：Caddy 自动 HTTPS（80/443 空闲时）
+
+```dotenv
+ENABLE_TLS=true
+DOMAIN=sync.yourdomain.com
+SITE_ADDRESS=sync.yourdomain.com
+```
+
+```bash
+docker compose --profile tls up -d
+curl -fsSL https://sync.yourdomain.com/healthz
+```
+
+此时客户端直接填 `https://sync.yourdomain.com`。
+若机器 80/443 已被其它站点占用，请保持 `ENABLE_TLS=false`，用 8085 直连。
 
 ---
 
