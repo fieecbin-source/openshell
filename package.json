@@ -12,6 +12,7 @@
     "version:write": "node scripts/version.mjs",
     "release:check": "node scripts/release.mjs --check",
     "check:copy": "node scripts/check-updater-copy.mjs",
-    "check:package": "node scripts/check-package.mjs"
+    "check:package": "node scripts/check-package.mjs",
+    "package:release": "node scripts/package-release.mjs"
   }
 }

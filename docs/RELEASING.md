@@ -44,6 +44,31 @@ pnpm check:package
 node scripts/release.mjs check            # 版本 + CHANGELOG 一致性
 ```
 
+### 1.1 干净打包（不要手工 `tauri build` + 手动上传）
+
+```bash
+pnpm package:release                 # 预检 → 前端 → 安装包 → 隐私体检 → 清单
+pnpm package:release --bundles nsis  # 指定格式
+```
+
+它比手工打包多三道闸，目的只有一个：**发布包里绝不带上本机的连接数据**。
+
+1. 工作区必须是干净的 git 树（未提交改动一律拒绝，`--allow-dirty` 才放行）；
+2. 仓库里不能有被跟踪的 `*.db` / `.env` / 私钥；
+3. 构建完成后跑 `check-package.mjs`：除了私钥与 token，还会把**本机真实存在**的
+   连接信息（`<数据目录>/openshell.db` 里的主机地址、账号、SSH 公钥，以及本机用户名路径）
+   当作黑名单，对 `frontend/dist` 和安装包二进制抽串比对，命中即失败。
+
+上传时只传 `artifacts/` 里的安装包与清单，不要传便携版 zip、不要传整个 `target/`：
+
+```bash
+gh release upload v1.1.1 artifacts/* --clobber
+```
+
+> 用户数据只存在于 `<app_data_dir>`（Windows 为 `%APPDATA%\\dev.openshell.desktop`），
+> 由 `resolve_data_dir()` 强制与安装目录隔离，因此**任何安装包本身都不含连接信息**；
+> 在同一台机器上重装看到旧主机，属于读到了本机数据目录，不是被打进了包。
+
 ---
 
 ## 2. 打 tag 触发流水线
