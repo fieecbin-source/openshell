@@ -225,7 +225,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         }
       } else {
         // 智能解析从快速连接传入的 initialValues
-        let parsedName = initialValues?.name || "";
+        const parsedName = initialValues?.name || "";
         let parsedHost = initialValues?.host || "";
         let parsedPort = initialValues?.port || 22;
         let parsedUser = initialValues?.username || "root";

@@ -127,6 +127,9 @@ jobs:
       - name: Updater Copy Centralization
         run: node scripts/check-updater-copy.mjs
 
+      - name: Frontend Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm --filter @openshell/frontend typecheck
 

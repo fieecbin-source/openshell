@@ -204,7 +204,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         });
       } else {
         // 解析 SSH: [ssh ]user@host:port
-        let clean = text.replace(/^ssh\s+/i, "").trim();
+        const clean = text.replace(/^ssh\s+/i, "").trim();
         let user = "root";
         let host = clean;
         let port = 22;
