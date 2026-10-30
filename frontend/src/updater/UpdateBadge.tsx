@@ -18,6 +18,11 @@ export const UpdateBadge: React.FC = () => {
   const mandatory = isMandatory(state);
   const busy = state.kind === "downloading" || state.kind === "verifying";
 
+  // 更新下载按钮不再常驻：只有检测到新版本或正在下载时才显示
+  if (!hasUpdate && !busy) {
+    return null;
+  }
+
   const title = mandatory
     ? UPDATE_COPY.badge.mandatory
     : hasUpdate
