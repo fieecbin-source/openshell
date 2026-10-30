@@ -29,6 +29,8 @@ import { ContainerWorkspace } from "./ContainerWorkspace";
 import { useSftpStore } from "../stores/sftpStore";
 import { SessionTree } from "./SessionTree";
 import { OverlayBoundary } from "./OverlayBoundary";
+import { SettingsDropdown } from "./SettingsDropdown";
+import { AboutModal } from "./AboutModal";
 import { UpdateBadge } from "../updater/UpdateBadge";
 import { UpdateModal } from "../updater/UpdateModal";
 import { RecoveryBanner } from "../updater/RecoveryBanner";
@@ -58,6 +60,9 @@ export const AppLayout: React.FC = () => {
   const [multiExecOpen, setMultiExecOpen] = useState(false);
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [portCheckerOpen, setPortCheckerOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"general" | "terminal" | "security">("general");
+  const [aboutModalOpen, setAboutModalOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // FinalShell 经典布局：全终端 / 上下分屏 / 全 SFTP。
   // 布局状态收敛到 store，顶栏、标签栏、会话树共用同一份状态，避免出现「多个 SFTP 视图」互相打架。
@@ -119,9 +124,18 @@ export const AppLayout: React.FC = () => {
     void useUpdaterStore.getState().bootstrap();
   }, []);
 
-  // 监听全局 Ctrl+K / Cmd+K 唤起命令面板
+  // 监听全局 Ctrl+K / Cmd+K / F11 快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F11") {
+        e.preventDefault();
+        setIsFullscreen((prev) => !prev);
+        return;
+      }
+      if (e.key === "Escape" && isFullscreen) {
+        setIsFullscreen(false);
+        return;
+      }
       const target = e.target as HTMLElement | null;
       // 焦点在终端内时不拦截：Ctrl+K 在 bash / readline 里是「删除至行尾」，
       // 被全局命令面板劫持会直接破坏用户的命令行编辑习惯。
@@ -140,7 +154,7 @@ export const AppLayout: React.FC = () => {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [isFullscreen]);
 
   const isHomeActive = activeTabId === null || activeTabId === "home" || tabs.length === 0;
   // 切换标签 / 回到首页时自动退出容器工作区，避免残留在别的会话上
@@ -174,20 +188,10 @@ export const AppLayout: React.FC = () => {
   const handleOpenMonitor = () => {
     if (!terminalIsSsh || !activeTab?.connectionId) return;
     setContainerWorkspaceOpen(false);
-    if (sessionViewMode !== "terminal") setSessionViewMode("terminal");
-    setMonitorOpen(true);
-  };
-
-  /**
-   * 切换视图模式前先收起大屏。
-   *
-   * 大屏只覆盖工作区，顶栏的「终端 / 分屏 / SFTP」按钮仍然可点：如果切到 SFTP 时
-   * 不收起大屏，它会因为「终端不可见」而隐身，再切回终端又立刻复活 ——
-   * 用户看到的就是「进了大屏就回不到终端」。
-   */
-  const handleChangeViewMode = (mode: "terminal" | "split" | "sftp") => {
-    setMonitorOpen(false);
-    setSessionViewMode(mode);
+    if (!monitorOpen && sessionViewMode !== "terminal") {
+      setSessionViewMode("terminal");
+    }
+    setMonitorOpen((prev) => !prev);
   };
 
   // 切换标签时同样收起：大屏属于「某个会话的临时视图」，不该跟着标签串台。
@@ -274,172 +278,147 @@ export const AppLayout: React.FC = () => {
       )}
 
       {/* 顶部主导航栏 (Apple Translucent Frosted Glass Header) */}
-      <header className="relative z-20 flex h-11 shrink-0 items-center gap-2 border-b border-black/[0.08] bg-white/80 backdrop-blur-xl px-3">
-        {/* 顶部左侧品牌区已移除：logo / OpenShell 字样 / 版本号会与左上角区域冲突 */}
+      {!isFullscreen && (
+        <header className="relative z-20 flex h-11 shrink-0 items-center gap-2 border-b border-black/[0.08] bg-white/80 backdrop-blur-xl px-3">
+          {/* 顶部左侧品牌区已移除：logo / OpenShell 字样 / 版本号会与左上角区域冲突 */}
 
-        {/* 顶部中央快捷搜索与直连触发器 (⌘K) */}
-        <div className="flex min-w-0 flex-1 justify-center px-2">
-          <button
-            onClick={() => setCommandPaletteOpen(true)}
-            className="flex w-full max-w-[18rem] items-center justify-between gap-2 px-3 py-1.5 rounded-xl border border-slate-200/80 bg-slate-100/70 text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition text-xs shadow-apple-sm"
-            title="搜索会话、快速连接或切换主题 (Ctrl+K / ⌘K)"
-          >
-            <div className="flex min-w-0 items-center space-x-1.5">
-              <svg className="w-3.5 h-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <span className="truncate text-slate-500">快速搜索会话或直连...</span>
-            </div>
-            <kbd className="hidden shrink-0 px-1.5 py-0.2 text-[10px] font-mono bg-white border border-slate-200/80 rounded-md text-slate-400 shadow-apple-sm md:inline">
-              ⌘K
-            </kbd>
-          </button>
-        </div>
-
-        {/* 顶部右侧快捷工具栏（窄窗口下自动只保留图标，避免按钮被挤压/溢出） */}
-        <div className="flex shrink-0 items-center gap-1.5 text-xs">
-          {isConnected && (
-            <>
-              {activeTab?.protocol !== "serial" && (
-                <div className="flex items-center rounded-xl border border-slate-200/80 bg-slate-100/90 p-0.5 text-xs font-medium shadow-apple-sm">
-                  <button
-                    onClick={() => handleChangeViewMode("terminal")}
-                    className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
-                      sessionViewMode === "terminal"
-                        ? "bg-white text-apple-blue font-bold shadow-apple-sm"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                    title="全屏终端模式"
-                  >
-                    📟 终端
-                  </button>
-                  <button
-                    onClick={() => handleChangeViewMode("split")}
-                    className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
-                      sessionViewMode === "split"
-                        ? "bg-white text-apple-blue font-bold shadow-apple-sm"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                    title="经典分屏模式 (上终端 + 下SFTP，FinalShell 体验)"
-                  >
-                    ◫ 分屏
-                  </button>
-                  <button
-                    onClick={() => handleChangeViewMode("sftp")}
-                    className={`px-2 py-0.5 rounded-lg transition text-[11px] font-medium ${
-                      sessionViewMode === "sftp"
-                        ? "bg-white text-apple-blue font-bold shadow-apple-sm"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                    title="全屏 SFTP 文件管理器"
-                  >
-                    📁 SFTP
-                  </button>
-                </div>
-              )}
-
-            </>
-          )}
-
-          {/* 全屏服务器监控大屏入口：常驻顶栏，蓝色高对比，避免像旧版那样灰得看不见 */}
-          {isConnected && terminalIsSsh && activeTab?.connectionId && (
+          {/* 顶部中央快捷搜索与直连触发器 (⌘K) */}
+          <div className="flex min-w-0 flex-1 justify-center px-2">
             <button
-              onClick={handleOpenMonitor}
-              className="flex items-center space-x-1 rounded-xl border border-blue-200/80 bg-blue-50 px-2.5 py-1 font-semibold text-[#0071e3] hover:border-blue-300 hover:bg-blue-100 transition shadow-apple-sm"
-              title="打开全屏服务器监控大屏"
+              onClick={() => setCommandPaletteOpen(true)}
+              className="flex w-full max-w-[18rem] items-center justify-between gap-2 px-3 py-1.5 rounded-xl border border-slate-200/80 bg-slate-100/70 text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition text-xs shadow-apple-sm"
+              title="搜索会话、快速连接或切换主题 (Ctrl+K / ⌘K)"
+            >
+              <div className="flex min-w-0 items-center space-x-1.5">
+                <svg className="w-3.5 h-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <span className="truncate text-slate-500">快速搜索会话或直连...</span>
+              </div>
+              <kbd className="hidden shrink-0 px-1.5 py-0.2 text-[10px] font-mono bg-white border border-slate-200/80 rounded-md text-slate-400 shadow-apple-sm md:inline">
+                ⌘K
+              </kbd>
+            </button>
+          </div>
+
+          {/* 顶部右侧快捷工具栏 */}
+          <div className="flex shrink-0 items-center gap-1.5 text-xs">
+            {/* 全屏服务器监控大屏入口 */}
+            {isConnected && terminalIsSsh && activeTab?.connectionId && (
+              <button
+                onClick={handleOpenMonitor}
+                className={`flex items-center space-x-1 rounded-xl border px-2.5 py-1 font-semibold transition shadow-apple-sm ${
+                  monitorOpen
+                    ? "border-blue-400 bg-blue-100 text-[#0071e3]"
+                    : "border-blue-200/80 bg-blue-50 text-[#0071e3] hover:border-blue-300 hover:bg-blue-100"
+                }`}
+                title={monitorOpen ? "返回终端 (再次点击或按 Esc 切回)" : "打开全屏服务器监控大屏"}
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                  />
+                </svg>
+                <span className="hidden md:inline">{monitorOpen ? "返回终端" : "监控大屏"}</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => setForwardModalOpen(true)}
+              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+              title="端口转发与隧道"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0 text-apple-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+              <span className="hidden xl:inline">端口转发</span>
+            </button>
+
+            <button
+              onClick={() => setMultiExecOpen(!multiExecOpen)}
+              className={`hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border transition shadow-apple-sm font-medium ${
+                multiExecOpen
+                  ? "bg-amber-50 border-amber-300 text-amber-800"
+                  : "bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50"
+              }`}
+              title="多会话同步输入"
             >
               <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" />
               </svg>
-              <span className="hidden md:inline">监控大屏</span>
+              <span className="hidden xl:inline">多机同步</span>
             </button>
-          )}
 
-          <button
-            onClick={() => setForwardModalOpen(true)}
-            className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
-            title="端口转发与隧道"
-          >
-            <svg className="w-3.5 h-3.5 shrink-0 text-apple-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-            </svg>
-            <span className="hidden xl:inline">端口转发</span>
-          </button>
-
-          <button
-            onClick={() => setMultiExecOpen(!multiExecOpen)}
-            className={`hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border transition shadow-apple-sm font-medium ${
-              multiExecOpen
-                ? "bg-amber-50 border-amber-300 text-amber-800"
-                : "bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50"
-            }`}
-            title="多会话同步输入"
-          >
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" />
-            </svg>
-            <span className="hidden xl:inline">多机同步</span>
-          </button>
-
-          <button
-            onClick={() => setPortCheckerOpen(true)}
-            className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
-            title="网络连通探测 (Ping / TCP)"
-          >
-            <svg className="w-3.5 h-3.5 shrink-0 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            <span className="hidden xl:inline">连通探测</span>
-          </button>
-
-          <button
-            onClick={() => setImportExportOpen(true)}
-            className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
-            title="导入 / 导出备份"
-          >
-            <svg className="w-3.5 h-3.5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            <span className="hidden xl:inline">导入/导出</span>
-          </button>
-
-          {/* 顶部常驻同步小组件 (Apple Header Capsule) */}
-          <SyncStatusWidget variant="header" />
-
-          {/* 更新入口：有新版本时右上角出现红点 */}
-          <UpdateBadge />
-
-          {/* 设置按钮 */}
-          <button
-            onClick={() => setSettingsModalOpen(true)}
-            className="p-1.5 rounded-xl border border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm"
-            title="系统偏好设置与外观"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-
-          {status && status.state === "unlocked" && (
             <button
-              onClick={() => lock()}
-              className="flex items-center space-x-1.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-apple-sm"
-              title="锁定主保险库"
+              onClick={() => setPortCheckerOpen(true)}
+              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+              title="网络连通探测 (Ping / TCP)"
             >
-              <svg className="h-3.5 w-3.5 shrink-0 text-apple-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+              <svg className="w-3.5 h-3.5 shrink-0 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
-              <span className="hidden xl:inline">锁定</span>
+              <span className="hidden xl:inline">连通探测</span>
             </button>
-          )}
-        </div>
-      </header>
+
+            <button
+              onClick={() => setImportExportOpen(true)}
+              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+              title="导入 / 导出备份"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span className="hidden xl:inline">导入/导出</span>
+            </button>
+
+            {/* 顶部常驻同步小组件 (Apple Header Capsule) */}
+            <SyncStatusWidget variant="header" />
+
+            {/* 更新入口：有新版本时右上角出现红点 */}
+            <UpdateBadge />
+
+            {/* 设置下拉入口 */}
+            <SettingsDropdown
+              onOpenSettings={(tab) => {
+                setSettingsTab(tab || "general");
+                setSettingsModalOpen(true);
+              }}
+              onOpenSync={() => useSyncStore.getState().setModalOpen(true)}
+              onOpenAbout={() => setAboutModalOpen(true)}
+              onCheckUpdate={async () => {
+                await useUpdaterStore.getState().check(true);
+              }}
+            />
+
+            {status && status.state === "unlocked" && (
+              <button
+                onClick={() => lock()}
+                className="flex items-center space-x-1.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-apple-sm"
+                title="锁定主保险库"
+              >
+                <svg className="h-3.5 w-3.5 shrink-0 text-apple-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                </svg>
+                <span className="hidden xl:inline">锁定</span>
+              </button>
+            )}
+          </div>
+        </header>
+      )}
+
+      {/* 终端全屏退出悬浮按钮 */}
+      {isFullscreen && (
+        <button
+          onClick={() => setIsFullscreen(false)}
+          className="fixed top-2 right-4 z-50 flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/80 text-white text-xs backdrop-blur-md hover:bg-slate-900 shadow-apple-md transition opacity-50 hover:opacity-100"
+          title="退出全屏 (Esc / F11)"
+        >
+          <span>✕ 退出全屏 (Esc)</span>
+        </button>
+      )}
 
       {/* 数据恢复提示：仅在迁移失败并已回滚时出现 */}
       <RecoveryBanner />
@@ -452,6 +431,8 @@ export const AppLayout: React.FC = () => {
       >
         {/* 顶部标签栏（含常驻 🏠 主页 标签，随时点击无缝返回大盘） */}
         <TerminalTabs
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={() => setIsFullscreen((prev) => !prev)}
           onNewTabClick={() => handleNewSession()}
           onHomeClick={() => useTerminalStore.getState().setActiveTab("home")}
         />
@@ -481,7 +462,7 @@ export const AppLayout: React.FC = () => {
             style={{ visibility: isHomeActive ? "hidden" : "visible" }}
             aria-hidden={isHomeActive}
           >
-            {activeTab && activeTab.protocol === "ssh" && (
+            {!isFullscreen && activeTab && activeTab.protocol === "ssh" && (
               <div className="shrink-0 flex flex-col h-full border-r border-slate-200/80 bg-[#fbfbfd]">
                 <div className="flex items-center p-1 bg-slate-100/90 border-b border-slate-200/80 text-[11px] font-semibold gap-0.5">
                   <button
@@ -732,7 +713,8 @@ export const AppLayout: React.FC = () => {
       {importExportOpen && (
         <ImportExportModal onClose={() => setImportExportOpen(false)} />
       )}
-      <SettingsModal />
+      <SettingsModal initialTab={settingsTab} />
+      <AboutModal open={aboutModalOpen} onClose={() => setAboutModalOpen(false)} />
       <UpdateModal />
       <SyncSettingsModal />
       <PortCheckerModal

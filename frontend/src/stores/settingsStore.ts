@@ -374,6 +374,61 @@ function normalizeCustomThemes(raw: unknown): ThemeMap {
   return Object.fromEntries(entries) as ThemeMap;
 }
 
+function hexToRgb(hex: string): string {
+  const clean = hex.replace("#", "");
+  if (clean.length === 3) {
+    const r = parseInt(clean[0] + clean[0], 16);
+    const g = parseInt(clean[1] + clean[1], 16);
+    const b = parseInt(clean[2] + clean[2], 16);
+    return `${r} ${g} ${b}`;
+  }
+  if (clean.length >= 6) {
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    return `${r} ${g} ${b}`;
+  }
+  return "255 255 255";
+}
+
+/** 动态同步全局 CSS 变量与主题类别，彻底解决“所有主题看起来都一样”的问题 */
+export function applyThemeToDocument(themeKey: string, customThemes: ThemeMap = {}) {
+  if (typeof document === "undefined") return;
+  const cfg = resolveTheme(themeKey, customThemes);
+  const root = document.documentElement;
+
+  const isLight = [
+    "catppuccin_latte",
+    "solarized_light",
+    "github_light",
+    "light",
+    "apple_light",
+  ].includes(themeKey);
+
+  root.setAttribute("data-theme", themeKey);
+  root.classList.toggle("dark", !isLight);
+
+  if (isLight) {
+    root.style.setProperty("--os-canvas", "244 244 246");
+    root.style.setProperty("--os-surface", "255 255 255");
+    root.style.setProperty("--os-surface-muted", "250 250 252");
+    root.style.setProperty("--os-line", "0 0 0");
+    root.style.setProperty("--os-ink", "20 20 22");
+    root.style.setProperty("--os-ink-secondary", "95 95 102");
+    root.style.setProperty("--os-ink-tertiary", "138 138 144");
+    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || "#0071e3"));
+  } else {
+    root.style.setProperty("--os-canvas", hexToRgb(cfg.background));
+    root.style.setProperty("--os-surface", hexToRgb(cfg.black || "#1a1b26"));
+    root.style.setProperty("--os-surface-muted", hexToRgb(cfg.background));
+    root.style.setProperty("--os-line", "255 255 255");
+    root.style.setProperty("--os-ink", hexToRgb(cfg.foreground));
+    root.style.setProperty("--os-ink-secondary", hexToRgb(cfg.brightBlack || "#94a3b8"));
+    root.style.setProperty("--os-ink-tertiary", hexToRgb(cfg.white || "#64748b"));
+    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || "#38bdf8"));
+  }
+}
+
 export type CursorStyle = "bar" | "block" | "underline";
 export type RendererKind = "dom" | "webgl";
 
@@ -503,6 +558,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           typeof bgBlurRec?.value_json === "number" ? (bgBlurRec.value_json as number) : 6,
         backgroundCustom: (bgCustomRec?.value_json as string) || null,
       });
+      applyThemeToDocument(theme, customThemes);
     } catch (e) {
       console.warn("load settings error", e);
     }
@@ -510,6 +566,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setTheme: async (theme: string) => {
     set({ theme });
+    applyThemeToDocument(theme, get().customThemes);
     try {
       await settingsSet("user", "terminal.theme", theme);
     } catch {}
