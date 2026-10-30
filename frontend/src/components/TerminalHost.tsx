@@ -38,7 +38,7 @@ export const TerminalHost: React.FC<TerminalHostProps> = ({ visible, style }) =>
 
   return (
     <div
-      className="absolute inset-x-0 top-0 overflow-hidden bg-white"
+      className="absolute inset-x-0 top-0 overflow-hidden bg-transparent"
       style={style ?? { height: "100%" }}
     >
       {tabs.map((tab) => {

@@ -144,8 +144,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     if (!containerRef.current) return;
     const opts = initOptionsRef.current;
 
-    // 壁纸启用时需要透出背景图层，因此必须开启 allowTransparency；
-    // WebGL 渲染器与透明背景不兼容，只在关闭壁纸且用户显式选择时才启用。
+    // 允许透明背景：必须初始即为 true，以便动态切换壁纸/纯色背景时 xterm 画布能够即时透出背景
     const useWebgl = opts.renderer === "webgl" && !opts.hasWallpaper;
 
     const term = new Terminal({
@@ -153,12 +152,12 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       cursorStyle: opts.cursorStyle,
       fontSize: opts.fontSize,
       fontFamily: opts.fontFamily,
-      allowTransparency: opts.hasWallpaper,
+      allowTransparency: true,
       scrollback: opts.scrollback,
       // unicode11 与部分宽度计算 API 需要开启 proposed API
       allowProposedApi: true,
       theme: opts.hasWallpaper
-        ? { ...opts.theme, background: withAlpha(opts.theme.background, 0.78) }
+        ? { ...opts.theme, background: withAlpha(opts.theme.background, 0.4) }
         : opts.theme,
     });
 
@@ -370,13 +369,24 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     };
   }, [ctxMenu]);
 
-  // 2. 动态响应主题、字体、滚动缓冲等设置更改
+  // 2. 动态响应主题、字体、壁纸、透明度与滚动缓冲等设置更改
   useEffect(() => {
     const term = terminalRef.current;
     if (!term) return;
-    term.options.theme = hasWallpaper
-      ? { ...currentTheme, background: withAlpha(currentTheme.background, 0.78) }
-      : currentTheme;
+
+    let termBg = currentTheme.background;
+    if (wallpaper) {
+      if (wallpaper.backgroundColor && wallpaper.backgroundImage === "none") {
+        // 纯色背景：高度透明，直接透出所选纯色
+        termBg = withAlpha(currentTheme.background, 0.08);
+      } else {
+        // 渐变 / 纹理 / 本地图片壁纸：根据用户设置的透明度计算遮罩深度
+        const alpha = Math.max(0.12, Math.min(0.88, 1 - (backgroundOpacity / 100) * 0.75));
+        termBg = withAlpha(currentTheme.background, alpha);
+      }
+    }
+
+    term.options.theme = { ...currentTheme, background: termBg };
     term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
     term.options.cursorBlink = cursorBlink;
@@ -397,7 +407,8 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     cursorBlink,
     cursorStyle,
     scrollback,
-    hasWallpaper,
+    wallpaper,
+    backgroundOpacity,
     currentTheme,
   ]);
 
@@ -488,21 +499,24 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, logSessionOutput]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-surface-muted">
-      {/* 自定义壁纸背景层（位于终端画布下方，不拦截任何交互） */}
+    <div className="relative h-full w-full overflow-hidden bg-transparent">
+      {/* 自定义壁纸 / 纯色背景层（位于终端画布下方，不拦截任何交互） */}
       {wallpaper && (
         <div
-          className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+          className="absolute inset-0 pointer-events-none transition-all duration-300"
           style={{
             backgroundImage: wallpaper.backgroundImage,
             backgroundSize: wallpaper.backgroundSize,
             backgroundPosition: "center",
-            backgroundRepeat: "repeat",
-            // 纯色预设没有图片，必须用预设色，否则会退回主题底色导致「选了没变化」
+            backgroundRepeat: wallpaper.backgroundImage.includes("repeating") ? "repeat" : "no-repeat",
+            // 纯色预设使用对应颜色，避免退回主题底色
             backgroundColor: wallpaper.backgroundColor || currentTheme.background,
             filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
             transform: backgroundBlur > 0 ? "scale(1.06)" : undefined,
-            opacity: Math.max(0, Math.min(100, backgroundOpacity)) / 100,
+            opacity:
+              wallpaper.backgroundColor && wallpaper.backgroundImage === "none"
+                ? 1
+                : Math.max(0.1, Math.min(100, backgroundOpacity) / 100),
           }}
         />
       )}

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 interface SettingsDropdownProps {
-  onOpenSettings: (tab?: "general" | "terminal") => void;
+  onOpenSettings: (tab?: "general" | "wallpaper" | "terminal" | "security") => void;
   onOpenSync: () => void;
   onOpenAbout: () => void;
   onCheckUpdate: () => void;
@@ -68,10 +68,24 @@ export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
             }}
             className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
           >
-            <span className="text-sm">⚙️</span>
+            <span className="text-sm">🎨</span>
             <div>
-              <div className="font-medium text-slate-800">通用外观与壁纸</div>
-              <div className="text-[10px] text-slate-400">主题、壁纸与窗口渲染</div>
+              <div className="font-medium text-slate-800">系统主题与配色</div>
+              <div className="text-[10px] text-slate-400">深色/明亮多套精选主题</div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => {
+              setOpen(false);
+              onOpenSettings("wallpaper");
+            }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
+          >
+            <span className="text-sm">🖼️</span>
+            <div>
+              <div className="font-medium text-slate-800">壁纸与背景设置</div>
+              <div className="text-[10px] text-slate-400">本地图片、丰富纯色与艺术纹理</div>
             </div>
           </button>
 
@@ -84,8 +98,22 @@ export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
           >
             <span className="text-sm">📟</span>
             <div>
-              <div className="font-medium text-slate-800">终端显示设置</div>
-              <div className="text-[10px] text-slate-400">字体、字号、光标与缓冲</div>
+              <div className="font-medium text-slate-800">终端显示偏好</div>
+              <div className="text-[10px] text-slate-400">字体、字号、光标与渲染引擎</div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => {
+              setOpen(false);
+              onOpenSettings("security");
+            }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
+          >
+            <span className="text-sm">🔒</span>
+            <div>
+              <div className="font-medium text-slate-800">安全与主密码</div>
+              <div className="text-[10px] text-slate-400">主保险库密码与密钥派生</div>
             </div>
           </button>
 

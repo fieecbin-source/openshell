@@ -60,7 +60,7 @@ export const AppLayout: React.FC = () => {
   const [multiExecOpen, setMultiExecOpen] = useState(false);
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [portCheckerOpen, setPortCheckerOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "terminal" | "security">("general");
+  const [settingsTab, setSettingsTab] = useState<"general" | "wallpaper" | "terminal" | "security">("general");
   const [aboutModalOpen, setAboutModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -267,7 +267,7 @@ export const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#f5f5f7] font-sans antialiased select-none text-slate-800">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans antialiased select-none text-ink">
       {/* 系统外观背景层：壁纸 / 纯色，位于所有面板之下，不拦截任何交互 */}
       {shellBackgroundStyle && (
         <div
@@ -279,7 +279,7 @@ export const AppLayout: React.FC = () => {
 
       {/* 顶部主导航栏 (Apple Translucent Frosted Glass Header) */}
       {!isFullscreen && (
-        <header className="relative z-20 flex h-11 shrink-0 items-center gap-2 border-b border-black/[0.08] bg-white/80 backdrop-blur-xl px-3">
+        <header className="relative z-20 flex h-11 shrink-0 items-center gap-2 border-b border-line/10 bg-surface/85 backdrop-blur-xl px-3 text-ink">
           {/* 顶部左侧品牌区已移除：logo / OpenShell 字样 / 版本号会与左上角区域冲突 */}
 
           {/* 顶部中央快捷搜索与直连触发器 (⌘K) */}
@@ -426,7 +426,7 @@ export const AppLayout: React.FC = () => {
       {/* 主工作区 */}
       <div
         className={`relative z-10 flex flex-1 flex-col overflow-hidden ${
-          shellBackgroundStyle ? "bg-white/55" : "bg-white"
+          shellBackgroundStyle ? "bg-transparent" : "bg-canvas"
         }`}
       >
         {/* 顶部标签栏（含常驻 🏠 主页 标签，随时点击无缝返回大盘） */}
@@ -463,8 +463,8 @@ export const AppLayout: React.FC = () => {
             aria-hidden={isHomeActive}
           >
             {!isFullscreen && activeTab && activeTab.protocol === "ssh" && (
-              <div className="shrink-0 flex flex-col h-full border-r border-slate-200/80 bg-[#fbfbfd]">
-                <div className="flex items-center p-1 bg-slate-100/90 border-b border-slate-200/80 text-[11px] font-semibold gap-0.5">
+              <div className="shrink-0 flex flex-col h-full border-r border-line/10 bg-surface-muted">
+                <div className="flex items-center p-1 bg-surface-muted/90 border-b border-line/10 text-[11px] font-semibold gap-0.5">
                   <button
                     onClick={() => setSidebarView("server")}
                     className={`flex-1 py-1 rounded-md transition text-center ${
@@ -515,7 +515,7 @@ export const AppLayout: React.FC = () => {
 
             <div
               className={`flex-1 flex flex-col overflow-hidden ${
-                shellBackgroundStyle ? "bg-white/70" : "bg-white"
+                shellBackgroundStyle ? "bg-transparent" : "bg-canvas"
               }`}
             >
               {/* 快捷命令片段栏 (SSH 模式)；容器工作区打开时一并让位 */}
@@ -523,7 +523,7 @@ export const AppLayout: React.FC = () => {
                 <SnippetBar activeTabId={activeTabId} />
               )}
 
-              <div className="relative flex-1 overflow-hidden bg-white">
+              <div className="relative flex-1 overflow-hidden bg-transparent">
                 {/* 终端宿主：所有已打开标签的 xterm 实例常驻挂载，切换标签/视图不重建 */}
                 <TerminalHost
                   visible={sessionTerminalVisible}

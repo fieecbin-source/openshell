@@ -345,6 +345,54 @@ export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
     brightCyan: "#124f54",
     brightWhite: "#24292f",
   },
+  solarized_light: {
+    name: "Solarized Light",
+    background: "#fdf6e3",
+    foreground: "#657b83",
+    cursor: "#586e75",
+    cursorAccent: "#fdf6e3",
+    selectionBackground: "#eee8d5",
+    black: "#073642",
+    red: "#dc322f",
+    green: "#859900",
+    yellow: "#b58900",
+    blue: "#268bd2",
+    magenta: "#d33682",
+    cyan: "#2aa198",
+    white: "#eee8d5",
+    brightBlack: "#586e75",
+    brightRed: "#cb4b16",
+    brightGreen: "#586e75",
+    brightYellow: "#657b83",
+    brightBlue: "#839496",
+    brightMagenta: "#6c71c4",
+    brightCyan: "#93a1a1",
+    brightWhite: "#fdf6e3",
+  },
+  github_light: {
+    name: "GitHub Light",
+    background: "#ffffff",
+    foreground: "#1f2328",
+    cursor: "#0969da",
+    cursorAccent: "#ffffff",
+    selectionBackground: "#0969da25",
+    black: "#1f2328",
+    red: "#cf222e",
+    green: "#1a7f37",
+    yellow: "#9a6700",
+    blue: "#0969da",
+    magenta: "#8250df",
+    cyan: "#1b7c83",
+    white: "#6e7781",
+    brightBlack: "#57606a",
+    brightRed: "#a40e26",
+    brightGreen: "#116329",
+    brightYellow: "#4d2d00",
+    brightBlue: "#0550ae",
+    brightMagenta: "#6639ba",
+    brightCyan: "#124f54",
+    brightWhite: "#1f2328",
+  },
 };
 
 /** 用户导入的主题集合。 */
@@ -391,32 +439,37 @@ function hexToRgb(hex: string): string {
   return "255 255 255";
 }
 
+export function isLightBackground(hexColor?: string): boolean {
+  if (!hexColor) return false;
+  const hex = hexColor.replace("#", "");
+  if (hex.length < 6) return false;
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  if ([r, g, b].some(Number.isNaN)) return false;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55;
+}
+
 /** 动态同步全局 CSS 变量与主题类别，彻底解决“所有主题看起来都一样”的问题 */
 export function applyThemeToDocument(themeKey: string, customThemes: ThemeMap = {}) {
   if (typeof document === "undefined") return;
   const cfg = resolveTheme(themeKey, customThemes);
   const root = document.documentElement;
 
-  const isLight = [
-    "catppuccin_latte",
-    "solarized_light",
-    "github_light",
-    "light",
-    "apple_light",
-  ].includes(themeKey);
+  const isLight = isLightBackground(cfg.background);
 
   root.setAttribute("data-theme", themeKey);
   root.classList.toggle("dark", !isLight);
 
   if (isLight) {
-    root.style.setProperty("--os-canvas", "244 244 246");
+    root.style.setProperty("--os-canvas", hexToRgb(cfg.background));
     root.style.setProperty("--os-surface", "255 255 255");
-    root.style.setProperty("--os-surface-muted", "250 250 252");
+    root.style.setProperty("--os-surface-muted", hexToRgb(cfg.selectionBackground ? cfg.selectionBackground.slice(0, 7) : "#f6f8fa"));
     root.style.setProperty("--os-line", "0 0 0");
-    root.style.setProperty("--os-ink", "20 20 22");
-    root.style.setProperty("--os-ink-secondary", "95 95 102");
+    root.style.setProperty("--os-ink", hexToRgb(cfg.foreground));
+    root.style.setProperty("--os-ink-secondary", hexToRgb(cfg.brightBlack || "#6e7781"));
     root.style.setProperty("--os-ink-tertiary", "138 138 144");
-    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || "#0071e3"));
+    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || "#0969da"));
   } else {
     root.style.setProperty("--os-canvas", hexToRgb(cfg.background));
     root.style.setProperty("--os-surface", hexToRgb(cfg.black || "#1a1b26"));
@@ -425,7 +478,7 @@ export function applyThemeToDocument(themeKey: string, customThemes: ThemeMap = 
     root.style.setProperty("--os-ink", hexToRgb(cfg.foreground));
     root.style.setProperty("--os-ink-secondary", hexToRgb(cfg.brightBlack || "#94a3b8"));
     root.style.setProperty("--os-ink-tertiary", hexToRgb(cfg.white || "#64748b"));
-    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || "#38bdf8"));
+    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || cfg.cursor || "#38bdf8"));
   }
 }
 
