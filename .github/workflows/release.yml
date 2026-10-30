@@ -128,6 +128,38 @@ jobs:
       - name: Build desktop bundles
         run: pnpm tauri build ${{ matrix.args }} --bundles ${{ matrix.bundles }}
 
+      - name: Package Windows portable zip
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          mkdir -p target/portable
+          EXE_PATH=$(find target -name "openshell.exe" -not -path "*/build/*" -not -path "*/deps/*" | head -n 1)
+          if [ -n "$EXE_PATH" ]; then
+            cp "$EXE_PATH" target/portable/OpenShell.exe
+            powershell -Command "Compress-Archive -Path target/portable/OpenShell.exe -DestinationPath target/OpenShell-portable.zip -Force" || true
+          fi
+
+      - name: Package macOS portable zip
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          APP_DIR=$(find target -name "OpenShell.app" -type d | head -n 1)
+          if [ -n "$APP_DIR" ]; then
+            (cd "$(dirname "$APP_DIR")" && zip -r -y "../../OpenShell-portable.zip" "OpenShell.app") || true
+          fi
+
+      - name: Build Linux standalone server binary
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          cargo build --release -p openshell-server --target x86_64-unknown-linux-gnu
+          VERSION=$(node scripts/version.mjs --print)
+          mkdir -p target/server-pkg
+          cp target/x86_64-unknown-linux-gnu/release/openshell-server target/server-pkg/
+          cp -r deploy target/server-pkg/
+          cp docs/SYNC.md target/server-pkg/
+          tar -czvf "artifacts/openshell-server-${VERSION}-linux-x86_64.tar.gz" -C target/server-pkg . || true
+
       - name: Normalize asset names
         shell: bash
         run: |
@@ -213,6 +245,7 @@ jobs:
           overwrite_files: false
           files: |
             artifacts/OpenShell-*
+            artifacts/openshell-server-*
             artifacts/SHA256SUMS.txt
             artifacts/update-meta.json
 

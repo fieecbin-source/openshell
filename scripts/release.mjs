@@ -28,9 +28,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const APP_NAME = "OpenShell";
 
 const EXT_PRIORITY = {
-  windows: ["exe", "msi"],
-  macos: ["dmg"],
-  linux: ["appimage", "deb"],
+  windows: ["exe", "msi", "zip"],
+  macos: ["dmg", "zip"],
+  linux: ["appimage", "deb", "tar.gz"],
 };
 
 function arg(name, fallback = undefined) {
@@ -212,7 +212,10 @@ function runAssets() {
     // 优先选择文件名里带版本号的产物（tauri 默认命名形如 OpenShell_1.2.3_x64-setup.exe）
     const pick = hits.find((hit) => basename(hit.file).includes(version)) ?? hits[0];
     const suffix = ext === "appimage" ? "AppImage" : ext;
-    const name = `${APP_NAME}-${version}-${platform}-${arch}.${suffix}`;
+    const isPortable = basename(pick.file).toLowerCase().includes("portable");
+    const name = isPortable
+      ? `${APP_NAME}-${version}-${platform}-${arch}-portable.zip`
+      : `${APP_NAME}-${version}-${platform}-${arch}.${suffix}`;
     copyFileSync(pick.file, join(outDir, name));
     produced.push({ name, size: statSync(join(outDir, name)).size, sha256: sha256(join(outDir, name)) });
     console.log(`  + ${relative(root, join(outDir, name))}`);

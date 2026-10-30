@@ -109,3 +109,4 @@ jobs:
             systemctl is-active --quiet openshell-server
             echo \"OpenShell server deployment succeeded and active.\"
           '"
+

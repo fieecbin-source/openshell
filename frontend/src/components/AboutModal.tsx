@@ -50,9 +50,11 @@ export const AboutModal: React.FC<AboutModalProps> = ({ open, onClose }) => {
       <div className="space-y-4">
         {/* 应用标志与版本 */}
         <div className="flex items-center gap-3.5 rounded-xl border border-line/10 bg-surface p-4 shadow-apple-sm">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#2563eb] text-white shadow-apple-sm font-mono text-xl font-bold">
-            &gt;_
-          </div>
+          <img
+            src="/logo.svg"
+            alt="OpenShell Logo"
+            className="h-12 w-12 shrink-0 rounded-2xl shadow-apple-sm"
+          />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h3 className="text-base font-bold text-ink">OpenShell</h3>
