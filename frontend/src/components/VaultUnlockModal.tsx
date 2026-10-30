@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { useVaultStore } from "../stores/vaultStore";
 import { formatFriendlyError } from "../lib/errors";
 import { Button } from "./ui/Button";
-import { Checkbox } from "./ui/Controls";
 import { Field, Input } from "./ui/Field";
 import { Modal } from "./ui/Overlay";
 import { InlineNotice } from "./ui/Notice";
@@ -99,12 +98,6 @@ export const VaultUnlockModal: React.FC = () => {
             />
           </Field>
         )}
-
-        <Checkbox
-          checked={rememberKeychain}
-          onChange={setRememberKeychain}
-          label="在系统钥匙串中记住密码（自动解锁）"
-        />
 
         {(localError || error) && (
           <InlineNotice tone="danger" title="无法继续">

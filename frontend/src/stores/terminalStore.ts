@@ -119,6 +119,9 @@ interface TerminalState {
   /** 取消该标签的自动重连（用户点「取消」或手动重连时调用） */
   cancelAutoReconnect: (tabId: string) => void;
   updateTabStatus: (tabId: string, status: TabStatus, error?: string) => void;
+  renameTab: (tabId: string, newName: string) => void;
+  duplicateTab: (tabId: string) => Promise<string | null>;
+  reorderTabs: (sourceIndex: number, destinationIndex: number) => void;
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -493,5 +496,88 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         t.tabId === tabId ? { ...t, status, error } : t
       ),
     }));
+  },
+
+  renameTab: (tabId, newName) => {
+    if (!newName.trim()) return;
+    set((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.tabId === tabId ? { ...t, sessionName: newName.trim() } : t
+      ),
+    }));
+  },
+
+  duplicateTab: async (tabId) => {
+    const tab = get().tabs.find((t) => t.tabId === tabId);
+    if (!tab) return null;
+    try {
+      const sessionModules = await import("./sessionStore");
+      const sessions = sessionModules.useSessionStore.getState().sessions;
+      const targetSession = sessions.find((s) => s.id === tab.sessionId);
+      if (targetSession) {
+        return await get().openSession(targetSession);
+      }
+      // 回退：若没有保存的会话模板，根据标签名/协议构造一个同名会话新开
+      const fallbackSession: Session = {
+        id: tab.sessionId || generateId(),
+        group_id: null,
+        name: `${tab.sessionName} (副本)`,
+        protocol: tab.protocol,
+        host: "127.0.0.1",
+        port: tab.protocol === "ssh" ? 22 : null,
+        username: "root",
+        auth_method: "password",
+        credential_id: null,
+        ssh_key_id: null,
+        host_key_policy: "accept_new",
+        proxy_jump_json: null,
+        proxy_id: null,
+        terminal_profile_id: null,
+        encoding: "utf-8",
+        startup_command: null,
+        working_dir: null,
+        keepalive_sec: 30,
+        keepalive_max_miss: 3,
+        auto_reconnect: false,
+        reconnect_max: 3,
+        compression: false,
+        agent_forwarding: false,
+        x11_forwarding: false,
+        tags_json: null,
+        favorite: false,
+        color: null,
+        icon_key: null,
+        notes: null,
+        protocol_options_json: null,
+        last_used_at: null,
+        last_result: null,
+        use_count: 0,
+        sort_order: 0,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        deleted_at: null,
+      };
+      return await get().openSession(fallbackSession);
+    } catch (e) {
+      console.warn("duplicateTab failed:", e);
+      return null;
+    }
+  },
+
+  reorderTabs: (sourceIndex, destinationIndex) => {
+    set((state) => {
+      if (
+        sourceIndex < 0 ||
+        sourceIndex >= state.tabs.length ||
+        destinationIndex < 0 ||
+        destinationIndex >= state.tabs.length
+      ) {
+        return state;
+      }
+      const newTabs = [...state.tabs];
+      const [removed] = newTabs.splice(sourceIndex, 1);
+      newTabs.splice(destinationIndex, 0, removed);
+      return { tabs: newTabs };
+    });
   },
 }));

@@ -280,6 +280,26 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         void pasteClipboard();
         return false;
       }
+      // Ctrl/Cmd + / = 放大字号
+      if (mod && (key === "=" || key === "+")) {
+        ev.preventDefault();
+        const cur = useSettingsStore.getState().fontSize;
+        void useSettingsStore.getState().setFontSize(Math.min(32, cur + 1));
+        return false;
+      }
+      // Ctrl/Cmd - 缩小字号
+      if (mod && key === "-") {
+        ev.preventDefault();
+        const cur = useSettingsStore.getState().fontSize;
+        void useSettingsStore.getState().setFontSize(Math.max(9, cur - 1));
+        return false;
+      }
+      // Ctrl/Cmd 0 重置字号为 13
+      if (mod && key === "0") {
+        ev.preventDefault();
+        void useSettingsStore.getState().setFontSize(13);
+        return false;
+      }
       return true;
     });
 
@@ -570,6 +590,17 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
             }}
           >
             粘贴
+          </button>
+          <div className="my-1 border-t border-line/10" />
+          <button
+            type="button"
+            className="w-full px-3 py-1.5 text-left transition-colors duration-150 hover:bg-line/5"
+            onClick={() => {
+              terminalRef.current?.clear();
+              setCtxMenu(null);
+            }}
+          >
+            清屏
           </button>
         </div>
       )}

@@ -364,14 +364,24 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
               </Field>
 
               {socksAuth === "user_pass" && (
-                <Field label="认证用户名">
-                  <Input
-                    type="text"
-                    placeholder="用户名"
-                    value={socksUsername}
-                    onChange={(e) => setSocksUsername(e.target.value)}
-                  />
-                </Field>
+                <>
+                  <Field label="认证用户名">
+                    <Input
+                      type="text"
+                      placeholder="用户名"
+                      value={socksUsername}
+                      onChange={(e) => setSocksUsername(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="认证口令 (密码)">
+                    <Input
+                      type="password"
+                      placeholder="SOCKS5 认证口令"
+                      value={socksPassword}
+                      onChange={(e) => setSocksPassword(e.target.value)}
+                    />
+                  </Field>
+                </>
               )}
             </div>
           )}
