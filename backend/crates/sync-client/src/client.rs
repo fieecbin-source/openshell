@@ -59,8 +59,14 @@ impl SyncClient {
     }
 
     fn default_headers(&self) -> HeaderMap {
+        self.headers_for_version(API_VERSION)
+    }
+
+    fn headers_for_version(&self, version: u32) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(HEADER_API_VERSION, HeaderValue::from_static("1"));
+        if let Ok(value) = HeaderValue::from_str(&version.to_string()) {
+            headers.insert(HEADER_API_VERSION, value);
+        }
         if let Ok(did) = HeaderValue::from_str(&self.device_id) {
             headers.insert(HEADER_DEVICE_ID, did);
         }
@@ -305,6 +311,69 @@ impl SyncClient {
                     status: 500,
                 })
             }
+        }
+    }
+
+    pub async fn commit_v2(
+        &self,
+        req: CommitRequestV2,
+    ) -> Result<CommitResponseV2, SyncClientError> {
+        let idempotency_key = ulid::Ulid::new().to_string();
+        self.commit_v2_with_idempotency_key(req, &idempotency_key)
+            .await
+    }
+
+    pub async fn commit_v2_with_idempotency_key(
+        &self,
+        req: CommitRequestV2,
+        idempotency_key: &str,
+    ) -> Result<CommitResponseV2, SyncClientError> {
+        let url = format!("{}/v2/sync/commit", self.server_url);
+        let mut headers = self.headers_for_version(API_VERSION_V2);
+        headers.insert(
+            HEADER_IDEMPOTENCY_KEY,
+            HeaderValue::from_str(idempotency_key)
+                .map_err(|_| SyncClientError::Config("Invalid idempotency key".to_string()))?,
+        );
+
+        let resp = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .json(&req)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            Ok(resp.json().await?)
+        } else {
+            let env: Result<ApiErrorEnvelope, _> = resp.json().await;
+            Err(Self::extract_err(env, "Sync v2 commit failed"))
+        }
+    }
+
+    pub async fn get_changes_v2(
+        &self,
+        cursor: u64,
+        limit: Option<usize>,
+    ) -> Result<ChangesPageResponseV2, SyncClientError> {
+        let limit = limit.unwrap_or(200);
+        let url = format!(
+            "{}/v2/sync/changes?cursor={cursor}&limit={limit}&include_deleted=true",
+            self.server_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .headers(self.headers_for_version(API_VERSION_V2))
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            Ok(resp.json().await?)
+        } else {
+            let env: Result<ApiErrorEnvelope, _> = resp.json().await;
+            Err(Self::extract_err(env, "Get v2 changes failed"))
         }
     }
 

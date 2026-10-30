@@ -22,6 +22,10 @@ pub use vault::*;
 
 /// API 协议版本号
 pub const API_VERSION: u32 = 1;
+pub const API_VERSION_V2: u32 = 2;
+
+/// v2 同步记录结构版本。v1 路由仍保持兼容；v2 路由拒绝无法理解的结构版本。
+pub const SYNC_SCHEMA_VERSION_V2: u32 = 2;
 
 /// 标准头定义
 pub const HEADER_API_VERSION: &str = "x-api-version";

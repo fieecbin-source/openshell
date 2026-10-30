@@ -6,6 +6,7 @@ pub mod event_bus;
 pub mod extension_registry;
 pub mod op_registry;
 pub mod session_service;
+pub mod sync_codec;
 pub mod sync_service;
 pub mod terminal_router;
 pub mod vault_service;
@@ -18,6 +19,11 @@ pub use event_bus::{forward_events, EventBus};
 pub use extension_registry::ExtensionRegistry;
 pub use op_registry::{CancellationToken, OpRegistry};
 pub use session_service::SessionService;
+pub use sync_codec::{
+    apply_remote_records, backup_conflict, collect_dirty_records, mark_records_applied,
+    AppliedSyncRecord, ApplySummary, ConflictBackupInput, LocalSyncRecord, SyncRecordType,
+    SYNC_SCHEMA_VERSION,
+};
 pub use sync_service::{SyncConfig, SyncResult, SyncService};
 pub use terminal_router::{encode_data_frame, encode_notice_frame, TerminalRouter};
 pub use vault_service::{VaultService, VaultStatus};

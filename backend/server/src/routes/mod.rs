@@ -46,6 +46,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/sync/changes", get(sync::get_changes))
         .route("/v1/sync/head", get(sync::get_sync_head))
         .route("/v1/sync/status", get(sync::get_sync_status))
+        .route("/v2/sync/commit", post(sync::commit_v2))
+        .route("/v2/sync/changes", get(sync::get_changes_v2))
         .route(
             "/v1/vault/records/:record_id/history",
             get(sync::get_record_history),

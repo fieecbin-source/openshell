@@ -10,6 +10,7 @@ use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
+const MIGRATION_002: &str = include_str!("../migrations/002_app_meta.sql");
 
 /// 故障注入是进程级全局状态，涉及迁移的用例必须串行，否则并行执行会互相污染。
 static MIGRATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -43,6 +44,35 @@ fn create_v1_database(path: &Path) {
     .expect("insert setting");
 }
 
+fn create_v2_database(path: &Path) {
+    let conn = Connection::open(path).expect("create v2 db");
+    conn.execute_batch(MIGRATION_001).expect("apply v1 schema");
+    conn.execute_batch(MIGRATION_002).expect("apply v2 schema");
+    conn.pragma_update(None, "user_version", 2i64)
+        .expect("set user_version 2");
+
+    let now = 1_700_000_000_000i64;
+    conn.execute(
+        "INSERT INTO session_group(id, kind, name, sort_order, created_at, updated_at, version, dirty) \
+         VALUES(?1, 'session', ?2, 0, ?3, ?3, 4, 0)",
+        params!["grp-v2", "保留分组", now],
+    )
+    .expect("insert v2 group");
+    conn.execute(
+        "INSERT INTO sync_record(record_id, record_type, base_version, local_rev, \
+         server_checksum, sync_state, updated_at) VALUES(?1, 'session_group', 4, 4, ?2, 'clean', ?3)",
+        params!["grp-v2", "checksum-v1", now],
+    )
+    .expect("insert legacy sync metadata");
+    conn.execute(
+        "INSERT INTO setting(id, scope, scope_id, key, value_json, value_type, syncable, \
+         updated_at, version, dirty) VALUES(?1, 'user', NULL, 'terminal.theme', ?2, \
+         'string', 0, ?3, 2, 0)",
+        params!["set-theme", "\"dark\"", now],
+    )
+    .expect("insert syncable preference");
+}
+
 fn options_for(dir: &Path) -> MigrationOptions {
     MigrationOptions {
         app_version: "1.0.1".to_string(),
@@ -61,6 +91,15 @@ fn session_name(conn: &Connection) -> String {
         r.get(0)
     })
     .expect("read session")
+}
+
+fn group_name(conn: &Connection, id: &str) -> String {
+    conn.query_row(
+        "SELECT name FROM session_group WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )
+    .expect("read group")
 }
 
 fn has_table(conn: &Connection, table: &str) -> bool {
@@ -105,6 +144,43 @@ fn upgrades_v1_database_without_losing_data() {
     assert_eq!(backups.len(), 1);
     assert_eq!(backups[0].reason, BackupReason::PreMigration);
     assert!(PathBuf::from(&backups[0].path).is_file());
+}
+
+#[test]
+fn upgrades_v2_sync_metadata_without_losing_data() {
+    let _guard = MIGRATION_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let db_path = tmp.path().join("openshell.db");
+    create_v2_database(&db_path);
+
+    let (store, report) =
+        open_with_migration(&db_path, &options_for(tmp.path())).expect("open and migrate v2");
+    assert_eq!(report.from_version, 2);
+    assert_eq!(report.schema_version, 3);
+    assert_eq!(store.schema_version().expect("schema version"), 3);
+
+    let conn = Connection::open(&db_path).expect("reopen db");
+    assert_eq!(group_name(&conn, "grp-v2"), "保留分组");
+    assert!(has_table(&conn, "sync_conflict"));
+
+    let metadata: (i64, i64, i64, String) = conn
+        .query_row(
+            "SELECT schema_version, revision, deleted, server_checksum \
+             FROM sync_record WHERE record_id = 'grp-v2'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read migrated sync metadata");
+    assert_eq!(metadata, (1, 0, 0, "checksum-v1".to_string()));
+
+    let setting_flags: (i64, i64) = conn
+        .query_row(
+            "SELECT syncable, dirty FROM setting WHERE id = 'set-theme'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read migrated setting");
+    assert_eq!(setting_flags, (1, 1));
 }
 
 #[test]
