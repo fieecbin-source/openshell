@@ -76,6 +76,7 @@ docs/*
 !docs/UPDATE.md
 !docs/RELEASING.md
 !docs/E2E_UPGRADE.md
+!docs/SYNC.md
 # docs/ACCEPTANCE.md 含本机路径与演练记录，继续本地保留
 
 # Build artifacts & IDE assistant caches

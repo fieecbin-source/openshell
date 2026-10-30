@@ -39,6 +39,7 @@ export const SyncSettingsModal: React.FC = () => {
     register,
     login,
     logout,
+    clearLocalSyncData,
     syncNow,
     checkUpdates,
   } = useSyncStore();
@@ -218,14 +219,27 @@ export const SyncSettingsModal: React.FC = () => {
               </Button>
             </div>
 
-            <div className="pt-1 text-center">
+            <div className="flex items-center justify-between pt-1">
               <Button
                 variant="ghost"
                 size="sm"
-                className="text-state-danger hover:bg-state-danger/10 hover:text-state-danger"
+                className="text-ink-tertiary hover:text-ink text-xs"
+                onClick={async () => {
+                  if (window.confirm("确定要清除本地同步状态与缓存吗？本地保存的会话和配置不会受到影响。")) {
+                    await clearLocalSyncData();
+                    setSyncFeedback("本地同步数据已清除");
+                  }
+                }}
+              >
+                清除本地同步数据
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-state-danger hover:bg-state-danger/10 hover:text-state-danger text-xs"
                 onClick={() => logout()}
               >
-                退出当前同步账号
+                退出当前账号
               </Button>
             </div>
           </div>
@@ -238,8 +252,8 @@ export const SyncSettingsModal: React.FC = () => {
               ariaLabel="同步账号认证方式"
               className="w-full"
               options={[
-                { value: "login", label: "登录已有账号" },
-                { value: "register", label: "注册自建账号" },
+                { value: "login", label: "登录账号 (单用户/自建)" },
+                { value: "register", label: "注册账号" },
               ]}
             />
 
@@ -250,17 +264,17 @@ export const SyncSettingsModal: React.FC = () => {
                 mono
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="https://sync.example.com"
+                placeholder="http://1.2.3.4:8085 或 https://sync.example.com"
               />
             </Field>
 
-            <Field label="账号邮箱" required>
+            <Field label="账号 / 用户名" required hint="支持单用户自用模式下配置的用户名或邮箱">
               <Input
-                type="email"
+                type="text"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="user@example.com"
+                placeholder="admin 或自定义账号名"
               />
             </Field>
 

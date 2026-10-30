@@ -1,0 +1,111 @@
+name: Deploy Server (Self-Hosted Sync)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/server/**'
+      - 'backend/crates/sync-protocol/**'
+      - 'deploy/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/deploy-server.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-server-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run Server Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libudev-dev
+      - name: Test Server Crate
+        run: cargo test -p openshell-server --workspace
+
+  deploy:
+    name: Deploy to Self-Hosted Host via SSH
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH Deploy Key
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY || secrets.SERVER_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST || secrets.SERVER_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT || secrets.SERVER_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${PORT}" -H "${HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Build Binary for Linux x86_64
+        run: |
+          cargo build --release -p openshell-server
+
+      - name: Sync Artifacts and Service to Host
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST || secrets.SERVER_HOST }}
+          USER: ${{ secrets.DEPLOY_USER || secrets.SERVER_USER || 'root' }}
+          PORT: ${{ secrets.DEPLOY_PORT || secrets.SERVER_PORT || '22' }}
+          DEST: ${{ secrets.DEPLOY_PATH || '/opt/openshell' }}
+        run: |
+          ssh -p "${PORT}" -i ~/.ssh/deploy_key "${USER}@${HOST}" "mkdir -p ${DEST}/bin ${DEST}/deploy ${DEST}/data"
+          scp -P "${PORT}" -i ~/.ssh/deploy_key target/release/openshell-server "${USER}@${HOST}:${DEST}/bin/openshell-server.new"
+          scp -P "${PORT}" -i ~/.ssh/deploy_key deploy/openshell-server.service "${USER}@${HOST}:${DEST}/deploy/"
+          scp -P "${PORT}" -i ~/.ssh/deploy_key deploy/.env.example "${USER}@${HOST}:${DEST}/deploy/.env.example"
+
+      - name: Atomic Binary Swap & Service Restart
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST || secrets.SERVER_HOST }}
+          USER: ${{ secrets.DEPLOY_USER || secrets.SERVER_USER || 'root' }}
+          PORT: ${{ secrets.DEPLOY_PORT || secrets.SERVER_PORT || '22' }}
+          DEST: ${{ secrets.DEPLOY_PATH || '/opt/openshell' }}
+        run: |
+          ssh -p "${PORT}" -i ~/.ssh/deploy_key "${USER}@${HOST}" bash -c "'
+            set -e
+            chmod +x ${DEST}/bin/openshell-server.new
+            if [ -f ${DEST}/bin/openshell-server ]; then
+              cp -f ${DEST}/bin/openshell-server ${DEST}/bin/openshell-server.bak
+            fi
+            mv -f ${DEST}/bin/openshell-server.new ${DEST}/bin/openshell-server
+            
+            # Install systemd unit if not already linked
+            if [ ! -f /etc/systemd/system/openshell-server.service ]; then
+              cp -f ${DEST}/deploy/openshell-server.service /etc/systemd/system/openshell-server.service
+              systemctl daemon-reload
+              systemctl enable openshell-server
+            fi
+
+            # Initial env template if missing
+            if [ ! -f ${DEST}/deploy/.env ]; then
+              cp -f ${DEST}/deploy/.env.example ${DEST}/deploy/.env
+              echo \"[Warn] Created initial ${DEST}/deploy/.env - please configure SYNC_USERNAME and SYNC_PASSWORD\"
+            fi
+
+            echo \"Restarting openshell-server service...\"
+            systemctl restart openshell-server || {
+              echo \"Restart failed, rolling back to previous binary...\"
+              if [ -f ${DEST}/bin/openshell-server.bak ]; then
+                mv -f ${DEST}/bin/openshell-server.bak ${DEST}/bin/openshell-server
+                systemctl restart openshell-server
+              fi
+              exit 1
+            }
+            systemctl is-active --quiet openshell-server
+            echo \"OpenShell server deployment succeeded and active.\"
+          '"

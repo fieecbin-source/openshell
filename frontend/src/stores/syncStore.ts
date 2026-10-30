@@ -43,6 +43,7 @@ interface SyncStoreState {
   register: (serverUrl: string, email: string, pass: string, invite?: string) => Promise<void>;
   login: (serverUrl: string, email: string, pass: string) => Promise<void>;
   logout: () => Promise<void>;
+  clearLocalSyncData: () => Promise<void>;
   syncNow: () => Promise<SyncResult>;
   checkUpdates: () => Promise<UpdateManifest | null>;
 }
@@ -110,6 +111,17 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   logout: async () => {
     try {
       await invoke("sync_logout");
+      await get().loadConfig();
+    } catch (err: any) {
+      set({ error: formatFriendlyError(err) });
+      throw err;
+    }
+  },
+
+  clearLocalSyncData: async () => {
+    try {
+      await invoke("sync_logout");
+      set({ lastResult: null, error: null });
       await get().loadConfig();
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });

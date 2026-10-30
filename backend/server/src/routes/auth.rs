@@ -40,6 +40,13 @@ pub async fn register(
     }
 
     // Check single-user mode or invite code
+    if state.config.sync_username.is_some() {
+        return Err(make_error(
+            ApiErrorCode::RegistrationClosed,
+            "Registration is closed on single-user deployment",
+        ));
+    }
+
     state
         .db
         .with_conn(|conn| -> Result<(), crate::middleware::ApiError> {

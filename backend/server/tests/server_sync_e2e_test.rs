@@ -471,3 +471,61 @@ async fn test_full_server_and_e2ee_sync_lifecycle() {
         .unwrap();
     assert!(b_device.revoked_at.is_some());
 }
+
+#[tokio::test]
+async fn test_single_user_bootstrap_and_login() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let db_path = temp_dir.path().join("single_user.db");
+
+    let config = Config {
+        database_url: db_path.to_str().unwrap().to_string(),
+        sync_username: Some("admin".to_string()),
+        sync_password: Some("secret123".to_string()),
+        allow_multi_user: false,
+        ..Config::default()
+    };
+
+    let db_pool = DbPool::open(&config.database_url).expect("db pool");
+    openshell_server::bootstrap_single_user(&db_pool, &config).expect("bootstrap");
+
+    let app_state = AppState::new(db_pool.clone(), config);
+    let app = create_router(app_state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let local_addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{}", local_addr);
+
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+    });
+
+    let client = SyncClient::new(&base_url, "device_admin_1");
+    let login_res = client
+        .login(LoginRequest {
+            email: "admin".to_string(),
+            password: "secret123".to_string(),
+            device: LoginDevicePayload {
+                id: None,
+                name: "Admin Laptop".to_string(),
+                platform: "windows".to_string(),
+                arch: "x86_64".to_string(),
+                public_key: "pk_test".to_string(),
+                app_version: Some("1.1.1".to_string()),
+            },
+        })
+        .await;
+    assert!(login_res.is_ok(), "single user login should succeed with username: {:?}", login_res.err());
+
+    // Registration should be rejected in single-user mode
+    let reg_res = client
+        .register(RegisterRequest {
+            email: "another_user".to_string(),
+            password: "password123".to_string(),
+            device_name: "Attacker Device".to_string(),
+            device_platform: "linux".to_string(),
+            device_arch: "x86_64".to_string(),
+            device_public_key: "pk_attacker".to_string(),
+            invite_code: None,
+        })
+        .await;
+    assert!(reg_res.is_err(), "registration should be rejected in single-user mode");
+}

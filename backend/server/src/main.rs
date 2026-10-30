@@ -1,5 +1,5 @@
 use clap::Parser;
-use openshell_server::{create_router, AppState, Config, DbPool};
+use openshell_server::{bootstrap_single_user, create_router, AppState, Config, DbPool};
 use std::net::SocketAddr;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -14,10 +14,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = Config::parse();
+    let mut config = Config::parse();
+    if let Err(e) = config.validate_and_bootstrap() {
+        eprintln!("Configuration error: {e}");
+        std::process::exit(1);
+    }
 
     info!("Opening database from: {}", config.database_url);
     let db = DbPool::open(&config.database_url)?;
+
+    if let Err(e) = bootstrap_single_user(&db, &config) {
+        eprintln!("Single-user initialization failed: {e}");
+        std::process::exit(1);
+    }
 
     let app_state = AppState::new(db, config.clone());
     let router = create_router(app_state);
