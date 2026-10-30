@@ -3,9 +3,10 @@
 use crate::error::IpcError;
 use openshell_app_core::{AppServices, ConnectOverrides, VaultStatus};
 use openshell_core_domain::{
-    ChannelOpener, ConnectionId, Credential, CredentialId, CredentialKind, FileEntryType, Group,
-    GroupId, GroupKind, HostMetrics, PortForwardId, PortForwardRepository, PortForwardRule,
-    PortForwardRuleInput, Protocol, SavePolicy, Session, SessionId, SessionInput, SessionPatch,
+    AiCatalogView, AiConfigView, AiProfile, AiProfileInput, ChannelOpener, ConnectionId,
+    Credential, CredentialId, CredentialKind, FileEntryType, Group, GroupId, GroupKind,
+    HostMetrics, PortForwardId, PortForwardRepository, PortForwardRule, PortForwardRuleInput,
+    Protocol, ProviderTestResult, SavePolicy, Session, SessionId, SessionInput, SessionPatch,
     SessionQuery, SftpFileEntry, Snippet, SnippetId, SnippetInput, SnippetRepository, SshKey,
     SshKeyId, TabId, TermSize, TransferTask,
 };
@@ -1589,5 +1590,82 @@ pub async fn serial_close(
     state.serial.close(&card_id).await.map_err(|e| {
         openshell_core_domain::DomainError::new(openshell_core_domain::ErrorCode::Io, e.to_string())
     })?;
+    Ok(())
+}
+
+// ==========================================
+// AI 终端助手：模型配置与凭据
+// ==========================================
+
+#[tauri::command]
+pub async fn ai_config_get(
+    state: tauri::State<'_, Arc<AppServices>>,
+) -> Result<AiConfigView, IpcError> {
+    Ok(state.ai.config_get()?)
+}
+
+#[tauri::command]
+pub async fn ai_catalog_get(
+    state: tauri::State<'_, Arc<AppServices>>,
+) -> Result<AiCatalogView, IpcError> {
+    Ok(state.ai.catalog_get()?)
+}
+
+#[tauri::command]
+pub async fn ai_config_save(
+    state: tauri::State<'_, Arc<AppServices>>,
+    profile: AiProfileInput,
+) -> Result<AiProfile, IpcError> {
+    Ok(state.ai.config_save(profile)?)
+}
+
+#[tauri::command]
+pub async fn ai_delete_profile(
+    state: tauri::State<'_, Arc<AppServices>>,
+    profile_id: String,
+) -> Result<(), IpcError> {
+    state.ai.delete_profile(&profile_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ai_set_active_profile(
+    state: tauri::State<'_, Arc<AppServices>>,
+    profile_id: String,
+) -> Result<(), IpcError> {
+    state.ai.set_active_profile(&profile_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ai_profile_test(
+    state: tauri::State<'_, Arc<AppServices>>,
+    profile_id: String,
+) -> Result<ProviderTestResult, IpcError> {
+    Ok(state.ai.profile_test(&profile_id).await?)
+}
+
+#[tauri::command]
+pub async fn ai_logo_get(
+    state: tauri::State<'_, Arc<AppServices>>,
+    logo_key: String,
+) -> Result<String, IpcError> {
+    Ok(state.ai.logo_svg(&logo_key))
+}
+
+#[tauri::command]
+pub async fn ai_history_list(
+    state: tauri::State<'_, Arc<AppServices>>,
+    limit: Option<u32>,
+) -> Result<Vec<String>, IpcError> {
+    Ok(state.ai.history_list(limit)?)
+}
+
+#[tauri::command]
+pub async fn ai_set_enabled(
+    state: tauri::State<'_, Arc<AppServices>>,
+    enabled: bool,
+) -> Result<(), IpcError> {
+    state.ai.set_enabled(enabled)?;
     Ok(())
 }

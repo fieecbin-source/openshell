@@ -2,6 +2,7 @@
 //!
 //! 本 crate 不依赖任何适配器（存储、网络、加密库实现），只定义上层与适配层共同遵守的契约。
 
+pub mod ai;
 pub mod entities;
 pub mod errors;
 pub mod events;
@@ -10,6 +11,7 @@ pub mod ids;
 pub mod ports;
 pub mod value_objects;
 
+pub use ai::*;
 pub use entities::*;
 pub use errors::{DomainError, DomainResult, ErrorCode};
 pub use events::{AppEvent, ConnectionState, TerminalNoticeKind, VaultLifecycle};

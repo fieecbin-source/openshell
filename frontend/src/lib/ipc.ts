@@ -14,6 +14,17 @@ import type {
   VaultStatus,
 } from "../types/ipc";
 
+/**
+ * 当前是否运行在 Tauri 桌面容器内。
+ *
+ * 在浏览器预览（Vite dev server）里没有注入 `__TAURI_INTERNALS__`，
+ * 直接调用 `invoke` 会抛出 "Cannot read properties of undefined (reading 'invoke')"。
+ * 调用前先用它做一次判断，可以给出可读的提示而不是底层 TypeError。
+ */
+export function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 export async function getAppInfo(): Promise<AppInfo> {
   return await invoke<AppInfo>("app_info");
 }
@@ -631,4 +642,7 @@ export async function getSerialStats(
 export async function closeSerial(cardId: string): Promise<void> {
   return await invoke<void>("serial_close", { cardId });
 }
+
+// AI 终端助手（阶段 1）：模型配置与凭据命令统一由 ai/aiIpc 提供。
+export * from "./ai/aiIpc";
 

@@ -1,5 +1,13 @@
 import React from "react";
 import { useTerminalStore } from "../stores/terminalStore";
+import { Badge } from "./ui/Surface";
+import { IconButton } from "./ui/Button";
+import { cn } from "./ui/cn";
+import {
+  HomeIcon,
+  PlusIcon,
+  XIcon,
+} from "./ui/icons";
 
 interface TerminalTabsProps {
   onNewTabClick?: () => void;
@@ -16,28 +24,32 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ onNewTabClick, onHom
   // Ctrl+Shift+Tab 在 AppLayout 里用于切换整体布局（终端 / 分屏 / SFTP），
   // 标签栏也不再提供第二套模式切换按钮，避免同一份状态出现两个入口。
 
+  const tabClass = (active: boolean) =>
+    cn(
+      "group flex h-[26px] shrink-0 items-center gap-1.5 rounded-os-md px-2 text-os-xs transition-colors duration-os ease-os",
+      active
+        ? "border border-line/10 bg-surface text-ink shadow-os-sm"
+        : "border border-transparent text-ink-secondary hover:bg-line/5 hover:text-ink",
+    );
+
   return (
-    <div className="flex h-10 items-center justify-between border-b border-slate-200/80 bg-[#f5f5f7] px-2 overflow-x-auto select-none shrink-0">
-      {/* 标签列表 (Apple Card Tabs) */}
-      <div className="flex items-center space-x-1 overflow-x-auto">
-        {/* 常驻固定的 🏠 主页 标签 */}
-        <div
+    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line/10 bg-surface-muted px-2">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <button
+          type="button"
           onClick={() => {
             if (onHomeClick) onHomeClick();
             setActiveTab("home");
           }}
-          className={`group flex items-center space-x-1.5 rounded-t-xl px-3 py-2 text-xs font-medium cursor-pointer transition ${
-            isHomeActive
-              ? "bg-white text-slate-900 font-semibold shadow-apple-sm border-t border-x border-slate-200/80"
-              : "bg-transparent text-slate-500 hover:bg-slate-200/50 hover:text-slate-800"
-          }`}
-          title="返回主页与机器管理大盘"
+          className={tabClass(isHomeActive)}
+          title="返回主机总览"
         >
-          <span>🏠</span>
+          <HomeIcon className="h-3.5 w-3.5" />
           <span>主页</span>
-        </div>
+        </button>
 
-        {/* 各会话标签 */}
+        <span className="mx-0.5 h-4 w-px shrink-0 bg-line/10" />
+
         {tabs.map((tab) => {
           const isActive = tab.tabId === activeTabId && !isHomeActive;
           const isSerial = tab.protocol === "serial";
@@ -74,45 +86,53 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({ onNewTabClick, onHom
           return (
             <div
               key={tab.tabId}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={0}
               onClick={() => setActiveTab(tab.tabId)}
-              className={`group flex items-center space-x-2 rounded-t-xl px-3 py-2 text-xs font-medium cursor-pointer transition ${
-                isActive
-                  ? "bg-white text-slate-900 font-semibold shadow-apple-sm border-t border-x border-slate-200/80"
-                  : "bg-transparent text-slate-500 hover:bg-slate-200/50 hover:text-slate-800"
-              }`}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setActiveTab(tab.tabId);
+                }
+              }}
+              className={cn(tabClass(isActive), "cursor-pointer")}
+              title={tab.sessionName}
             >
               <span title={statusHint}>{statusDot}</span>
               <span className="max-w-[130px] truncate">{tab.sessionName}</span>
 
-              {/* 串口专属标签徽章 */}
               {isSerial && (
-                <span className="rounded bg-purple-50 text-apple-purple border border-purple-200 px-1 py-0.2 text-[9px] font-mono font-bold uppercase">
+                <Badge tone="accent" className="px-1 font-mono text-[9px]">
                   COM
-                </span>
+                </Badge>
               )}
 
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
                   closeTab(tab.tabId);
                 }}
-                className="rounded-full p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition opacity-60 group-hover:opacity-100"
+                className="ml-0.5 rounded-[4px] p-0.5 text-ink-tertiary opacity-0 transition-[opacity,background-color] duration-os hover:bg-line/10 hover:text-ink group-hover:opacity-100 group-focus-within:opacity-100"
                 title="关闭标签"
+                aria-label={`关闭 ${tab.sessionName}`}
               >
-                ✕
+                <XIcon className="h-3 w-3" />
               </button>
             </div>
           );
         })}
 
         {onNewTabClick && (
-          <button
+          <IconButton
+            label="新建连接"
+            size="sm"
+            className="ml-0.5 h-[22px] w-[22px] shrink-0"
             onClick={onNewTabClick}
-            className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-200/70 hover:text-slate-900 transition ml-1"
-            title="新建连接"
           >
-            +
-          </button>
+            <PlusIcon className="h-3.5 w-3.5" />
+          </IconButton>
         )}
       </div>
 

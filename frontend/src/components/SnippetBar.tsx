@@ -2,6 +2,16 @@ import React, { useEffect, useState } from "react";
 import { useSnippetStore } from "../stores/snippetStore";
 import type { SendMode, Snippet } from "../types/ipc";
 import { writeTerminal } from "../lib/ipc";
+import { Button, IconButton } from "./ui/Button";
+import { Field, Input, Textarea } from "./ui/Field";
+import { Segmented } from "./ui/Controls";
+import { Modal } from "./ui/Overlay";
+import {
+  CommandIcon,
+  PlusIcon,
+  SendIcon,
+  XIcon,
+} from "./ui/icons";
 
 interface SnippetBarProps {
   activeTabId: string | null;
@@ -84,73 +94,92 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
   };
 
   return (
-    <div className="h-8 bg-[#f5f5f7] border-b border-slate-200/80 flex items-center px-3 gap-2 select-none overflow-x-auto text-xs shrink-0">
-      <div className="flex items-center gap-1.5 text-slate-500 font-medium shrink-0">
-        <svg className="w-3.5 h-3.5 text-apple-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-        <span className="text-[11px] font-semibold text-slate-700">快捷片段:</span>
+    <div className="flex h-8 shrink-0 select-none items-center gap-2 overflow-x-auto border-b border-line/10 bg-surface-muted px-3">
+      <div className="flex shrink-0 items-center gap-1.5">
+        <CommandIcon className="h-3.5 w-3.5 text-ink-tertiary" />
+        <span className="text-os-2xs font-semibold text-ink-secondary">快捷片段</span>
       </div>
 
-      <div className="flex items-center gap-1.5 flex-1 overflow-x-auto no-scrollbar">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
         {snippets.length === 0 ? (
-          <span className="text-[11px] text-slate-400">点击右侧按钮添加常用命令快捷方式</span>
+          <span className="text-os-2xs text-ink-tertiary">点击右侧按钮添加常用命令快捷方式</span>
         ) : (
           snippets.map((snip) => (
             <div
               key={snip.id}
-              className="group flex items-center bg-white hover:bg-slate-50 border border-slate-200/80 rounded-lg px-2 py-0.5 cursor-pointer transition shrink-0 shadow-apple-sm"
+              className="group flex shrink-0 items-center rounded-full border border-line/10 bg-surface px-2 py-0.5 transition-colors duration-os hover:border-line/20"
             >
               <button
+                type="button"
                 onClick={() => handleSnippetClick(snip)}
                 title={snip.command_template}
-                className="text-[11px] font-mono text-slate-700 hover:text-apple-blue mr-1 truncate max-w-[150px] font-medium"
+                className="mr-1 max-w-[160px] truncate font-mono text-os-2xs font-medium text-ink-secondary transition-colors duration-os hover:text-accent"
               >
                 {snip.name}
               </button>
-              <button
+              <IconButton
+                label="删除片段"
+                size="sm"
+                className="h-[16px] w-[16px] text-ink-tertiary opacity-0 group-hover:opacity-100 hover:text-state-danger"
                 onClick={(e) => {
                   e.stopPropagation();
                   deleteSnippet(snip.id);
                 }}
-                className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-apple-red text-[10px] ml-1 transition"
               >
-                ✕
-              </button>
+                <XIcon className="h-3 w-3" />
+              </IconButton>
             </div>
           ))
         )}
       </div>
 
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
+        className="h-[24px] shrink-0 px-2"
+        leading={<PlusIcon className="h-3 w-3" />}
         onClick={() => setCreateModal(true)}
-        className="px-2 py-0.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-200/80 text-[11px] text-slate-700 font-medium shrink-0 transition shadow-apple-sm"
       >
-        + 新增
-      </button>
+        新增
+      </Button>
 
       {/* 参数占位符填充弹窗 */}
-      {paramModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-sm p-4">
-          <div className="w-96 bg-white border border-black/10 rounded-2xl p-5 shadow-apple-xl animate-in zoom-in-95 text-slate-800">
-            <h4 className="text-xs font-bold text-slate-900 mb-1">
-              执行命令: {paramModal.snippet.name}
-            </h4>
-            <p className="text-[11px] text-slate-600 mb-4 font-mono bg-slate-50 p-2 rounded-xl border border-slate-200/80 truncate">
+      <Modal
+        open={paramModal !== null}
+        onClose={() => setParamModal(null)}
+        title={paramModal ? `执行命令: ${paramModal.snippet.name}` : "执行命令"}
+        widthClassName="w-full max-w-[420px]"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setParamModal(null)}>
+              取消
+            </Button>
+            <Button variant="primary" leading={<SendIcon className="h-3.5 w-3.5" />} onClick={handleApplyParams}>
+              发送到终端
+            </Button>
+          </>
+        }
+      >
+        {paramModal && (
+          <div className="space-y-3">
+            <pre className="truncate rounded-os-sm border border-line/10 bg-surface-muted p-2 font-mono text-os-2xs text-ink-secondary">
               {paramModal.snippet.command_template}
-            </p>
+            </pre>
 
-            <div className="space-y-3 mb-5">
+            <div className="space-y-3">
               {paramModal.params.map((p, idx) => (
-                <div key={p.name}>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    参数 <span className="font-mono text-apple-blue">{p.name}</span>
-                    {p.defaultValue && (
-                      <span className="text-slate-400 text-[10px] ml-1">(默认: {p.defaultValue})</span>
-                    )}
-                  </label>
-                  <input
+                <Field
+                  key={p.name}
+                  label={
+                    <span>
+                      参数 <span className="font-mono text-accent">{p.name}</span>
+                    </span>
+                  }
+                  hint={p.defaultValue ? `默认: ${p.defaultValue}` : undefined}
+                >
+                  <Input
                     type="text"
+                    mono
                     autoFocus={idx === 0}
                     placeholder={p.defaultValue}
                     value={p.value}
@@ -162,105 +191,68 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleApplyParams();
                     }}
-                    className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-apple-blue focus:ring-1 focus:ring-apple-blue font-mono"
                   />
-                </div>
+                </Field>
               ))}
             </div>
-
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setParamModal(null)}
-                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-xl text-xs hover:bg-slate-100 transition"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleApplyParams}
-                className="px-3.5 py-1.5 bg-apple-blue hover:bg-apple-hoverBlue text-white rounded-xl text-xs font-semibold shadow-apple-sm transition"
-              >
-                发送到终端
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* 新建命令片段弹窗 */}
-      {createModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-sm p-4">
-          <div className="w-96 bg-white border border-black/10 rounded-2xl p-5 shadow-apple-xl animate-in zoom-in-95 text-slate-800">
-            <h4 className="text-sm font-bold text-slate-900 mb-3 tracking-tight">创建快捷命令</h4>
+      <Modal
+        open={createModal}
+        onClose={() => setCreateModal(false)}
+        title="创建快捷命令"
+        widthClassName="w-full max-w-[420px]"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCreateModal(false)}>
+              取消
+            </Button>
+            <Button variant="primary" onClick={handleCreateSnippet}>
+              保存
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <Field label="命令名称" required>
+            <Input
+              type="text"
+              placeholder="例如: 查看日志"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+          </Field>
 
-            <div className="space-y-3 mb-4">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">命令名称</label>
-                <input
-                  type="text"
-                  placeholder="例如: 查看日志"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-apple-blue focus:ring-1 focus:ring-apple-blue"
-                />
-              </div>
+          <Field
+            label="命令模板"
+            required
+            hint={'支持 ${VAR:-DEFAULT} 占位符，执行前会提示填充'}
+          >
+            <Textarea
+              placeholder={"例如: tail -f -n ${LINES:-100} ${FILE}"}
+              value={newCmd}
+              onChange={(e) => setNewCmd(e.target.value)}
+              rows={3}
+              className="font-mono text-os-xs"
+            />
+          </Field>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  命令模板 <span className="text-[10px] text-slate-400">(支持 ${"{"}VAR:-DEFAULT{"}"} 占位符)</span>
-                </label>
-                <textarea
-                  placeholder="例如: tail -f -n ${LINES:-100} ${FILE}"
-                  value={newCmd}
-                  onChange={(e) => setNewCmd(e.target.value)}
-                  rows={3}
-                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-900 outline-none focus:border-apple-blue focus:ring-1 focus:ring-apple-blue resize-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">发送模式</label>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="sendMode"
-                      checked={newSendMode === "execute"}
-                      onChange={() => setNewSendMode("execute")}
-                      className="text-apple-blue focus:ring-apple-blue"
-                    />
-                    <span>自动回车执行</span>
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="sendMode"
-                      checked={newSendMode === "insert"}
-                      onChange={() => setNewSendMode("insert")}
-                      className="text-apple-blue focus:ring-apple-blue"
-                    />
-                    <span>仅插入到命令行</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setCreateModal(false)}
-                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-xl text-xs hover:bg-slate-100 transition"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleCreateSnippet}
-                className="px-3.5 py-1.5 bg-apple-blue hover:bg-apple-hoverBlue text-white rounded-xl text-xs font-semibold shadow-apple-sm transition"
-              >
-                保存
-              </button>
-            </div>
-          </div>
+          <Field label="发送模式">
+            <Segmented<SendMode>
+              value={newSendMode}
+              onChange={setNewSendMode}
+              ariaLabel="发送模式"
+              options={[
+                { value: "execute", label: "自动回车执行" },
+                { value: "insert", label: "仅插入到命令行" },
+              ]}
+            />
+          </Field>
         </div>
-      )}
+      </Modal>
     </div>
   );
 };

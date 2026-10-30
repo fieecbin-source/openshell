@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { readSerial } from "../lib/ipc";
 import { useSerialStore } from "../stores/serialStore";
+import { Button } from "./ui/Button";
+import { Checkbox } from "./ui/Controls";
+import { DownloadIcon, TrashIcon } from "./ui/icons";
 
 interface HexDumpViewProps {
   cardId: string;
@@ -50,7 +53,7 @@ export const HexDumpView: React.FC<HexDumpViewProps> = ({ cardId }) => {
           for (let i = 0; i < bytes.length; i += 16) {
             const chunk = bytes.slice(i, i + 16);
             const lineOffset = currentOffset + i;
-            
+
             // Hex string with extra space after 8th byte
             const hexParts = chunk.map((b) => b.toString(16).padStart(2, "0").toUpperCase());
             let hexStr = "";
@@ -113,62 +116,73 @@ export const HexDumpView: React.FC<HexDumpViewProps> = ({ cardId }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#fbfbfd] text-[#1d1d1f] font-mono text-xs select-text">
+    <div className="flex h-full select-text flex-col bg-canvas font-mono text-os-2xs text-ink">
       {/* 顶部小工具栏 */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#f5f5f7] border-b border-black/[0.06] text-[11px] text-[#86868b] select-none">
-        <div className="flex items-center gap-3">
-          <span>总接收: <strong className="text-[#1d1d1f]">{rawBytesRef.current.length}</strong> 字节</span>
-          <span>行数: <strong className="text-[#1d1d1f]">{lines.length}</strong></span>
+      <div className="flex shrink-0 select-none flex-wrap items-center justify-between gap-2 border-b border-line/10 bg-surface-muted px-3 py-1.5">
+        <div className="flex items-center gap-3 tabular-nums text-ink-tertiary">
+          <span>
+            总接收{" "}
+            <span className="font-semibold text-ink">{rawBytesRef.current.length}</span> 字节
+          </span>
+          <span>
+            行数 <span className="font-semibold text-ink">{lines.length}</span>
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-[#1d1d1f] text-[#424245]">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-black/[0.2] text-[#0071e3] focus:ring-0 accent-[#0071e3]"
-            />
-            <span className="font-medium">自动滚动</span>
-          </label>
-          <button
-            type="button"
+        <div className="flex items-center gap-1.5">
+          <Checkbox
+            checked={autoScroll}
+            onChange={setAutoScroll}
+            label={<span className="text-os-2xs text-ink-secondary">自动滚动</span>}
+            className="mr-1.5 gap-1.5"
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-[24px] px-2 text-os-2xs"
+            leading={<DownloadIcon className="h-3 w-3" />}
             onClick={handleExport}
-            className="px-2.5 py-0.5 rounded-md bg-white border border-black/[0.08] shadow-apple-sm text-[#1d1d1f] hover:bg-black/[0.04] transition active:scale-[0.98] font-medium"
           >
             导出转储
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-[24px] px-2 text-os-2xs text-state-danger hover:bg-state-danger/10 hover:text-state-danger"
+            leading={<TrashIcon className="h-3 w-3" />}
             onClick={handleClear}
-            className="px-2.5 py-0.5 rounded-md bg-white border border-black/[0.08] shadow-apple-sm text-red-600 hover:bg-red-50 transition active:scale-[0.98] font-medium"
           >
             清空
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Hex Dump 视口 */}
-      <div ref={scrollRef} className="flex-1 overflow-auto p-3 leading-relaxed">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-2.5 py-2 leading-[1.55]">
         {lines.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-[#86868b] select-none">
+          <div className="flex h-full select-none items-center justify-center text-ink-tertiary">
             等待串口接收数据...
           </div>
         ) : (
           lines.map((l, idx) => (
-            <div key={idx} className="flex gap-4 hover:bg-black/[0.03] rounded px-1.5 py-0.5">
+            <div
+              key={idx}
+              className="flex gap-3 rounded-[4px] px-1.5 py-px transition-colors duration-os hover:bg-line/[0.03]"
+            >
               {showTimestamp && (
-                <span className="text-[#86868b] select-none">[{l.timestamp}]</span>
+                <span className="shrink-0 select-none tabular-nums text-ink-tertiary">
+                  [{l.timestamp}]
+                </span>
               )}
               {/* 偏移地址 */}
-              <span className="text-[#0071e3] select-none font-bold">
+              <span className="shrink-0 select-none font-semibold tabular-nums text-accent">
                 {l.offset.toString(16).padStart(8, "0").toUpperCase()}:
               </span>
               {/* HEX 字节区 */}
-              <span className="text-amber-800 tracking-wide font-medium whitespace-pre">
+              <span className="whitespace-pre text-ink-secondary">
                 {l.hexPart.padEnd(49, " ")}
               </span>
               {/* ASCII 可视字符 */}
-              <span className="text-emerald-700 font-semibold select-none border-l border-black/[0.1] pl-3">
+              <span className="select-none border-l border-line/10 pl-3 text-ink">
                 |{l.asciiPart}|
               </span>
             </div>

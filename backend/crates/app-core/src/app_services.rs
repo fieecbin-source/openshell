@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::ai_service::AiService;
 use crate::card_service::CardService;
 use openshell_serial::SerialService;
 
@@ -60,6 +61,8 @@ pub struct AppServices {
     pub serial: Arc<SerialService>,
     /// 启动时的迁移/恢复情况（迁移失败已回滚时 `was_recovered()` 为 true，前端据此提示）。
     pub migration: MigrationReport,
+    /// AI 终端助手配置服务（默认关闭，由设置页开关启用）。
+    pub ai: Arc<AiService>,
 }
 
 impl AppServices {
@@ -182,6 +185,11 @@ impl AppServices {
         let extensions = Arc::new(ExtensionRegistry::new());
         let card_service = Arc::new(CardService::new(session_repo.clone(), event_bus.clone()));
         let serial_service = Arc::new(SerialService::new());
+        let ai_service = Arc::new(AiService::new(
+            &paths,
+            store.clone(),
+            vault_manager.clone(),
+        )?);
 
         // 升级后首次启动：留一份「迁移已完成」的快照，作为后续问题的回退锚点。
         // 迁移失败已回滚（schema 仍是旧版本）时不写 app_meta —— 旧库还没有这张表。
@@ -249,6 +257,7 @@ impl AppServices {
             extensions,
             card: card_service,
             serial: serial_service,
+            ai: ai_service,
         })
     }
 

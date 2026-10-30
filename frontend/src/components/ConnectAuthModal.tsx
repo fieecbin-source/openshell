@@ -4,6 +4,10 @@ import type { TerminalTab } from "../stores/terminalStore";
 import { ConnectOverrides, useTerminalStore } from "../stores/terminalStore";
 import { getSession, setSshKeyPassphrase } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
+import { Button } from "./ui/Button";
+import { Field, Input } from "./ui/Field";
+import { Modal } from "./ui/Overlay";
+import { InlineNotice } from "./ui/Notice";
 
 interface ConnectAuthModalProps {
   tab: TerminalTab;
@@ -83,107 +87,84 @@ export const ConnectAuthModal: React.FC<ConnectAuthModalProps> = ({ tab, onClose
   };
 
   const liveError = liveTab?.status === "error" ? liveTab.error : null;
+  const target = session
+    ? `${session.username || "root"}@${session.host || "-"}:${session.port || 22}`
+    : tab.sessionName;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-md rounded-2xl bg-white border border-black/10 shadow-2xl p-6 text-[#1d1d1f]"
-      >
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h3 className="text-base font-semibold">重新填写登录凭据</h3>
-            <p className="text-xs text-[#86868b] mt-1">
-              {session
-                ? `${session.username || "root"}@${session.host || "-"}:${session.port || 22}`
-                : tab.sessionName}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-[#86868b] hover:bg-black/[0.05]"
-            aria-label="关闭"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
+    <Modal
+      open
+      onClose={onClose}
+      title="重新填写登录凭据"
+      description={target}
+      widthClassName="w-full max-w-[420px]"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            取消
+          </Button>
+          {(isPasswordAuth || isKeyAuth) && (
+            <Button variant="primary" type="submit" form="connect-auth-form" loading={submitting}>
+              {submitting ? "正在连接..." : isKeyAuth ? "使用该口令重连" : "使用该密码重连"}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <form id="connect-auth-form" onSubmit={handleSubmit} className="flex flex-col gap-3.5">
         {session && !isPasswordAuth && !isKeyAuth ? (
-          <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 leading-relaxed">
-            当前会话使用的认证方式暂不支持在失败后补录凭据，请在「会话编辑 → 认证方式」中检查配置。
-          </div>
+          <InlineNotice tone="warning" title="认证方式暂不支持补录">
+            当前会话使用的认证方式暂不支持在失败后补录凭据，请在「会话编辑 → 认证」中检查配置。
+          </InlineNotice>
         ) : (
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold mb-1.5">用户名</label>
-              <input
+          <>
+            <Field label="用户名" htmlFor="connect-auth-username">
+              <Input
+                id="connect-auth-username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-[#f5f5f7] border border-black/10 text-sm outline-none focus:border-[#0071e3] focus:bg-white"
                 autoComplete="username"
               />
-            </div>
+            </Field>
+
             {isKeyAuth ? (
-              <div>
-                <label className="block text-xs font-semibold mb-1.5">私钥口令 (Passphrase)</label>
-                <input
+              <Field
+                label="私钥口令"
+                htmlFor="connect-auth-passphrase"
+                hint="若私钥已加密，请输入口令；也可以到「私钥管理」中为已选私钥永久保存口令。"
+              >
+                <Input
+                  id="connect-auth-passphrase"
                   type="password"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
                   placeholder="私钥未加密时留空"
-                  className="w-full px-3 py-2 rounded-xl bg-[#f5f5f7] border border-black/10 text-sm outline-none focus:border-[#0071e3] focus:bg-white"
                   autoComplete="off"
                   autoFocus
                 />
-                <p className="text-[11px] text-[#86868b] mt-1.5">
-                  若私钥已加密，请输入口令；也可以到「私钥管理」中为已选私钥永久保存口令。
-                </p>
-              </div>
+              </Field>
             ) : (
-              <div>
-                <label className="block text-xs font-semibold mb-1.5">登录密码</label>
-                <input
+              <Field label="登录密码" htmlFor="connect-auth-password">
+                <Input
+                  id="connect-auth-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="输入服务器登录密码（支持任意长度）"
-                  className="w-full px-3 py-2 rounded-xl bg-[#f5f5f7] border border-black/10 text-sm outline-none focus:border-[#0071e3] focus:bg-white"
                   autoComplete="current-password"
                   autoFocus
                 />
-              </div>
+              </Field>
             )}
-          </div>
+          </>
         )}
 
         {(localError || liveError) && (
-          <div className="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-700 leading-relaxed">
+          <InlineNotice tone="danger" title="连接未完成">
             {localError || liveError}
-          </div>
+          </InlineNotice>
         )}
-
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-semibold text-[#1d1d1f] bg-black/[0.05] hover:bg-black/[0.08]"
-          >
-            取消
-          </button>
-          {(isPasswordAuth || isKeyAuth) && (
-            <button
-              type="submit"
-              disabled={submitting}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-[#0071e3] hover:bg-[#0077ed] disabled:opacity-60"
-            >
-              {submitting ? "正在连接..." : isKeyAuth ? "使用该口令重连" : "使用该密码重连"}
-            </button>
-          )}
-        </div>
       </form>
-    </div>
+    </Modal>
   );
 };

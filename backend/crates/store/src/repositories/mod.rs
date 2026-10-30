@@ -1,5 +1,6 @@
 //! 仓储实现：`core-domain` 端口契约的 SQLite 适配。
 
+pub mod ai;
 pub mod credential;
 pub mod group;
 pub mod known_host;
@@ -11,6 +12,7 @@ pub mod snippet;
 pub mod ssh_key;
 pub mod vault;
 
+pub use ai::{AiProfileRepo, CommandHistoryRepo};
 pub use credential::CredentialRepo;
 pub use group::GroupRepo;
 pub use known_host::KnownHostRepo;

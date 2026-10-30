@@ -1,0 +1,400 @@
+{
+  "source": "https://models.dev/api.json",
+  "fetched_at": "2026-10-23T16:14:58.5844203Z",
+  "version": "2026-10-23-7ad0f9ef",
+  "sha256": "7ad0f9ef89905e960a6c660c3d22a9d3e0c3dd8cb2a03b6c67cc177c0a07bfb3",
+  "providers": [
+    {
+      "key": "openai",
+      "name": "OpenAI",
+      "logo_key": "openai",
+      "default_base_url": "https://api.openai.com/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://platform.openai.com/docs/models",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "gpt-5.4",
+          "name": "GPT-5.4"
+        },
+        {
+          "id": "gpt-5.1",
+          "name": "GPT-5.1"
+        },
+        {
+          "id": "gpt-5-mini",
+          "name": "GPT-5 Mini"
+        },
+        {
+          "id": "gpt-5-nano",
+          "name": "GPT-5 Nano"
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "anthropic",
+      "name": "Anthropic",
+      "logo_key": "anthropic",
+      "default_base_url": "https://api.anthropic.com/v1",
+      "wire": "anthropic_messages",
+      "docs_url": "https://docs.anthropic.com/en/docs/about-claude/models",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "claude-opus-4-8",
+          "name": "Claude Opus 4.8"
+        },
+        {
+          "id": "claude-sonnet-5",
+          "name": "Claude Sonnet 5"
+        },
+        {
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5 (latest)"
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5 (latest)"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "google",
+      "name": "Google Gemini",
+      "logo_key": "google",
+      "default_base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "wire": "gemini_generate_content",
+      "docs_url": "https://ai.google.dev/gemini-api/docs/models",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "gemini-4-argon",
+          "name": "Gemini 4 Argon"
+        },
+        {
+          "id": "gemini-3.5-flash",
+          "name": "Gemini 3.5 Flash"
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "name": "Gemini 3.1 Pro Preview"
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro"
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "xai",
+      "name": "xAI",
+      "logo_key": "xai",
+      "default_base_url": "https://api.x.ai/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://docs.x.ai/docs/models",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "grok-4.7",
+          "name": "Grok 4.7"
+        },
+        {
+          "id": "grok-4.6",
+          "name": "Grok 4.6"
+        },
+        {
+          "id": "grok-4.5",
+          "name": "Grok 4.5"
+        },
+        {
+          "id": "grok-4.3",
+          "name": "Grok 4.3"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "openrouter",
+      "name": "OpenRouter",
+      "logo_key": "openrouter",
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://openrouter.ai/models",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "openrouter/auto",
+          "name": "Auto Router"
+        },
+        {
+          "id": "anthropic/claude-sonnet-4.6",
+          "name": "Claude Sonnet 4.6"
+        },
+        {
+          "id": "openai/gpt-5.1",
+          "name": "GPT-5.1"
+        },
+        {
+          "id": "google/gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro"
+        },
+        {
+          "id": "deepseek/deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "agentrouter",
+      "name": "AgentRouter",
+      "logo_key": "agentrouter",
+      "default_base_url": "https://agentrouter.org/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://agentrouter.org/docs/opencode.html",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol"
+        },
+        {
+          "id": "claude-opus-4-8",
+          "name": "Claude Opus 4.8"
+        },
+        {
+          "id": "claude-opus-5",
+          "name": "Claude Opus 5"
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "deepseek",
+      "name": "DeepSeek",
+      "logo_key": "deepseek",
+      "default_base_url": "https://api.deepseek.com/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro"
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash"
+        },
+        {
+          "id": "deepseek-flash",
+          "name": "DeepSeek V4.1 Flash 1017"
+        },
+        {
+          "id": "deepseek-v4-flash-vision-exp",
+          "name": "DeepSeek V4 Flash Vision Exp"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "alibaba",
+      "name": "阿里云百炼（DashScope 兼容模式）",
+      "logo_key": "alibaba",
+      "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://www.alibabacloud.com/help/en/model-studio/models",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max"
+        },
+        {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max"
+        },
+        {
+          "id": "qwen3-max",
+          "name": "Qwen3 Max"
+        },
+        {
+          "id": "qwen3.6-plus",
+          "name": "Qwen3.6 Plus"
+        },
+        {
+          "id": "qwen3-coder-plus",
+          "name": "Qwen3 Coder Plus"
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "zhipuai",
+      "name": "智谱 AI",
+      "logo_key": "zhipuai",
+      "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "wire": "openai_chat",
+      "docs_url": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3"
+        },
+        {
+          "id": "glm-5.2",
+          "name": "GLM-5.2"
+        },
+        {
+          "id": "glm-5.1",
+          "name": "GLM-5.1"
+        },
+        {
+          "id": "glm-4.7",
+          "name": "GLM-4.7"
+        },
+        {
+          "id": "glm-4.5-air",
+          "name": "GLM-4.5-Air"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "moonshotai",
+      "name": "月之暗面 Kimi",
+      "logo_key": "moonshotai",
+      "default_base_url": "https://api.moonshot.cn/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://platform.moonshot.cn/docs/api/chat",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "kimi-k3",
+          "name": "Kimi K3"
+        },
+        {
+          "id": "kimi-k2.7-code",
+          "name": "Kimi K2.7 Code"
+        },
+        {
+          "id": "kimi-k2.7-code-highspeed",
+          "name": "Kimi K2.7 Code HighSpeed"
+        },
+        {
+          "id": "kimi-k2.6",
+          "name": "Kimi K2.6"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "volcengine",
+      "name": "火山方舟（豆包）",
+      "logo_key": "volcengine",
+      "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "wire": "openai_chat",
+      "docs_url": "https://www.volcengine.com/docs/82379/1330310",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "doubao-seed-2-1-pro-260628",
+          "name": "Seed 2.1 Pro"
+        },
+        {
+          "id": "doubao-seed-2-0-pro-260215",
+          "name": "Seed 2.0 Pro"
+        },
+        {
+          "id": "doubao-seed-2-1-turbo-260628",
+          "name": "Seed 2.1 Turbo"
+        },
+        {
+          "id": "doubao-seed-2-0-code-preview-260215",
+          "name": "Seed 2.0 Code"
+        },
+        {
+          "id": "doubao-seed-1-6-251015",
+          "name": "Seed 1.6"
+        }
+      ],
+      "local": false
+    },
+    {
+      "key": "ollama",
+      "name": "Ollama（本地）",
+      "logo_key": "ollama",
+      "default_base_url": "http://localhost:11434/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://docs.ollama.com/api/openai-compatibility",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "gpt-oss:20b",
+          "name": "gpt-oss:20b"
+        },
+        {
+          "id": "glm-5.2",
+          "name": "GLM-5.2"
+        },
+        {
+          "id": "deepseek-v4.1-flash",
+          "name": "DeepSeek V4.1 Flash"
+        },
+        {
+          "id": "kimi-k2.6",
+          "name": "kimi-k2.6"
+        }
+      ],
+      "local": true
+    },
+    {
+      "key": "custom",
+      "name": "自定义 OpenAI 兼容端点",
+      "logo_key": "custom",
+      "default_base_url": "https://your-endpoint.example/v1",
+      "wire": "openai_chat",
+      "docs_url": "https://platform.openai.com/docs/api-reference/chat",
+      "verified_at": "2026-10-23",
+      "models": [
+        {
+          "id": "gpt-4o-mini",
+          "name": "GPT-4o mini"
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1"
+        },
+        {
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5"
+        }
+      ],
+      "local": false
+    }
+  ]
+}

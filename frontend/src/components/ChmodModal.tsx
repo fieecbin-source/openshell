@@ -1,4 +1,9 @@
 import React, { useState, useEffect } from "react";
+import { Button } from "./ui/Button";
+import { Input } from "./ui/Field";
+import { Checkbox } from "./ui/Controls";
+import { Modal } from "./ui/Overlay";
+import { cn } from "./ui/cn";
 
 interface ChmodModalProps {
   isOpen: boolean;
@@ -58,9 +63,15 @@ export const ChmodModal: React.FC<ChmodModalProps> = ({
   };
 
   const calculateNumeric = (
-    or: boolean, ow: boolean, ox: boolean,
-    gr: boolean, gw: boolean, gx: boolean,
-    tr: boolean, tw: boolean, tx: boolean
+    or: boolean,
+    ow: boolean,
+    ox: boolean,
+    gr: boolean,
+    gw: boolean,
+    gx: boolean,
+    tr: boolean,
+    tw: boolean,
+    tx: boolean,
   ) => {
     let mode = 0;
     if (or) mode |= 0o400;
@@ -80,7 +91,7 @@ export const ChmodModal: React.FC<ChmodModalProps> = ({
 
   const handleCheckboxChange = (
     type: "or" | "ow" | "ox" | "gr" | "gw" | "gx" | "tr" | "tw" | "tx",
-    val: boolean
+    val: boolean,
   ) => {
     const nextOr = type === "or" ? val : ownerR;
     const nextOw = type === "ow" ? val : ownerW;
@@ -106,11 +117,7 @@ export const ChmodModal: React.FC<ChmodModalProps> = ({
     if (type === "tw") setOtherW(val);
     if (type === "tx") setOtherX(val);
 
-    const mode = calculateNumeric(
-      nextOr, nextOw, nextOx,
-      nextGr, nextGw, nextGx,
-      nextTr, nextTw, nextTx
-    );
+    const mode = calculateNumeric(nextOr, nextOw, nextOx, nextGr, nextGw, nextGx, nextTr, nextTw, nextTx);
     setOctalStr("0" + mode.toString(8).padStart(3, "0"));
   };
 
@@ -137,176 +144,89 @@ export const ChmodModal: React.FC<ChmodModalProps> = ({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-sm rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl text-slate-200 animate-in fade-in zoom-in-95 duration-150">
-        <div className="flex items-center justify-between pb-3 border-b border-surface-800">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-500/20 text-teal-400 border border-teal-500/30">
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">修改权限 (chmod)</h3>
-              <p className="text-[11px] text-slate-400 truncate max-w-[200px]" title={entryName}>
-                {entryName}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded hover:bg-surface-800 transition"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+  const renderCell = (checked: boolean, onChange: (next: boolean) => void, label: string) => (
+    <div className="flex justify-center">
+      <Checkbox
+        checked={checked}
+        onChange={onChange}
+        label={<span className="sr-only">{label}</span>}
+      />
+    </div>
+  );
 
+  return (
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title="修改权限"
+      description={`${entryName}${isDirectory ? " · 目录" : " · 文件"}`}
+      widthClassName="w-full max-w-[460px]"
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>
+            取消
+          </Button>
+          <Button variant="primary" size="sm" loading={saving} onClick={handleSave}>
+            应用权限
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
         {/* 3x3 权限选择表 */}
-        <div className="mt-4 bg-surface-950/60 rounded-lg p-3 border border-surface-800 text-xs">
-          <div className="grid grid-cols-4 gap-2 text-center font-medium text-slate-400 mb-2 pb-1 border-b border-surface-800/80">
-            <span className="text-left pl-1">类别</span>
+        <div className="rounded-os-md border border-line/10 bg-surface-muted p-3">
+          <div className="grid grid-cols-4 gap-2 border-b border-line/10 pb-1.5 text-center text-os-2xs font-medium text-ink-tertiary">
+            <span className="pl-1 text-left">类别</span>
             <span>读取 (r)</span>
             <span>写入 (w)</span>
             <span>执行 (x)</span>
           </div>
 
-          {/* 所有者 */}
-          <div className="grid grid-cols-4 gap-2 items-center text-center py-1">
-            <span className="text-left pl-1 font-semibold text-slate-300">所有者</span>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={ownerR}
-                onChange={(e) => handleCheckboxChange("or", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={ownerW}
-                onChange={(e) => handleCheckboxChange("ow", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={ownerX}
-                onChange={(e) => handleCheckboxChange("ox", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
+          <div className="grid grid-cols-4 items-center gap-2 border-t border-line/5 py-1.5 text-center text-os-xs">
+            <span className="pl-1 text-left font-medium text-ink-secondary">所有者</span>
+            {renderCell(ownerR, (next) => handleCheckboxChange("or", next), "所有者读取")}
+            {renderCell(ownerW, (next) => handleCheckboxChange("ow", next), "所有者写入")}
+            {renderCell(ownerX, (next) => handleCheckboxChange("ox", next), "所有者执行")}
           </div>
 
-          {/* 用户组 */}
-          <div className="grid grid-cols-4 gap-2 items-center text-center py-1 border-t border-surface-800/50">
-            <span className="text-left pl-1 font-semibold text-slate-300">用户组</span>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={groupR}
-                onChange={(e) => handleCheckboxChange("gr", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={groupW}
-                onChange={(e) => handleCheckboxChange("gw", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={groupX}
-                onChange={(e) => handleCheckboxChange("gx", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
+          <div className="grid grid-cols-4 items-center gap-2 border-t border-line/5 py-1.5 text-center text-os-xs">
+            <span className="pl-1 text-left font-medium text-ink-secondary">用户组</span>
+            {renderCell(groupR, (next) => handleCheckboxChange("gr", next), "用户组读取")}
+            {renderCell(groupW, (next) => handleCheckboxChange("gw", next), "用户组写入")}
+            {renderCell(groupX, (next) => handleCheckboxChange("gx", next), "用户组执行")}
           </div>
 
-          {/* 公共 / 其他 */}
-          <div className="grid grid-cols-4 gap-2 items-center text-center py-1 border-t border-surface-800/50">
-            <span className="text-left pl-1 font-semibold text-slate-300">其他人</span>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={otherR}
-                onChange={(e) => handleCheckboxChange("tr", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={otherW}
-                onChange={(e) => handleCheckboxChange("tw", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
-            <label className="flex justify-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={otherX}
-                onChange={(e) => handleCheckboxChange("tx", e.target.checked)}
-                className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0 focus:ring-offset-0"
-              />
-            </label>
+          <div className="grid grid-cols-4 items-center gap-2 border-t border-line/5 py-1.5 text-center text-os-xs">
+            <span className="pl-1 text-left font-medium text-ink-secondary">其他人</span>
+            {renderCell(otherR, (next) => handleCheckboxChange("tr", next), "其他人读取")}
+            {renderCell(otherW, (next) => handleCheckboxChange("tw", next), "其他人写入")}
+            {renderCell(otherX, (next) => handleCheckboxChange("tx", next), "其他人执行")}
           </div>
         </div>
 
         {/* 八进制输入与联动 */}
-        <div className="mt-4 flex items-center justify-between text-xs">
-          <label className="text-slate-400 font-medium">八进制数值：</label>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={octalStr}
-              maxLength={4}
-              onChange={(e) => handleOctalInputChange(e.target.value)}
-              className="w-20 rounded border border-surface-700 bg-surface-950 px-2 py-1 text-center font-mono text-teal-400 focus:border-teal-500 focus:outline-none"
-            />
-          </div>
+        <div className="flex items-center justify-between gap-3 text-os-xs">
+          <span className="font-medium text-ink-secondary">八进制数值</span>
+          <Input
+            mono
+            value={octalStr}
+            maxLength={4}
+            onChange={(e) => handleOctalInputChange(e.target.value)}
+            className="h-[30px] w-24 text-center"
+          />
         </div>
 
         {/* 目录递归选项 */}
         {isDirectory && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-slate-300 bg-surface-950/40 p-2 rounded border border-surface-800">
-            <input
-              type="checkbox"
-              id="chmod-recursive"
+          <div className={cn("rounded-os-md border border-line/10 bg-surface-muted p-2.5")}>
+            <Checkbox
               checked={recursive}
-              onChange={(e) => setRecursive(e.target.checked)}
-              className="rounded border-surface-700 bg-surface-800 text-teal-500 focus:ring-0"
+              onChange={setRecursive}
+              label="递归应用到所有子文件与子目录 (-R)"
             />
-            <label htmlFor="chmod-recursive" className="cursor-pointer select-none">
-              递归应用到所有子文件与子目录 (-R)
-            </label>
           </div>
         )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded-lg border border-surface-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-800 hover:text-white transition"
-          >
-            取消
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-teal-500 shadow-md shadow-teal-950 transition disabled:opacity-50"
-          >
-            {saving ? "应用中..." : "应用权限"}
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 };

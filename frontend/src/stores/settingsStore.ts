@@ -347,20 +347,39 @@ export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
   },
 };
 
-/** 解析主题 id → 具体配色（优先用户导入的自定义主题） */
-export function resolveTheme(
-  theme: TerminalTheme,
-  customThemes: Record<string, TerminalThemeConfig> = {}
-): TerminalThemeConfig {
-  return customThemes[theme] || THEMES[theme] || THEMES.dark;
+/** 用户导入的主题集合。 */
+export type ThemeMap = Record<string, TerminalThemeConfig>;
+
+/** 合并内置主题与用户导入的主题（自定义同名时覆盖内置）。 */
+export function allThemes(customThemes: ThemeMap): ThemeMap {
+  return { ...THEMES, ...customThemes };
+}
+
+/** 解析主题键；未知键回退到 dark，避免终端渲染时拿到 undefined。 */
+export function resolveTheme(key: string, customThemes: ThemeMap): TerminalThemeConfig {
+  return allThemes(customThemes)[key] ?? THEMES.dark;
+}
+
+function normalizeCustomThemes(raw: unknown): ThemeMap {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const entries = Object.entries(raw as Record<string, unknown>).filter(([, value]) => {
+    if (!value || typeof value !== "object") return false;
+    const config = value as Partial<TerminalThemeConfig>;
+    return (
+      typeof config.name === "string" &&
+      typeof config.background === "string" &&
+      typeof config.foreground === "string"
+    );
+  });
+  return Object.fromEntries(entries) as ThemeMap;
 }
 
 export type CursorStyle = "bar" | "block" | "underline";
 export type RendererKind = "dom" | "webgl";
 
 interface SettingsState {
-  theme: TerminalTheme;
-  customThemes: Record<string, TerminalThemeConfig>;
+  theme: string;
+  customThemes: ThemeMap;
   fontSize: number;
   fontFamily: string;
   cursorBlink: boolean;
@@ -384,7 +403,7 @@ interface SettingsState {
   backgroundBlur: number;
 
   loadSettings: () => Promise<void>;
-  setTheme: (theme: TerminalTheme) => Promise<void>;
+  setTheme: (theme: string) => Promise<void>;
   setFontSize: (fontSize: number) => Promise<void>;
   setFontFamily: (fontFamily: string) => Promise<void>;
   setCursorBlink: (cursorBlink: boolean) => Promise<void>;
@@ -450,13 +469,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       // 历史 bug：导入的自定义主题只写库不读取，重启后列表里就消失了
       const customThemesRec = await settingsGet("user", "terminal.custom_themes");
 
+      const customThemes = normalizeCustomThemes(customThemesRec?.value_json);
+      // 历史数据里可能保存了已不存在的主题键，回退到内置默认值避免终端渲染异常
+      const savedTheme = typeof themeRec?.value_json === "string" ? themeRec.value_json : "";
+      const theme = allThemes(customThemes)[savedTheme] ? savedTheme : DEFAULT_SETTINGS.theme;
+
       set({
         // 缺省值与初始 state 保持一致，避免首屏闪一下主题
-        customThemes:
-          customThemesRec?.value_json && typeof customThemesRec.value_json === "object"
-            ? (customThemesRec.value_json as Record<string, TerminalThemeConfig>)
-            : {},
-        theme: (themeRec?.value_json as TerminalTheme) || DEFAULT_SETTINGS.theme,
+        customThemes,
+        theme,
         fontSize: (fontRec?.value_json as number) || DEFAULT_SETTINGS.fontSize,
         fontFamily: (fontFamilyRec?.value_json as string) || DEFAULT_SETTINGS.fontFamily,
         cursorBlink:
@@ -487,7 +508,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
-  setTheme: async (theme: TerminalTheme) => {
+  setTheme: async (theme: string) => {
     set({ theme });
     try {
       await settingsSet("user", "terminal.theme", theme);

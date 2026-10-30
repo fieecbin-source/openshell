@@ -17,14 +17,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// 当前程序支持的 schema 版本。
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_app_meta.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_sync_v2.sql");
+const MIGRATION_004: &str = include_str!("../migrations/004_ai.sql");
 
 /// 迁移脚本清单：`(目标版本, SQL)`，必须按版本升序。
-const MIGRATIONS: &[(u32, &str)] = &[(1, MIGRATION_001), (2, MIGRATION_002), (3, MIGRATION_003)];
+const MIGRATIONS: &[(u32, &str)] = &[(1, MIGRATION_001), (2, MIGRATION_002), (3, MIGRATION_003), (4, MIGRATION_004)];
 
 /// 测试注入点：命中该版本时在提交前抛错，用于验证回滚与快照恢复。0 表示不注入。
 static FAIL_MIGRATION_AT: AtomicU32 = AtomicU32::new(0);

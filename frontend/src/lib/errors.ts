@@ -28,7 +28,7 @@ const CODE_MESSAGES: Record<string, string> = {
   HOSTKEY_UNKNOWN:
     "首次连接该服务器，尚未记录它的主机指纹。可将「主机密钥校验策略」设为「自动接受首次连接」后重试。",
   HOSTKEY_MISMATCH:
-    "服务器的主机指纹与历史记录不一致，为安全起见已阻止连接。若确认服务器重装过，可在会话设置里把「主机密钥校验策略」改为「不校验主机密钥」后重试。",
+    "服务器的主机指纹与历史记录不一致，已阻止连接。请通过可信渠道核实服务器指纹，并更新已信任的记录后重试。",
   HOST_UNREACHABLE: "连不上这台服务器：请确认 IP/端口正确、SSH 服务已启动，并且防火墙放行了该端口。",
   NETWORK: "网络连接中断了，请检查本机网络或服务器状态后重试。",
   DNS: "域名解析失败：请检查填写的服务器地址是否正确。",
@@ -73,9 +73,34 @@ const CODE_MESSAGES: Record<string, string> = {
  */
 const PATTERN_RULES: { re: RegExp; title: string; hint?: string }[] = [
   {
+    re: /UNIQUE constraint failed|already exists/i,
+    title: "数据已存在",
+    hint: "请检查已有记录，避免重复添加。",
+  },
+  {
+    re: /key is encrypted|encrypted private key|encrypted.*key/i,
+    title: "私钥需要口令",
+    hint: "请填写正确的私钥口令后重试。",
+  },
+  {
+    re: /Could not read key|failed to decode private key/i,
+    title: "私钥解析失败",
+    hint: "请确认选择的是 OpenSSH 或 PEM 格式私钥，并填写正确口令。",
+  },
+  {
+    re: /SSH 公钥|Public Key/i,
+    title: "需要 SSH 私钥",
+    hint: "请选择私钥；公钥应放在服务器的 authorized_keys 中。",
+  },
+  {
+    re: /reading ['\"]invoke['\"]|__TAURI_INTERNALS__|__TAURI__/i,
+    title: "当前运行在浏览器预览模式",
+    hint: "本地能力不可用，请使用 OpenShell 桌面应用。",
+  },
+  {
     re: /host key verification failed|hostkey.*(mismatch|changed)|remote host identification has changed/i,
     title: "服务器主机指纹校验未通过",
-    hint: "为安全起见已阻止连接。若确认服务器重装过系统，可在会话设置的「高级」里调整主机密钥校验策略。",
+    hint: "请通过可信渠道核实服务器指纹，再更新已信任的记录。",
   },
   {
     re: /permission denied \(publickey|no supported authentication methods|authentication failed|auth fail/i,
@@ -167,6 +192,7 @@ const TECHNICAL_MARKERS = [
   "unwrap",
   "index out of bounds",
   "null pointer",
+  "cannot read properties",
   "connection reset by peer",
   "kind(",
   "errno",

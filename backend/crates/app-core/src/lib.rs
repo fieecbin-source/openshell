@@ -1,3 +1,4 @@
+pub mod ai_service;
 pub mod app_services;
 pub mod card_service;
 pub mod connection_service;

@@ -14,6 +14,8 @@ import { formatFriendlyError } from "../lib/errors";
 import { appendSessionLog, dropSessionLog } from "../lib/terminal-log";
 import { TerminalSearch } from "./TerminalSearch";
 import { ConnectAuthModal } from "./ConnectAuthModal";
+import { Button } from "./ui/Button";
+import { RefreshIcon, SearchIcon, TriangleAlertIcon } from "./ui/icons";
 import {
   ackTerminal,
   openTerminal,
@@ -466,7 +468,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, logSessionOutput]);
 
   return (
-    <div className="relative h-full w-full bg-surface-950 overflow-hidden">
+    <div className="relative h-full w-full overflow-hidden bg-surface-muted">
       {/* 自定义壁纸背景层（位于终端画布下方，不拦截任何交互） */}
       {wallpaper && (
         <div
@@ -497,48 +499,44 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       <button
         onClick={() => setSearchOpen((prev) => !prev)}
         title="在终端中搜索 (Ctrl+F)"
-        className="absolute top-2 right-2 z-20 p-1.5 rounded-lg bg-surface-900/60 hover:bg-surface-800 text-slate-500 hover:text-slate-200 border border-surface-800/80 backdrop-blur-sm transition"
+        aria-label="在终端中搜索"
+        className="absolute right-2 top-2 z-20 rounded-os-md border border-line/10 bg-surface/80 p-1.5 text-ink-tertiary shadow-os-sm backdrop-blur-sm transition-colors duration-os ease-os hover:bg-surface hover:text-ink"
       >
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
+        <SearchIcon className="h-3.5 w-3.5" />
       </button>
 
       {tab.status === "connecting" && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface-950/80 backdrop-blur-sm text-slate-300">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent mb-3" />
-          <p className="text-xs font-medium">
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface/85 text-ink-secondary backdrop-blur-sm">
+          <div className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          <p className="text-os-sm font-medium text-ink">
             {tab.protocol === "serial" ? "正在打开串口通道..." : "正在建立 SSH 安全连接..."}
           </p>
-          <p className="text-[10px] text-slate-500 mt-1">{tab.sessionName}</p>
+          <p className="mt-1 text-os-2xs text-ink-tertiary">{tab.sessionName}</p>
         </div>
       )}
 
       {tab.status === "error" && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface-950/90 text-red-400 p-6 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-red-500/10 border border-red-500/20 mb-3 text-red-400">
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface/95 p-6 text-center backdrop-blur-sm">
+          <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-os-lg border border-state-danger/25 bg-state-danger/5 text-state-danger">
+            <TriangleAlertIcon className="h-6 w-6" />
           </div>
-          <h4 className="text-sm font-bold text-white mb-1">连接失败</h4>
-          <p className="text-xs max-w-md text-red-300 mb-4 whitespace-pre-line">
+          <h4 className="text-os-sm font-semibold text-ink">连接失败</h4>
+          <p className="mb-4 mt-1 max-w-md whitespace-pre-line text-os-xs leading-relaxed text-ink-secondary">
             {tab.error || "网络连接失败，请稍后重试。"}
           </p>
           {tab.protocol !== "serial" && (
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setAuthModalOpen(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-semibold transition"
-              >
+              <Button variant="primary" size="sm" onClick={() => setAuthModalOpen(true)}>
                 填写凭据重试
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                leading={<RefreshIcon className="h-3.5 w-3.5" />}
                 onClick={() => reconnectTab(tab.tabId)}
-                className="px-3.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 text-xs font-semibold transition"
               >
                 重新连接
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -548,13 +546,13 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
 
       {ctxMenu && (
         <div
-          className="fixed z-[70] min-w-[132px] rounded-lg border border-black/10 bg-white py-1 shadow-xl text-xs text-[#1d1d1f]"
+          className="fixed z-[70] min-w-[132px] rounded-os-md border border-line/10 bg-surface py-1 text-os-xs text-ink shadow-os-lg"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button
             type="button"
-            className="w-full px-3 py-1.5 text-left hover:bg-black/[0.06] disabled:opacity-40 disabled:hover:bg-transparent"
+            className="w-full px-3 py-1.5 text-left transition-colors duration-150 hover:bg-line/5 disabled:opacity-40 disabled:hover:bg-transparent"
             disabled={!terminalRef.current?.hasSelection()}
             onClick={() => {
               clipboardRef.current?.copy();
@@ -565,7 +563,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
           </button>
           <button
             type="button"
-            className="w-full px-3 py-1.5 text-left hover:bg-black/[0.06]"
+            className="w-full px-3 py-1.5 text-left transition-colors duration-150 hover:bg-line/5"
             onClick={() => {
               clipboardRef.current?.paste();
               setCtxMenu(null);

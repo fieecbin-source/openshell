@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import { useVaultStore } from "../stores/vaultStore";
 import { formatFriendlyError } from "../lib/errors";
+import { Button } from "./ui/Button";
+import { Checkbox } from "./ui/Controls";
+import { Field, Input } from "./ui/Field";
+import { Modal } from "./ui/Overlay";
+import { InlineNotice } from "./ui/Notice";
 
 /** 与后端 vault 的最小长度保持一致 */
 const MIN_MASTER_PASSWORD_LEN = 5;
@@ -55,91 +60,58 @@ export const VaultUnlockModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-md rounded-2xl border border-black/10 bg-white/95 p-8 shadow-apple-xl backdrop-blur-xl text-slate-800">
-        <div className="mb-6 flex items-center space-x-3.5">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-apple-blue/10 text-apple-blue shadow-apple-sm">
-            <svg
-              className="h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-              {isUninitialized ? "设置 OpenShell 应用主密码" : "解锁 OpenShell 保险库"}
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-              {isUninitialized
-                ? "首次使用，请设置主密码以加密保护会话凭据与密钥（至少 5 位，忘记后无法恢复）"
-                : "请输入主密码以解密会话凭据"}
-            </p>
-          </div>
-        </div>
+    <Modal
+      open
+      onClose={() => undefined}
+      title={isUninitialized ? "设置 OpenShell 应用主密码" : "解锁 OpenShell 保险库"}
+      description={
+        isUninitialized
+          ? "首次使用，请设置至少 5 位主密码以加密保护会话凭据与密钥；忘记后无法恢复。"
+          : "请输入主密码以解密会话凭据与密钥。"
+      }
+      widthClassName="w-full max-w-[420px]"
+      footer={
+        <Button variant="primary" type="submit" form="vault-unlock-form" loading={isLoading}>
+          {isLoading ? "处理中..." : isUninitialized ? "创建并解锁保险库" : "解锁保险库"}
+        </Button>
+      }
+    >
+      <form id="vault-unlock-form" onSubmit={handleSubmit} className="flex flex-col gap-3.5">
+        <Field label="主密码" htmlFor="vault-master-password">
+          <Input
+            id="vault-master-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="输入应用主密码"
+            autoFocus
+          />
+        </Field>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              主密码 (Master Password)
-            </label>
-            <input
+        {isUninitialized && (
+          <Field label="确认主密码" htmlFor="vault-confirm-password">
+            <Input
+              id="vault-confirm-password"
               type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••••"
-              autoFocus
-              className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-apple-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-apple-blue/20 transition"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="再次输入主密码"
             />
-          </div>
+          </Field>
+        )}
 
-          {isUninitialized && (
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                确认主密码 (Confirm Password)
-              </label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="••••••••••••"
-                className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:border-apple-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-apple-blue/20 transition"
-              />
-            </div>
-          )}
+        <Checkbox
+          checked={rememberKeychain}
+          onChange={setRememberKeychain}
+          label="在系统钥匙串中记住密码（自动解锁）"
+        />
 
-          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-2.5 text-[11px] leading-relaxed text-slate-500">
-            主密码仅在本机用于派生加密密钥（Argon2id），不会上传。
-            每 15 分钟无操作会自动锁定保险库，重新输密码即可解锁。
-          </div>
-
-          {(localError || error) && (
-            <div className="rounded-xl bg-red-50 border border-red-200 p-2.5 text-xs text-red-600 flex items-center gap-1.5">
-              <span>⚠️</span>
-              <span>{localError || error}</span>
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full rounded-xl bg-apple-blue px-4 py-2.5 text-sm font-semibold text-white shadow-apple-md transition hover:bg-apple-hoverBlue focus:outline-none focus:ring-2 focus:ring-apple-blue/30 disabled:opacity-50"
-          >
-            {isLoading
-              ? "处理中..."
-              : isUninitialized
-              ? "创建并解锁保险库"
-              : "解锁保险库"}
-          </button>
-        </form>
-      </div>
-    </div>
+        {(localError || error) && (
+          <InlineNotice tone="danger" title="无法继续">
+            {localError || error}
+          </InlineNotice>
+        )}
+      </form>
+    </Modal>
   );
 };

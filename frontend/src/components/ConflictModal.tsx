@@ -1,4 +1,9 @@
 import React, { useState } from "react";
+import { Button } from "./ui/Button";
+import { Badge } from "./ui/Surface";
+import { Checkbox } from "./ui/Controls";
+import { Modal } from "./ui/Overlay";
+import { cn } from "./ui/cn";
 
 export type ConflictAction = "overwrite" | "resume" | "skip" | "rename";
 
@@ -36,115 +41,142 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
   };
 
   const formatTime = (ts: number) => {
-    if (!ts) return "-";
+    if (!ts) return "—";
     const d = new Date(ts > 1e11 ? ts : ts * 1000);
     return d.toLocaleString();
   };
 
   const isSourceNewer = sourceMtime > targetMtime;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl text-slate-200 animate-in fade-in zoom-in-95 duration-150">
-        <div className="flex items-center gap-2.5 pb-3 border-b border-surface-800">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-white">文件传输冲突</h3>
-            <p className="text-xs text-amber-300">目标路径已存在同名文件</p>
-          </div>
-        </div>
+  const actionClass =
+    "flex flex-col items-start gap-0.5 rounded-os-md border p-2 text-left transition-colors duration-os ease-os";
 
-        <div className="mt-3 text-xs text-slate-300 font-mono bg-surface-950 p-2.5 rounded-lg border border-surface-800 break-all">
+  return (
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title="文件传输冲突"
+      description="目标路径已存在同名文件，请选择处理方式。"
+      widthClassName="w-full max-w-[480px]"
+      footer={
+        <Button variant="secondary" size="sm" onClick={onClose}>
+          取消本次操作
+        </Button>
+      }
+    >
+      <div className="space-y-3">
+        <div className="break-all rounded-os-md border border-line/10 bg-surface-muted px-3 py-2 font-mono text-os-xs text-ink">
           {fileName}
         </div>
 
         {/* 来源 vs 目标文件属性对比 */}
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded-lg bg-surface-950/60 p-2.5 border border-surface-800/80">
-            <span className="font-semibold text-emerald-400 block mb-1">
-              待传入文件 (源)
-            </span>
-            <div className="space-y-0.5 text-slate-400">
-              <p>大小: <span className="text-slate-200 font-mono">{formatSize(sourceSize)}</span></p>
-              <p>修改: <span className="text-slate-200">{formatTime(sourceMtime)}</span></p>
-              {isSourceNewer && <span className="inline-block px-1 py-0.2 bg-emerald-500/20 text-emerald-300 text-[10px] rounded mt-0.5">较新</span>}
+        <div className="grid grid-cols-2 gap-2">
+          <div
+            className={cn(
+              "rounded-os-md border p-2.5",
+              isSourceNewer
+                ? "border-state-success/30 bg-state-success/5"
+                : "border-line/10 bg-surface-muted",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-os-xs font-medium text-ink">待传入（源）</span>
+              {isSourceNewer && <Badge tone="success">较新</Badge>}
+            </div>
+            <div className="mt-1.5 space-y-0.5 font-mono text-os-2xs text-ink-tertiary">
+              <p className="flex justify-between gap-2">
+                <span>大小</span>
+                <span className="truncate tabular-nums text-ink-secondary">{formatSize(sourceSize)}</span>
+              </p>
+              <p className="flex justify-between gap-2">
+                <span>修改</span>
+                <span className="truncate text-ink-secondary">{formatTime(sourceMtime)}</span>
+              </p>
             </div>
           </div>
 
-          <div className="rounded-lg bg-surface-950/60 p-2.5 border border-surface-800/80">
-            <span className="font-semibold text-slate-400 block mb-1">
-              已存在文件 (目标)
-            </span>
-            <div className="space-y-0.5 text-slate-400">
-              <p>大小: <span className="text-slate-200 font-mono">{formatSize(targetSize)}</span></p>
-              <p>修改: <span className="text-slate-200">{formatTime(targetMtime)}</span></p>
-              {!isSourceNewer && targetMtime > 0 && <span className="inline-block px-1 py-0.2 bg-blue-500/20 text-blue-300 text-[10px] rounded mt-0.5">较新</span>}
+          <div
+            className={cn(
+              "rounded-os-md border p-2.5",
+              !isSourceNewer && targetMtime > 0
+                ? "border-accent/25 bg-accent/5"
+                : "border-line/10 bg-surface-muted",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-os-xs font-medium text-ink">已存在（目标）</span>
+              {!isSourceNewer && targetMtime > 0 && <Badge tone="accent">较新</Badge>}
+            </div>
+            <div className="mt-1.5 space-y-0.5 font-mono text-os-2xs text-ink-tertiary">
+              <p className="flex justify-between gap-2">
+                <span>大小</span>
+                <span className="truncate tabular-nums text-ink-secondary">{formatSize(targetSize)}</span>
+              </p>
+              <p className="flex justify-between gap-2">
+                <span>修改</span>
+                <span className="truncate text-ink-secondary">{formatTime(targetMtime)}</span>
+              </p>
             </div>
           </div>
         </div>
 
-        {/* 应用到全部 */}
-        <div className="mt-4 flex items-center gap-2 text-xs text-slate-300">
-          <input
-            type="checkbox"
-            id="apply-all-conflicts"
-            checked={applyToAll}
-            onChange={(e) => setApplyToAll(e.target.checked)}
-            className="rounded border-surface-700 bg-surface-800 text-emerald-500 focus:ring-0"
-          />
-          <label htmlFor="apply-all-conflicts" className="cursor-pointer select-none text-slate-300">
-            应用到本次传输的后续所有冲突 (Apply to all)
-          </label>
-        </div>
+        <Checkbox
+          checked={applyToAll}
+          onChange={setApplyToAll}
+          label="应用到本次传输的后续所有冲突"
+        />
 
         {/* 操作动作网格 */}
-        <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+        <div className="grid grid-cols-2 gap-2">
           <button
+            type="button"
             onClick={() => onResolve("overwrite", applyToAll)}
-            className="flex flex-col items-start p-2 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-200 transition"
+            className={cn(
+              actionClass,
+              "border-state-danger/30 bg-state-danger/5 text-state-danger hover:bg-state-danger/10",
+            )}
           >
-            <span className="font-bold">直接覆盖 (Overwrite)</span>
-            <span className="text-[10px] text-red-300/80">抹掉原文件并从头重新传输</span>
+            <span className="text-os-xs font-semibold">直接覆盖</span>
+            <span className="text-os-2xs opacity-80">抹掉原文件并从头重新传输</span>
           </button>
 
           <button
+            type="button"
             onClick={() => onResolve("resume", applyToAll)}
-            className="flex flex-col items-start p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-200 transition"
+            className={cn(
+              actionClass,
+              "border-state-success/30 bg-state-success/5 text-state-success hover:bg-state-success/10",
+            )}
           >
-            <span className="font-bold">断点续传 (Resume)</span>
-            <span className="text-[10px] text-emerald-300/80">从已有字节末尾继续传输</span>
+            <span className="text-os-xs font-semibold">断点续传</span>
+            <span className="text-os-2xs opacity-80">从已有字节末尾继续传输</span>
           </button>
 
           <button
+            type="button"
             onClick={() => onResolve("skip", applyToAll)}
-            className="flex flex-col items-start p-2 rounded-lg border border-surface-700 bg-surface-800 hover:bg-surface-700 text-slate-300 transition"
+            className={cn(
+              actionClass,
+              "border-line/10 bg-surface-muted text-ink-secondary hover:bg-line/5",
+            )}
           >
-            <span className="font-bold">跳过此项 (Skip)</span>
-            <span className="text-[10px] text-slate-400">保留目标文件不变</span>
+            <span className="text-os-xs font-semibold text-ink">跳过此项</span>
+            <span className="text-os-2xs text-ink-tertiary">保留目标文件不变</span>
           </button>
 
           <button
+            type="button"
             onClick={() => onResolve("rename", applyToAll)}
-            className="flex flex-col items-start p-2 rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-200 transition"
+            className={cn(
+              actionClass,
+              "border-accent/25 bg-accent/5 text-accent hover:bg-accent/10",
+            )}
           >
-            <span className="font-bold">保留两者 (Auto-Rename)</span>
-            <span className="text-[10px] text-blue-300/80">自动重命名为 file(1).ext</span>
-          </button>
-        </div>
-
-        <div className="mt-3 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-3 py-1 text-xs text-slate-400 hover:text-white transition"
-          >
-            取消本次操作
+            <span className="text-os-xs font-semibold">保留两者</span>
+            <span className="text-os-2xs opacity-80">自动重命名为 file(1).ext</span>
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };

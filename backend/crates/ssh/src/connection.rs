@@ -6,7 +6,8 @@ use openshell_core_domain::{
     AuthMethod, ByteStream, ConnectionId, DomainError, DomainResult, ErrorCode, ExecOutput,
     HostKeyPolicy, KnownHostRepository, SessionId, TermSize,
 };
-use russh::ChannelMsg;
+use russh::client::AuthResult;
+use russh::{ChannelMsg, MethodKind, MethodSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -87,52 +88,130 @@ impl SshConnection {
             };
 
         // 2. 身份认证
+        //
+        // 注意：russh 的认证调用内部没有任何超时保护。部分服务器（尤其启用 PAM 的
+        // macOS / Linux 主机）在密码被拒之后收到 keyboard-interactive 请求时会完全不回包，
+        // 客户端只能一直挂到服务器 LoginGraceTime（OpenSSH 默认 120 秒）才断开。
+        // 因此这里对每一步认证显式限时，让用户能在十几秒内拿到明确结论。
+        const AUTH_STEP_TIMEOUT: Duration = Duration::from_secs(15);
+        // 键盘交互回退必须由服务器主动公布，且正常服务器都是秒级响应；
+        // 用更短的超时，避免「密码错误」场景下让用户多等。
+        const KBD_STEP_TIMEOUT: Duration = Duration::from_secs(10);
+
         match opts.auth_method {
             AuthMethod::Password => {
                 let pass = opts.password.ok_or_else(|| {
                     DomainError::new(ErrorCode::AuthFailed, "密码认证需要提供登录密码")
                 })?;
+
+                // 2.1 标准 SSH 密码认证
+                let mut remaining_methods: Option<MethodSet> = None;
                 let mut authenticated = false;
-                // 首先尝试标准 SSH 密码认证
-                if let Ok(res) = handle.authenticate_password(&opts.username, &pass).await {
-                    if res.success() {
-                        authenticated = true;
+                match tokio::time::timeout(
+                    AUTH_STEP_TIMEOUT,
+                    handle.authenticate_password(&opts.username, &pass),
+                )
+                .await
+                {
+                    Err(_) => {
+                        return Err(DomainError::new(
+                            ErrorCode::Timeout,
+                            format!(
+                                "服务器 {addr} 在 {} 秒内没有响应密码认证请求，已中止本次连接。请检查服务器负载与网络稳定性。",
+                                AUTH_STEP_TIMEOUT.as_secs()
+                            ),
+                        ))
                     }
+                    Ok(Ok(AuthResult::Success)) => authenticated = true,
+                    Ok(Ok(AuthResult::Failure {
+                        remaining_methods: m,
+                        ..
+                    })) => remaining_methods = Some(m),
+                    Ok(Err(e)) => return Err(map_russh_error(e)),
                 }
 
-                // 若标准密码认证未成功，尝试 Keyboard-Interactive 回退认证（兼容大量开启 PAM/挑战应答的 Linux 主机）
+                // 2.2 标准密码认证未成功时，仅在服务器确实公布 keyboard-interactive 时回退
+                //     （兼容大量开启 PAM / 挑战应答的 Linux、macOS 主机）
+                //     注意：回退超时不立即返回，而是记下原因后统一给出结论，
+                //     这样错误文案里能同时包含「密码被拒」与后续线索。
+                let mut kbd_note: Option<String> = None;
                 if !authenticated {
-                    if let Ok(init) = handle
-                        .authenticate_keyboard_interactive_start(&opts.username, None)
+                    let kbd_supported = remaining_methods
+                        .as_ref()
+                        .map(|m| m.contains(&MethodKind::KeyboardInteractive))
+                        .unwrap_or(false);
+
+                    if kbd_supported {
+                        match tokio::time::timeout(
+                            KBD_STEP_TIMEOUT,
+                            handle.authenticate_keyboard_interactive_start(&opts.username, None),
+                        )
                         .await
-                    {
-                        match init {
-                            russh::client::KeyboardInteractiveAuthResponse::Success => {
-                                authenticated = true;
+                        {
+                            Err(_) => {
+                                kbd_note = Some(format!(
+                                    "随后尝试键盘交互认证时，服务器在 {} 秒内没有任何响应，已中止本次尝试。",
+                                    KBD_STEP_TIMEOUT.as_secs()
+                                ));
                             }
-                            russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
+                            Ok(Err(e)) => return Err(map_russh_error(e)),
+                            Ok(Ok(
+                                russh::client::KeyboardInteractiveAuthResponse::Success,
+                            )) => authenticated = true,
+                            Ok(Ok(russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
                                 prompts,
                                 ..
-                            } => {
+                            })) => {
                                 let responses = vec![pass.clone(); prompts.len()];
-                                if let Ok(russh::client::KeyboardInteractiveAuthResponse::Success) =
-                                    handle
-                                        .authenticate_keyboard_interactive_respond(responses)
-                                        .await
+                                match tokio::time::timeout(
+                                    KBD_STEP_TIMEOUT,
+                                    handle.authenticate_keyboard_interactive_respond(responses),
+                                )
+                                .await
                                 {
-                                    authenticated = true;
+                                    Err(_) => {
+                                        kbd_note = Some(format!(
+                                            "服务器要求键盘交互认证，但在 {} 秒内没有给出认证结果，已中止本次尝试。",
+                                            KBD_STEP_TIMEOUT.as_secs()
+                                        ));
+                                    }
+                                    Ok(Err(e)) => return Err(map_russh_error(e)),
+                                    Ok(Ok(
+                                        russh::client::KeyboardInteractiveAuthResponse::Success,
+                                    )) => authenticated = true,
+                                    Ok(Ok(_)) => {}
                                 }
                             }
-                            _ => {}
+                            Ok(Ok(
+                                russh::client::KeyboardInteractiveAuthResponse::Failure { .. },
+                            )) => {}
                         }
                     }
                 }
 
                 if !authenticated {
-                    return Err(DomainError::new(
-                        ErrorCode::AuthFailed,
-                        "密码认证被远端服务器拒绝，请核对用户名与密码是否正确",
-                    ));
+                    let mut message =
+                        String::from("密码认证被远端服务器拒绝，请核对用户名与密码是否正确。");
+                    if let Some(m) = remaining_methods.as_ref() {
+                        if !m.contains(&MethodKind::Password)
+                            && !m.contains(&MethodKind::KeyboardInteractive)
+                        {
+                            message = format!(
+                                "远端服务器未开放密码登录（服务器公布的认证方式：{}），请在服务器上启用密码认证或改用其他认证方式。",
+                                describe_methods(m)
+                            );
+                        }
+                    }
+                    if let Some(note) = kbd_note {
+                        message.push(' ');
+                        message.push_str(&note);
+                    }
+                    if opts.username == "root" {
+                        message.push_str(
+                            " 提示：macOS 默认 PermitRootLogin 为 prohibit-password，root 账号不能直接用密码登录；请改用普通账号，或在服务器 sshd_config 中放开 root 密码登录。",
+                        );
+                    }
+                    return Err(DomainError::new(ErrorCode::AuthFailed, message));
                 }
             }
             AuthMethod::PublicKey => {
@@ -189,12 +268,16 @@ impl SshConnection {
                 // - Some(Some(alg))：服务器支持 SHA-2，使用返回的算法；
                 // - None：服务器未公布（多为旧版 OpenSSH），走 ssh-rsa/SHA-1 兼容路径。
                 // 不能强行指定 Sha256，否则仅支持 ssh-rsa 的旧服务器会直接拒绝认证。
-                let best_hash = handle
-                    .best_supported_rsa_hash()
-                    .await
-                    .ok()
-                    .flatten()
-                    .flatten();
+                let best_hash = match tokio::time::timeout(
+                    AUTH_STEP_TIMEOUT,
+                    handle.best_supported_rsa_hash(),
+                )
+                .await
+                {
+                    // 查询失败或超时不应阻断认证，后续按未公布处理即可
+                    Ok(Ok(v)) => v.flatten(),
+                    _ => None,
+                };
                 let key = Arc::new(privkey);
                 let is_rsa = key.algorithm().is_rsa();
 
@@ -210,16 +293,28 @@ impl SshConnection {
                 for hash in hashes {
                     let key_with_hash =
                         russh::keys::key::PrivateKeyWithHashAlg::new(Arc::clone(&key), hash);
-                    match handle
-                        .authenticate_publickey(&opts.username, key_with_hash)
-                        .await
+                    match tokio::time::timeout(
+                        AUTH_STEP_TIMEOUT,
+                        handle.authenticate_publickey(&opts.username, key_with_hash),
+                    )
+                    .await
                     {
-                        Ok(res) if res.success() => {
+                        Err(_) => {
+                            last_err = Some(DomainError::new(
+                                ErrorCode::Timeout,
+                                format!(
+                                    "服务器 {addr} 在 {} 秒内没有响应公钥认证，已中止本次连接。",
+                                    AUTH_STEP_TIMEOUT.as_secs()
+                                ),
+                            ));
+                            break;
+                        }
+                        Ok(Ok(res)) if res.success() => {
                             authenticated = true;
                             break;
                         }
-                        Ok(_) => {}
-                        Err(e) => last_err = Some(map_russh_error(e)),
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => last_err = Some(map_russh_error(e)),
                     }
                 }
 
@@ -235,10 +330,23 @@ impl SshConnection {
             }
             AuthMethod::KeyboardInteractive => {
                 let pass = opts.password.unwrap_or_default();
-                let init = handle
-                    .authenticate_keyboard_interactive_start(&opts.username, None)
-                    .await
-                    .map_err(map_russh_error)?;
+                let init = match tokio::time::timeout(
+                    KBD_STEP_TIMEOUT,
+                    handle.authenticate_keyboard_interactive_start(&opts.username, None),
+                )
+                .await
+                {
+                    Err(_) => {
+                        return Err(DomainError::new(
+                            ErrorCode::Timeout,
+                            format!(
+                                "服务器 {addr} 在 {} 秒内没有响应键盘交互认证，已中止本次连接。",
+                                KBD_STEP_TIMEOUT.as_secs()
+                            ),
+                        ))
+                    }
+                    Ok(res) => res.map_err(map_russh_error)?,
+                };
                 match init {
                     russh::client::KeyboardInteractiveAuthResponse::Success => {}
                     russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
@@ -251,10 +359,23 @@ impl SshConnection {
                         prompts, ..
                     } => {
                         let responses = vec![pass; prompts.len()];
-                        let final_res = handle
-                            .authenticate_keyboard_interactive_respond(responses)
-                            .await
-                            .map_err(map_russh_error)?;
+                        let final_res = match tokio::time::timeout(
+                            KBD_STEP_TIMEOUT,
+                            handle.authenticate_keyboard_interactive_respond(responses),
+                        )
+                        .await
+                        {
+                            Err(_) => {
+                                return Err(DomainError::new(
+                                    ErrorCode::Timeout,
+                                    format!(
+                                        "服务器要求键盘交互认证，但在 {} 秒内没有给出认证结果，已中止本次连接。",
+                                        KBD_STEP_TIMEOUT.as_secs()
+                                    ),
+                                ))
+                            }
+                            Ok(res) => res.map_err(map_russh_error)?,
+                        };
                         match final_res {
                             russh::client::KeyboardInteractiveAuthResponse::Success => {}
                             _ => {
@@ -268,10 +389,23 @@ impl SshConnection {
                 }
             }
             AuthMethod::None => {
-                let res = handle
-                    .authenticate_none(&opts.username)
-                    .await
-                    .map_err(map_russh_error)?;
+                let res = match tokio::time::timeout(
+                    AUTH_STEP_TIMEOUT,
+                    handle.authenticate_none(&opts.username),
+                )
+                .await
+                {
+                    Err(_) => {
+                        return Err(DomainError::new(
+                            ErrorCode::Timeout,
+                            format!(
+                                "服务器 {addr} 在 {} 秒内没有响应免密登录请求，已中止本次连接。",
+                                AUTH_STEP_TIMEOUT.as_secs()
+                            ),
+                        ))
+                    }
+                    Ok(res) => res.map_err(map_russh_error)?,
+                };
                 if !res.success() {
                     return Err(DomainError::new(
                         ErrorCode::AuthFailed,
@@ -493,4 +627,13 @@ impl SshConnection {
             .await;
         Ok(())
     }
+}
+
+/// 把服务器公布的认证方式列表转成可读文本，用于认证失败时的提示。
+fn describe_methods(methods: &MethodSet) -> String {
+    methods
+        .iter()
+        .map(|m| <&'static str>::from(m))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

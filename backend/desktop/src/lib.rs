@@ -219,6 +219,15 @@ pub fn run() {
             serial_set_baud_rate,
             serial_get_stats,
             serial_close,
+            ai_config_get,
+            ai_catalog_get,
+            ai_config_save,
+            ai_delete_profile,
+            ai_set_active_profile,
+            ai_profile_test,
+            ai_logo_get,
+            ai_history_list,
+            ai_set_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OpenShell");

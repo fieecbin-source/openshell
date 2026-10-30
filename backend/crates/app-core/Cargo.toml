@@ -16,6 +16,7 @@ openshell-importer = { workspace = true }
 openshell-sync-protocol = { workspace = true }
 openshell-sync-client = { workspace = true }
 openshell-serial = { workspace = true }
+openshell-ai = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

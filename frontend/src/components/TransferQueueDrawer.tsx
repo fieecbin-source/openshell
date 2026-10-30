@@ -1,6 +1,12 @@
 import React, { useEffect } from "react";
 import { useSftpStore } from "../stores/sftpStore";
 import type { TransferTask } from "../types/ipc";
+import { Button } from "./ui/Button";
+import { Badge, EmptyState } from "./ui/Surface";
+import { Drawer } from "./ui/Overlay";
+import { InlineNotice } from "./ui/Notice";
+import { cn } from "./ui/cn";
+import { DownloadIcon, PauseIcon, StopIcon, UploadIcon } from "./ui/icons";
 
 export const TransferQueueDrawer: React.FC = () => {
   const {
@@ -22,8 +28,6 @@ export const TransferQueueDrawer: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [transferQueueOpen, pollTransfers]);
 
-  if (!transferQueueOpen) return null;
-
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -39,128 +43,147 @@ export const TransferQueueDrawer: React.FC = () => {
   const getStatusBadge = (t: TransferTask) => {
     switch (t.state) {
       case "transferring":
-        return <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md font-semibold">传输中</span>;
+        return <Badge tone="accent">传输中</Badge>;
       case "queued":
-        return <span className="text-[10px] bg-blue-50 text-[#0071e3] border border-blue-200 px-2 py-0.5 rounded-md font-semibold">排队中</span>;
+        return <Badge tone="neutral">排队中</Badge>;
       case "paused":
-        return <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md font-semibold">已暂停</span>;
+        return <Badge tone="warning">已暂停</Badge>;
       case "completed":
-        return <span className="text-[10px] bg-gray-100 text-[#86868b] border border-black/[0.06] px-2 py-0.5 rounded-md font-medium">已完成</span>;
+        return <Badge tone="success">已完成</Badge>;
       case "failed":
-        return <span className="text-[10px] bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-md font-semibold">失败</span>;
+        return <Badge tone="danger">失败</Badge>;
       case "cancelled":
-        return <span className="text-[10px] bg-gray-100 text-[#86868b] border border-black/[0.06] px-2 py-0.5 rounded-md font-medium">已取消</span>;
+        return <Badge tone="neutral">已取消</Badge>;
       default:
         return null;
     }
   };
 
+  const activeCount = transfers.filter(
+    (t) => t.state === "transferring" || t.state === "queued",
+  ).length;
+
   return (
-    <div className="absolute right-0 bottom-0 top-0 w-96 bg-white/95 border-l border-black/[0.08] shadow-apple-lg z-40 flex flex-col backdrop-blur-2xl text-[#1d1d1f] animate-in slide-in-from-right duration-200">
-      <div className="h-11 px-4 border-b border-black/[0.06] flex items-center justify-between bg-white/70">
-        <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 text-[#0071e3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
-          </svg>
-          <span className="text-xs font-semibold text-[#1d1d1f] tracking-tight">传输队列</span>
-          <span className="text-[10px] bg-black/[0.06] text-[#86868b] px-2 py-0.5 rounded-full font-mono font-medium">
-            {transfers.length}
-          </span>
-        </div>
-        <button
-          onClick={() => setTransferQueueOpen(false)}
-          className="text-[#86868b] hover:text-[#1d1d1f] p-1 rounded-lg hover:bg-black/[0.05] active:scale-95 transition"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
+    <Drawer
+      open={transferQueueOpen}
+      onClose={() => setTransferQueueOpen(false)}
+      title="传输队列"
+      description={transfers.length > 0 ? `共 ${transfers.length} 个任务` : "尚无任务"}
+      widthClassName="w-[380px]"
+      footer={
+        <Button variant="secondary" size="sm" onClick={() => setTransferQueueOpen(false)}>
+          关闭
+        </Button>
+      }
+    >
+      <div className="p-3">
         {transfers.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-[#86868b]">
-            <svg className="w-10 h-10 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            <p className="text-xs font-medium">暂无传输任务</p>
-          </div>
+          <EmptyState
+            className="py-16"
+            icon={<UploadIcon className="h-8 w-8" />}
+            title="暂无传输任务"
+            description="上传或下载文件后，任务进度会显示在这里。"
+          />
         ) : (
-          transfers.map((t) => {
-            const percent = t.total_bytes > 0
-              ? Math.min(100, Math.floor((t.transferred_bytes / t.total_bytes) * 100))
-              : 0;
+          <div className="space-y-2">
+            {transfers.map((t) => {
+              const percent =
+                t.total_bytes > 0
+                  ? Math.min(100, Math.floor((t.transferred_bytes / t.total_bytes) * 100))
+                  : 0;
 
-            const filename = (t.direction === "upload" ? t.local_path : t.remote_path)
-              .replace(/\\/g, "/")
-              .split("/")
-              .pop();
+              const filename = (t.direction === "upload" ? t.local_path : t.remote_path)
+                .replace(/\\/g, "/")
+                .split("/")
+                .pop();
 
-            return (
-              <div
-                key={t.id}
-                className="bg-[#f5f5f7] border border-black/[0.06] rounded-xl p-3 text-xs hover:border-black/[0.12] transition shadow-apple-sm"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5 truncate max-w-[200px]">
-                    <span className={t.direction === "upload" ? "text-[#0071e3] font-bold" : "text-emerald-600 font-bold"}>
-                      {t.direction === "upload" ? "↑" : "↓"}
+              return (
+                <div
+                  key={t.id}
+                  className="rounded-os-md border border-line/10 bg-surface p-2.5 transition-colors duration-os hover:border-line/20"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      {t.direction === "upload" ? (
+                        <UploadIcon className="h-3.5 w-3.5 shrink-0 text-accent" />
+                      ) : (
+                        <DownloadIcon className="h-3.5 w-3.5 shrink-0 text-state-success" />
+                      )}
+                      <span className="truncate text-os-xs font-medium text-ink" title={filename}>
+                        {filename}
+                      </span>
+                    </div>
+                    {getStatusBadge(t)}
+                  </div>
+
+                  {/* 进度条 */}
+                  <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-line/10">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-[width] duration-os ease-os",
+                        t.state === "completed"
+                          ? "bg-state-success"
+                          : t.state === "failed"
+                            ? "bg-state-danger"
+                            : t.state === "paused"
+                              ? "bg-state-warning"
+                              : "bg-accent",
+                      )}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+
+                  <div className="mt-1.5 flex items-center justify-between gap-2 font-mono text-os-2xs text-ink-tertiary">
+                    <span className="tabular-nums">
+                      {formatBytes(t.transferred_bytes)} / {formatBytes(t.total_bytes)}（{percent}%）
                     </span>
-                    <span className="font-semibold text-[#1d1d1f] truncate" title={filename}>
-                      {filename}
+                    <span className="tabular-nums">
+                      {t.state === "transferring" ? formatSpeed(t.speed_bps) : ""}
                     </span>
                   </div>
-                  {getStatusBadge(t)}
+
+                  {t.error_message && (
+                    <InlineNotice tone="danger" className="mt-2 px-2 py-1.5">
+                      <span className="line-clamp-2 break-all">{t.error_message}</span>
+                    </InlineNotice>
+                  )}
+
+                  {(t.state === "transferring" || t.state === "queued" || t.state === "paused") && (
+                    <div className="mt-2 flex items-center justify-end gap-1.5">
+                      {(t.state === "transferring" || t.state === "queued") && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-[24px] px-2 text-os-2xs"
+                          leading={<PauseIcon className="h-3 w-3" />}
+                          onClick={() => pauseTransfer(t.id)}
+                        >
+                          暂停
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-[24px] px-2 text-os-2xs text-state-danger hover:bg-state-danger/5"
+                        leading={<StopIcon className="h-3 w-3" />}
+                        onClick={() => cancelTransfer(t.id)}
+                      >
+                        取消
+                      </Button>
+                    </div>
+                  )}
                 </div>
+              );
+            })}
 
-                {/* 进度条 */}
-                <div className="w-full bg-black/[0.08] rounded-full h-1.5 overflow-hidden mb-2">
-                  <div
-                    className={`h-full rounded-full transition-all duration-300 ${
-                      t.state === "completed"
-                        ? "bg-emerald-500"
-                        : t.state === "failed"
-                        ? "bg-red-500"
-                        : "bg-[#0071e3]"
-                    }`}
-                    style={{ width: `${percent}%` }}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-[#86868b] font-mono">
-                  <span>
-                    {formatBytes(t.transferred_bytes)} / {formatBytes(t.total_bytes)} ({percent}%)
-                  </span>
-                  <span>{t.state === "transferring" ? formatSpeed(t.speed_bps) : ""}</span>
-                </div>
-
-                {t.error_message && (
-                  <p className="text-[10px] text-red-600 mt-1 truncate" title={t.error_message}>
-                    {t.error_message}
-                  </p>
-                )}
-
-                {(t.state === "transferring" || t.state === "queued") && (
-                  <div className="mt-2.5 flex items-center gap-1.5 justify-end">
-                    <button
-                      onClick={() => pauseTransfer(t.id)}
-                      className="px-2.5 py-1 rounded-lg bg-white border border-black/[0.08] text-[10px] font-semibold text-[#1d1d1f] hover:bg-black/[0.04] active:scale-[0.98] shadow-apple-sm transition"
-                    >
-                      暂停
-                    </button>
-                    <button
-                      onClick={() => cancelTransfer(t.id)}
-                      className="px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-[10px] font-semibold text-red-600 hover:bg-red-100 active:scale-[0.98] transition"
-                    >
-                      取消
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })
+            {activeCount > 0 && (
+              <p className="pt-1 text-center font-mono text-os-2xs text-ink-tertiary">
+                正在处理 {activeCount} 个任务…
+              </p>
+            )}
+          </div>
         )}
       </div>
-    </div>
+    </Drawer>
   );
 };

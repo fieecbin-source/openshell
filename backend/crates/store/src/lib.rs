@@ -12,8 +12,8 @@ pub use migrator::{open_with_migration, MigrationOptions, MigrationReport, SCHEM
 pub use models::SettingRecord;
 pub use open::Store;
 pub use repositories::{
-    CredentialRepo, GroupRepo, KnownHostRepo, PortForwardRepo, SecretRepo, SessionRepo,
-    SettingsRepo, SnippetRepo, SshKeyRepo, VaultRepo,
+    AiProfileRepo, CommandHistoryRepo, CredentialRepo, GroupRepo, KnownHostRepo, PortForwardRepo,
+    SecretRepo, SessionRepo, SettingsRepo, SnippetRepo, SshKeyRepo, VaultRepo,
 };
 
 #[cfg(test)]

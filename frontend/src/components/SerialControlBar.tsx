@@ -1,10 +1,17 @@
 import React, { useEffect } from "react";
 import { useSerialStore } from "../stores/serialStore";
+import { Badge } from "./ui/Surface";
+import { Button } from "./ui/Button";
+import { Checkbox, Segmented } from "./ui/Controls";
+import { cn } from "./ui/cn";
+import { PowerIcon } from "./ui/icons";
 
 interface SerialControlBarProps {
   cardId: string;
   baudRate?: number;
 }
+
+type SerialViewMode = "ascii" | "hex";
 
 export const SerialControlBar: React.FC<SerialControlBarProps> = ({
   cardId,
@@ -75,66 +82,56 @@ export const SerialControlBar: React.FC<SerialControlBarProps> = ({
     return `${(bps / (1024 * 1024)).toFixed(2)} MB/s`;
   };
 
+  const lineState = [
+    { key: "cts", label: "CTS", title: "Clear To Send", value: currentModem.cts },
+    { key: "dsr", label: "DSR", title: "Data Set Ready", value: currentModem.dsr },
+    { key: "cd", label: "CD", title: "Carrier Detect", value: currentModem.cd },
+    { key: "ri", label: "RI", title: "Ring Indicator", value: currentModem.ri },
+  ];
+
+  const signalClass = (active: boolean) =>
+    cn(
+      "flex h-[24px] items-center gap-1 rounded-os-sm border px-1.5 font-mono text-os-2xs font-semibold",
+      active
+        ? "border-accent/30 bg-accent/10 text-accent"
+        : "border-line/10 bg-surface text-ink-tertiary hover:text-ink-secondary",
+    );
+
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 bg-[#f5f5f7] border-b border-black/[0.06] text-xs text-[#1d1d1f] select-none">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b border-line/10 bg-surface-muted px-3 py-1.5 text-os-xs text-ink select-none">
       {/* 模式选择 & 时间戳 */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center bg-black/[0.06] rounded-lg p-0.5">
-          <button
-            type="button"
-            className={`px-2.5 py-0.5 rounded-md text-xs transition active:scale-[0.98] ${
-              viewMode === "ascii"
-                ? "bg-white text-[#1d1d1f] font-semibold shadow-apple-sm"
-                : "text-[#86868b] hover:text-[#1d1d1f]"
-            }`}
-            onClick={() => setViewMode("ascii")}
-          >
-            ASCII
-          </button>
-          <button
-            type="button"
-            className={`px-2.5 py-0.5 rounded-md text-xs transition active:scale-[0.98] ${
-              viewMode === "hex"
-                ? "bg-white text-[#1d1d1f] font-semibold shadow-apple-sm"
-                : "text-[#86868b] hover:text-[#1d1d1f]"
-            }`}
-            onClick={() => setViewMode("hex")}
-          >
-            HEX 转储
-          </button>
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented<SerialViewMode>
+          value={viewMode}
+          onChange={setViewMode}
+          size="sm"
+          ariaLabel="串口显示模式"
+          options={[
+            { value: "ascii", label: "ASCII" },
+            { value: "hex", label: "HEX 转储" },
+          ]}
+        />
 
-        <label className="flex items-center gap-1.5 cursor-pointer text-[#424245] hover:text-[#1d1d1f]">
-          <input
-            type="checkbox"
-            checked={showTimestamp}
-            onChange={(e) => setShowTimestamp(e.target.checked)}
-            className="w-3.5 h-3.5 rounded border-black/[0.2] text-[#0071e3] focus:ring-0 accent-[#0071e3]"
-          />
-          <span className="text-[11px] font-medium">时间戳</span>
-        </label>
+        <Checkbox
+          checked={showTimestamp}
+          onChange={setShowTimestamp}
+          label={<span className="text-os-2xs text-ink-secondary">时间戳</span>}
+          className="gap-1.5"
+        />
 
-        <span className="text-black/[0.15]">|</span>
-
-        {/* 波特率胶囊 */}
-        <span className="px-2 py-0.5 rounded-md bg-white border border-black/[0.08] shadow-apple-sm font-mono text-[11px] text-emerald-700 font-semibold">
+        <Badge tone="neutral" className="font-mono">
           {baudRate} baud
-        </span>
+        </Badge>
       </div>
 
       {/* 控制线与 Modem 状态灯 */}
-      <div className="flex items-center gap-4">
-        {/* 控制线开关 */}
+      <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={handleToggleDtr}
             title="Data Terminal Ready (点击切换电平)"
-            className={`px-2 py-0.5 rounded-md font-mono text-[11px] font-bold border transition active:scale-[0.98] ${
-              dtrState
-                ? "bg-emerald-50 text-emerald-700 border-emerald-300 shadow-apple-sm"
-                : "bg-black/[0.04] text-[#86868b] border-black/[0.08]"
-            }`}
+            className={signalClass(dtrState)}
           >
             DTR
           </button>
@@ -142,74 +139,49 @@ export const SerialControlBar: React.FC<SerialControlBarProps> = ({
             type="button"
             onClick={handleToggleRts}
             title="Request To Send (点击切换电平)"
-            className={`px-2 py-0.5 rounded-md font-mono text-[11px] font-bold border transition active:scale-[0.98] ${
-              rtsState
-                ? "bg-emerald-50 text-emerald-700 border-emerald-300 shadow-apple-sm"
-                : "bg-black/[0.04] text-[#86868b] border-black/[0.08]"
-            }`}
+            className={signalClass(rtsState)}
           >
             RTS
           </button>
-          <button
-            type="button"
-            onClick={() => esp32Reset(cardId)}
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-[24px] px-2 text-os-2xs"
+            leading={<PowerIcon className="h-3 w-3" />}
             title="触发 ESP32 / STM32 硬件复位脉冲"
-            className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition active:scale-95 shadow-apple-sm"
+            onClick={() => esp32Reset(cardId)}
           >
-            ⚡ 复位
-          </button>
+            复位
+          </Button>
         </div>
 
-        {/* 状态引脚指示灯 */}
-        <div className="flex items-center gap-2.5 font-mono text-[10px]">
-          <div className="flex items-center gap-1" title="Clear To Send">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                currentModem.cts ? "bg-emerald-500 shadow-sm" : "bg-black/20"
-              }`}
-            />
-            <span className={currentModem.cts ? "text-[#1d1d1f] font-bold" : "text-[#86868b]"}>CTS</span>
-          </div>
-
-          <div className="flex items-center gap-1" title="Data Set Ready">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                currentModem.dsr ? "bg-emerald-500 shadow-sm" : "bg-black/20"
-              }`}
-            />
-            <span className={currentModem.dsr ? "text-[#1d1d1f] font-bold" : "text-[#86868b]"}>DSR</span>
-          </div>
-
-          <div className="flex items-center gap-1" title="Carrier Detect">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                currentModem.cd ? "bg-emerald-500 shadow-sm" : "bg-black/20"
-              }`}
-            />
-            <span className={currentModem.cd ? "text-[#1d1d1f] font-bold" : "text-[#86868b]"}>CD</span>
-          </div>
-
-          <div className="flex items-center gap-1" title="Ring Indicator">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                currentModem.ri ? "bg-emerald-500 shadow-sm" : "bg-black/20"
-              }`}
-            />
-            <span className={currentModem.ri ? "text-[#1d1d1f] font-bold" : "text-[#86868b]"}>RI</span>
-          </div>
+        <div className="flex items-center gap-2 font-mono text-os-2xs">
+          {lineState.map((line) => (
+            <span key={line.key} className="flex items-center gap-1" title={line.title}>
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  line.value ? "bg-accent" : "bg-line/20",
+                )}
+              />
+              <span className={line.value ? "font-semibold text-ink" : "text-ink-tertiary"}>
+                {line.label}
+              </span>
+            </span>
+          ))}
         </div>
-
-        <span className="text-black/[0.15]">|</span>
 
         {/* 流量统计 */}
-        <div className="flex items-center gap-3 font-mono text-[11px] text-[#86868b]">
+        <div className="flex items-center gap-2.5 font-mono text-os-2xs tabular-nums text-ink-tertiary">
           <span title={`接收总计: ${currentStats.rx_bytes} 字节`}>
-            ↓ <strong className="text-[#1d1d1f]">{formatBytes(currentStats.rx_bytes)}</strong>{" "}
-            <span>({formatRate(currentStats.rx_bps)})</span>
+            RX{" "}
+            <span className="font-semibold text-ink">{formatBytes(currentStats.rx_bytes)}</span>{" "}
+            <span className="text-ink-tertiary">({formatRate(currentStats.rx_bps)})</span>
           </span>
           <span title={`发送总计: ${currentStats.tx_bytes} 字节`}>
-            ↑ <strong className="text-[#1d1d1f]">{formatBytes(currentStats.tx_bytes)}</strong>{" "}
-            <span>({formatRate(currentStats.tx_bps)})</span>
+            TX{" "}
+            <span className="font-semibold text-ink">{formatBytes(currentStats.tx_bytes)}</span>{" "}
+            <span className="text-ink-tertiary">({formatRate(currentStats.tx_bps)})</span>
           </span>
         </div>
       </div>
