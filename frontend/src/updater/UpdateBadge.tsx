@@ -36,8 +36,8 @@ export const UpdateBadge: React.FC = () => {
       aria-label={UPDATE_COPY.badge.ariaLabel}
       className={`relative p-1.5 rounded-xl border transition shadow-apple-sm active:scale-[0.98] ${
         hasUpdate
-          ? "border-[#0071e3]/30 bg-[#0071e3]/[0.06] text-[#0071e3] hover:bg-[#0071e3]/[0.10]"
-          : "border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+          ? "border-[#0071e3]/30 bg-[#0071e3]/[0.06] text-accent hover:bg-[#0071e3]/[0.10]"
+          : "border-line/15 bg-surface text-ink-secondary hover:bg-surface-muted hover:text-ink"
       }`}
     >
       <svg

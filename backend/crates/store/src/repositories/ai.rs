@@ -341,7 +341,10 @@ mod tests {
 
     fn migrated_store() -> Store {
         let store = Store::open_in_memory().expect("open in-memory db");
-        assert_eq!(store.migrate().expect("migrate"), crate::migrator::SCHEMA_VERSION);
+        assert_eq!(
+            store.migrate().expect("migrate"),
+            crate::migrator::SCHEMA_VERSION
+        );
         store
     }
 
@@ -380,7 +383,10 @@ mod tests {
     #[test]
     fn ai_migration_on_empty_db_creates_tables() {
         let store = Store::open_in_memory().expect("open in-memory db");
-        assert_eq!(store.migrate().expect("migrate"), crate::migrator::SCHEMA_VERSION);
+        assert_eq!(
+            store.migrate().expect("migrate"),
+            crate::migrator::SCHEMA_VERSION
+        );
         assert!(table_exists(&store, "ai_profile"));
         assert!(table_exists(&store, "command_history"));
     }
@@ -407,12 +413,18 @@ mod tests {
         assert_eq!(version, 1);
         assert!(!table_exists(&store, "ai_profile"));
 
-        assert_eq!(store.migrate().expect("migrate v1 -> v2"), crate::migrator::SCHEMA_VERSION);
+        assert_eq!(
+            store.migrate().expect("migrate v1 -> v2"),
+            crate::migrator::SCHEMA_VERSION
+        );
         assert!(table_exists(&store, "ai_profile"));
         assert!(table_exists(&store, "command_history"));
 
         // 再次迁移幂等。
-        assert_eq!(store.migrate().expect("migrate again"), crate::migrator::SCHEMA_VERSION);
+        assert_eq!(
+            store.migrate().expect("migrate again"),
+            crate::migrator::SCHEMA_VERSION
+        );
         assert!(table_exists(&store, "ai_profile"));
     }
 

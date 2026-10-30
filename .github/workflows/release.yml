@@ -43,6 +43,9 @@ jobs:
       - name: Tag matches version
         run: node scripts/release.mjs check --tag "${{ github.event.inputs.tag_name || github.ref_name }}"
 
+      - name: Validate clean release inputs and bundled resource allowlist
+        run: node scripts/check-release-inputs.mjs
+
       # 发布守卫 1：仓库里一旦混入本地数据库/环境文件，先在这里拦住，
       # 否则它们可能被 frontendDist 或 bundler 一起打进安装包。
       - name: Reject tracked local data / secret files
@@ -76,6 +79,7 @@ jobs:
             args: '--target x86_64-pc-windows-msvc'
             bundles: 'nsis'
             rust_targets: ''
+            target: x86_64-pc-windows-msvc
           - os: macos-latest
             label: macos-universal
             platform: macos
@@ -83,6 +87,7 @@ jobs:
             args: '--target universal-apple-darwin'
             bundles: 'dmg'
             rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            target: universal-apple-darwin
           - os: ubuntu-22.04
             label: linux-x86_64
             platform: linux
@@ -90,6 +95,7 @@ jobs:
             args: '--target x86_64-unknown-linux-gnu'
             bundles: 'appimage,deb'
             rust_targets: ''
+            target: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -125,6 +131,12 @@ jobs:
       - name: Build frontend
         run: pnpm --filter @openshell/frontend build
 
+      - name: Validate frontend and appearance regressions
+        run: |
+          pnpm lint
+          pnpm test
+          node scripts/check-package.mjs frontend/dist
+
       - name: Build desktop bundles
         run: pnpm tauri build ${{ matrix.args }} --bundles ${{ matrix.bundles }}
 
@@ -132,21 +144,18 @@ jobs:
         if: matrix.platform == 'windows'
         shell: bash
         run: |
-          mkdir -p target/portable
-          EXE_PATH=$(find target -name "openshell.exe" -not -path "*/build/*" -not -path "*/deps/*" | head -n 1)
-          if [ -n "$EXE_PATH" ]; then
-            cp "$EXE_PATH" target/portable/OpenShell.exe
-            powershell -Command "Compress-Archive -Path target/portable/OpenShell.exe -DestinationPath target/OpenShell-portable.zip -Force" || true
-          fi
+          mkdir -p target/portable target/portable-archives
+          cp target/x86_64-pc-windows-msvc/release/OpenShell.exe target/portable/OpenShell.exe
+          touch target/portable/openshell.portable
+          cp THIRD_PARTY_NOTICES.md target/portable/
+          powershell -Command "Compress-Archive -Path target/portable/* -DestinationPath target/portable-archives/OpenShell-portable.zip -Force"
 
       - name: Package macOS portable zip
         if: matrix.platform == 'macos'
         shell: bash
         run: |
-          APP_DIR=$(find target -name "OpenShell.app" -type d | head -n 1)
-          if [ -n "$APP_DIR" ]; then
-            (cd "$(dirname "$APP_DIR")" && zip -r -y "../../OpenShell-portable.zip" "OpenShell.app") || true
-          fi
+          mkdir -p target/portable-archives
+          (cd target/universal-apple-darwin/release/bundle/macos && zip -r -y "$GITHUB_WORKSPACE/target/portable-archives/OpenShell-portable.zip" OpenShell.app)
 
       - name: Build Linux standalone server binary
         if: matrix.platform == 'linux'
@@ -154,22 +163,36 @@ jobs:
         run: |
           cargo build --release -p openshell-server --target x86_64-unknown-linux-gnu
           VERSION=$(node scripts/version.mjs --print)
-          mkdir -p target/server-pkg
+          mkdir -p target/server-pkg artifacts
           cp target/x86_64-unknown-linux-gnu/release/openshell-server target/server-pkg/
           cp -r deploy target/server-pkg/
           cp docs/SYNC.md target/server-pkg/
-          tar -czvf "artifacts/openshell-server-${VERSION}-linux-x86_64.tar.gz" -C target/server-pkg . || true
+          tar -czf "artifacts/openshell-server-${VERSION}-linux-x86_64.tar.gz" -C target/server-pkg .
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, statSync, writeFileSync } from 'node:fs';
+          const version = JSON.parse(readFileSync('frontend/package.json', 'utf8')).version;
+          const name = `openshell-server-${version}-linux-x86_64.tar.gz`;
+          const path = `artifacts/${name}`;
+          writeFileSync('artifacts/assets-server-linux-x86_64.json', JSON.stringify({
+            platform: 'linux-server', arch: 'x86_64', version,
+            files: [{ name, size: statSync(path).size, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }],
+          }, null, 2));
+          NODE
 
       - name: Normalize asset names
         shell: bash
         run: |
           VERSION=$(node scripts/version.mjs --print)
           node scripts/release.mjs assets \
-            --root target \
+            --root "target/${{ matrix.target }}/release/bundle,target/portable-archives" \
             --version "$VERSION" \
             --platform ${{ matrix.platform }} \
             --arch ${{ matrix.arch }} \
             --out artifacts
+
+      - name: Check release artifacts for local data
+        run: node scripts/check-package.mjs artifacts
 
       - uses: actions/upload-artifact@v4
         with:

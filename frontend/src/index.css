@@ -5,18 +5,21 @@
 @tailwind utilities;
 
 :root {
-  /* 语义色板（RGB 三元组，供 Tailwind 以 / <alpha> 组合透明度） */
-  --os-canvas: 244 244 246;
+  /* Daylight glass: blue-white materials with high-contrast blue-grey ink. */
+  --os-canvas: 248 251 255;
   --os-surface: 255 255 255;
-  --os-surface-muted: 250 250 252;
-  --os-line: 0 0 0;
-  --os-ink: 20 20 22;
-  --os-ink-secondary: 95 95 102;
-  --os-ink-tertiary: 138 138 144;
-  --os-accent: 0 113 227;
-  --os-success: 31 122 77;
-  --os-warning: 154 103 0;
-  --os-danger: 192 57 43;
+  --os-surface-muted: 243 248 255;
+  --os-line: 69 94 123;
+  --os-ink: 29 49 74;
+  --os-ink-secondary: 61 81 106;
+  --os-ink-tertiary: 78 98 121;
+  --os-accent: 29 90 172;
+  --os-action: 37 99 235;
+  --os-danger-action: 180 45 67;
+  --os-success: 15 111 87;
+  --os-warning: 139 89 17;
+  --os-danger: 180 45 67;
+  --os-scrim: 226 236 248;
 
   /* 动效令牌 */
   --os-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -108,10 +111,153 @@ button:active:not(:disabled) {
   }
 }
 
-/* xterm.js 容器样式保持不变（终端主题独立于壳层令牌） */
+/* Let xterm paint ANSI cell backgrounds. Only its viewport is transparent so
+   wallpaper can show through without erasing full-screen program colors. */
 .xterm {
-  padding: 8px;
+  padding: 10px 12px;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+  text-rendering: auto;
+  text-shadow: none;
+  filter: none;
 }
-.xterm-viewport {
-  overflow-y: auto !important;
+.xterm .xterm-viewport { background-color: transparent !important; }
+.xterm-viewport { overflow-y: auto !important; }
+
+/* The material and foreground share one palette; no competing light overrides. */
+.workspace-background {
+  background-color: rgb(var(--os-canvas));
+  background-image:
+    radial-gradient(ellipse at 8% 0%, rgb(177 213 255 / 0.12), transparent 48%),
+    radial-gradient(ellipse at 95% 90%, rgb(194 235 226 / 0.09), transparent 45%);
+}
+
+.liquid-glass-backdrop,
+.liquid-glass-panel,
+.liquid-glass-chrome {
+  backdrop-filter: blur(28px) saturate(125%);
+  -webkit-backdrop-filter: blur(28px) saturate(125%);
+}
+
+.liquid-glass-panel {
+  color: rgb(var(--os-ink));
+  background: linear-gradient(145deg, rgb(255 255 255 / 0.99), rgb(249 252 255 / 0.99));
+  border: 1px solid rgb(var(--os-line) / 0.18);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95), 0 20px 56px rgb(75 116 165 / 0.12);
+}
+
+.liquid-glass-chrome {
+  background: linear-gradient(120deg, rgb(255 255 255 / 0.98), rgb(245 250 255 / 0.98));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85);
+}
+
+.liquid-glass-card {
+  background: rgb(var(--os-surface) / 0.96);
+  border: 1px solid rgb(var(--os-line) / 0.14);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95);
+  transition: background-color 160ms var(--os-ease), border-color 160ms var(--os-ease);
+}
+.liquid-glass-card:hover {
+  border-color: rgb(var(--os-line) / 0.25);
+  background: rgb(var(--os-surface) / 0.96);
+}
+.liquid-glass-pill {
+  color: rgb(var(--os-ink-secondary));
+  background: rgb(var(--os-line) / 0.04);
+  border: 1px solid transparent;
+  transition: background-color 160ms var(--os-ease), color 160ms var(--os-ease);
+}
+.liquid-glass-pill:hover { background: rgb(var(--os-line) / 0.08); }
+.liquid-glass-pill-active {
+  color: rgb(var(--os-accent));
+  background: rgb(var(--os-accent) / 0.14);
+  border: 1px solid rgb(var(--os-accent) / 0.28);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85);
+  font-weight: 600;
+}
+
+.glass-host { isolation: isolate; }
+.glass-host > :not(.glass-material) { position: relative; z-index: 1; }
+.glass-material {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Light can brighten this plane but never tint it grey or black. */
+  mix-blend-mode: screen;
+}
+/* The library's black underlays and elastic transforms are disabled on light
+   enterprise surfaces. Its optical filter is confined to the material plane. */
+.glass-material > :not(.liquid-library) { display: none !important; }
+.glass-material .liquid-library { transform: none !important; transition: none !important; }
+.glass-material .glass {
+  display: block !important;
+  width: 100%;
+  height: 100%;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95) !important;
+  transition: none !important;
+}
+.glass-material .glass__warp {
+  background: linear-gradient(130deg, rgb(255 255 255 / 0.50), rgb(225 239 255 / 0.24));
+  opacity: 0.16;
+}
+.glass-material .glass > div, .glass-size-probe { width: 100%; height: 100%; }
+
+/* Native option lists need an opaque backing in the Windows WebView. */
+select option, select optgroup {
+  background: rgb(var(--os-surface));
+  color: rgb(var(--os-ink));
+}
+input, textarea { user-select: text; }
+input[type="range"], input[type="checkbox"], input[type="radio"] {
+  accent-color: rgb(var(--os-action));
+}
+input[type="range"] {
+  appearance: none;
+  height: 20px;
+  background: transparent;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: rgb(var(--os-line) / 0.22);
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  border: 2px solid rgb(var(--os-accent));
+  background: rgb(var(--os-action));
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 4px;
+  background: rgb(var(--os-line) / 0.22);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgb(var(--os-accent));
+  background: rgb(var(--os-action));
+}
+
+/* Keep materials legible when blur is unavailable or explicitly reduced. */
+@supports not (backdrop-filter: blur(1px)) {
+  .liquid-glass-panel, .liquid-glass-chrome { background: rgb(var(--os-surface)); }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .liquid-glass-panel, .liquid-glass-chrome, .liquid-glass-card {
+    background: rgb(var(--os-surface));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-color: rgb(var(--os-line) / 0.45);
+  }
+}
+@media (prefers-contrast: more) {
+  :root { --os-ink-secondary: 39 59 82; --os-ink-tertiary: 51 71 94; }
 }

@@ -88,7 +88,8 @@ fn upgrades_legacy_ai_v2_database() {
     let db_path = tmp.path().join("openshell.db");
     let conn = Connection::open(&db_path).unwrap();
     conn.execute_batch(MIGRATION_001).unwrap();
-    conn.execute_batch(include_str!("../migrations/004_ai.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/004_ai.sql"))
+        .unwrap();
     conn.execute_batch("DROP TABLE app_meta;").unwrap();
     conn.execute("INSERT INTO ai_profile (id, provider, label, base_url, model_id, wire, created_at, updated_at) VALUES ('p1', 'custom', 'test', 'https://example.invalid', 'model', 'openai', 1, 1)", []).unwrap();
     conn.pragma_update(None, "user_version", 2i64).unwrap();
@@ -179,7 +180,10 @@ fn upgrades_v2_sync_metadata_without_losing_data() {
         open_with_migration(&db_path, &options_for(tmp.path())).expect("open and migrate v2");
     assert_eq!(report.from_version, 2);
     assert_eq!(report.schema_version, SCHEMA_VERSION);
-    assert_eq!(store.schema_version().expect("schema version"), SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().expect("schema version"),
+        SCHEMA_VERSION
+    );
 
     let conn = Connection::open(&db_path).expect("reopen db");
     assert_eq!(group_name(&conn, "grp-v2"), "保留分组");

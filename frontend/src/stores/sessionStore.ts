@@ -82,6 +82,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   createGroup: async (name, parentId) => {
     const group = await createGroup(name, parentId);
+    set({ groups: [...get().groups.filter((item) => item.id !== group.id), group] });
     await get().loadAll();
     return group;
   },

@@ -13,9 +13,7 @@ import { getWallpaperStyle } from "../lib/wallpapers";
 import { formatFriendlyError } from "../lib/errors";
 import { appendSessionLog, dropSessionLog } from "../lib/terminal-log";
 import { TerminalSearch } from "./TerminalSearch";
-import { ConnectAuthModal } from "./ConnectAuthModal";
-import { Button } from "./ui/Button";
-import { RefreshIcon, SearchIcon, TriangleAlertIcon } from "./ui/icons";
+import { MaximizeIcon, MinimizeIcon, SearchIcon } from "./ui/icons";
 import {
   ackTerminal,
   openTerminal,
@@ -35,23 +33,6 @@ interface XtermViewProps {
    * `terminal_resize`，保证 PTY 列宽与界面一致。
    */
   visible?: boolean;
-}
-
-/** 将主题背景色的十六进制值转换为带透明度的 rgba，用于透出壁纸 */
-function withAlpha(hexColor: string, alpha: number): string {
-  const hex = hexColor.replace("#", "");
-  if (hex.length !== 6 && hex.length !== 3) return hexColor;
-  const full =
-    hex.length === 3
-      ? hex
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : hex;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 /** 只允许打开 http/https 链接，避免终端内容诱导打开本地文件或自定义协议 */
@@ -75,29 +56,21 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   visibleRef.current = visible;
 
   const [searchOpen, setSearchOpen] = useState(false);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // 由终端初始化时注册的复制/粘贴动作，供右键菜单调用
   const clipboardRef = useRef<{ copy: () => void; paste: () => void } | null>(null);
-  const reconnectTab = useTerminalStore((s) => s.reconnectTab);
+  const isFullscreen = useTerminalStore((s) => s.isFullscreen);
+  const toggleFullscreen = useTerminalStore((s) => s.toggleFullscreen);
 
-  // 认证/凭据类错误自动弹出补录窗口，用户可直接填写密码或私钥口令重连
-  useEffect(() => {
-    if (
-      tab.status === "error" &&
-      tab.error &&
-      !/保险库/.test(tab.error) &&
-      /口令|私钥|认证|登录密码/.test(tab.error)
-    ) {
-      setAuthModalOpen(true);
-    }
-  }, [tab.status, tab.error]);
+  // 记录最近一次打印的连接状态，避免重复输出
+  const lastLoggedStateRef = useRef<string>("");
 
   // 逐字段订阅，避免设置面板开关（settingsModalOpen）等无关变化让所有终端重渲染
   const theme = useSettingsStore((s) => s.theme);
   const customThemes = useSettingsStore((s) => s.customThemes);
   const fontSize = useSettingsStore((s) => s.fontSize);
   const fontFamily = useSettingsStore((s) => s.fontFamily);
+  const fontWeight = useSettingsStore((s) => s.fontWeight);
   const cursorBlink = useSettingsStore((s) => s.cursorBlink);
   const cursorStyle = useSettingsStore((s) => s.cursorStyle);
   const scrollback = useSettingsStore((s) => s.scrollback);
@@ -115,6 +88,9 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     [backgroundId, backgroundCustom]
   );
 
+  // 根据壁纸控制背景：
+  // 1. 有壁纸的情况下不能显示纯色，必须切换为壁纸；
+  // 2. 取消壁纸恢复默认才改为主题底色。
   const hasWallpaper = !!wallpaper;
 
   // 初始化用的最新配置快照：init effect 只依赖标签身份，其余配置在下面单独应用
@@ -123,6 +99,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     cursorStyle,
     fontSize,
     fontFamily,
+    fontWeight,
     scrollback,
     renderer,
     theme: currentTheme,
@@ -133,6 +110,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     cursorStyle,
     fontSize,
     fontFamily,
+    fontWeight,
     scrollback,
     renderer,
     theme: currentTheme,
@@ -152,12 +130,17 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       cursorStyle: opts.cursorStyle,
       fontSize: opts.fontSize,
       fontFamily: opts.fontFamily,
+      fontWeight: opts.fontWeight,
+      fontWeightBold: 700,
+      lineHeight: 1.3,
+      letterSpacing: 0,
+      minimumContrastRatio: 7,
       allowTransparency: true,
       scrollback: opts.scrollback,
       // unicode11 与部分宽度计算 API 需要开启 proposed API
       allowProposedApi: true,
       theme: opts.hasWallpaper
-        ? { ...opts.theme, background: withAlpha(opts.theme.background, 0.4) }
+        ? { ...opts.theme, background: `${opts.theme.background.slice(0, 7)}00` }
         : opts.theme,
     });
 
@@ -293,10 +276,10 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         void useSettingsStore.getState().setFontSize(Math.max(9, cur - 1));
         return false;
       }
-      // Ctrl/Cmd 0 重置字号为 13
+      // Ctrl/Cmd 0 重置字号为 14
       if (mod && key === "0") {
         ev.preventDefault();
-        void useSettingsStore.getState().setFontSize(13);
+        void useSettingsStore.getState().setFontSize(14);
         return false;
       }
       return true;
@@ -374,21 +357,16 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     const term = terminalRef.current;
     if (!term) return;
 
-    let termBg = currentTheme.background;
-    if (wallpaper) {
-      if (wallpaper.backgroundColor && wallpaper.backgroundImage === "none") {
-        // 纯色背景：高度透明，直接透出所选纯色
-        termBg = withAlpha(currentTheme.background, 0.08);
-      } else {
-        // 渐变 / 纹理 / 本地图片壁纸：根据用户设置的透明度计算遮罩深度
-        const alpha = Math.max(0.12, Math.min(0.88, 1 - (backgroundOpacity / 100) * 0.75));
-        termBg = withAlpha(currentTheme.background, alpha);
-      }
-    }
+    // 根据壁纸控制：有壁纸时必须切换为壁纸（画布设为透明），取消壁纸恢复默认才改为纯色
+    // Keep the light background RGB at zero alpha. The keyword "transparent"
+    // is transparent black, which makes xterm's contrast correction lighten black text.
+    const termBg = hasWallpaper ? `${currentTheme.background.slice(0, 7)}00` : currentTheme.background;
 
     term.options.theme = { ...currentTheme, background: termBg };
     term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
+    term.options.fontWeight = fontWeight;
+    term.options.minimumContrastRatio = 7;
     term.options.cursorBlink = cursorBlink;
     term.options.cursorStyle = cursorStyle;
     if (term.options.scrollback !== scrollback) {
@@ -401,16 +379,44 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       return () => cancelAnimationFrame(id);
     }
   }, [
+    tab.status,
     theme,
     fontSize,
     fontFamily,
+    fontWeight,
     cursorBlink,
     cursorStyle,
     scrollback,
     wallpaper,
     backgroundOpacity,
+    hasWallpaper,
     currentTheme,
   ]);
+
+  // 连接过程状态与报错直接在终端内打印，不弹窗，不遮挡
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+
+    const key = `${tab.status}|${tab.reconnectAttempt}|${tab.error ?? ""}`;
+    if (lastLoggedStateRef.current === key) return;
+    lastLoggedStateRef.current = key;
+
+    if (tab.status === "connecting") {
+      term.writeln(`\r\n\x1b[38;5;75m➜ [连接中]\x1b[0m 正在建立安全连接: \x1b[1m${tab.sessionName}\x1b[0m...`);
+    } else if (tab.status === "reconnecting") {
+      term.writeln(
+        `\x1b[38;5;214m⟳ [自动重连]\x1b[0m 连接已断开或失败，正在自动重新连接（第 ${tab.reconnectAttempt} 次），重试直至连接成功...`
+      );
+    } else if (tab.status === "connected") {
+      term.writeln(`\x1b[38;5;82m✔ [已就绪]\x1b[0m 会话连接成功，终端已就绪！\r\n`);
+    } else if (tab.status === "error" || tab.status === "disconnected") {
+      if (tab.error) {
+        term.writeln(`\x1b[38;5;196m✖ [连接失败]\x1b[0m ${tab.error}`);
+        term.writeln(`\x1b[38;5;220m⚡ [自动重试]\x1b[0m 连接失败自动重试，直到连接成功...\r\n`);
+      }
+    }
+  }, [tab.status, tab.reconnectAttempt, tab.error, tab.sessionName]);
 
   // 3. 从隐藏恢复为可见时补一次 fit + resize（切标签、切分屏、返回主页后回来）
   useEffect(() => {
@@ -499,24 +505,24 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, logSessionOutput]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-transparent">
-      {/* 自定义壁纸 / 纯色背景层（位于终端画布下方，不拦截任何交互） */}
-      {wallpaper && (
+    <div
+      className="relative h-full w-full overflow-hidden transition-colors duration-300"
+      style={{
+        backgroundColor: currentTheme.background,
+      }}
+    >
+      {/* 以终端主题作为壁纸底色，限制图像强度以维持文字对比度。 */}
+      {hasWallpaper && (
         <div
-          className="absolute inset-0 pointer-events-none transition-all duration-300"
+          className="absolute inset-0 pointer-events-none transition-opacity duration-300"
           style={{
             backgroundImage: wallpaper.backgroundImage,
-            backgroundSize: wallpaper.backgroundSize,
+            backgroundSize: "cover",
             backgroundPosition: "center",
-            backgroundRepeat: wallpaper.backgroundImage.includes("repeating") ? "repeat" : "no-repeat",
-            // 纯色预设使用对应颜色，避免退回主题底色
-            backgroundColor: wallpaper.backgroundColor || currentTheme.background,
+            backgroundRepeat: "no-repeat",
             filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
-            transform: backgroundBlur > 0 ? "scale(1.06)" : undefined,
-            opacity:
-              wallpaper.backgroundColor && wallpaper.backgroundImage === "none"
-                ? 1
-                : Math.max(0.1, Math.min(100, backgroundOpacity) / 100),
+            transform: backgroundBlur > 0 ? "scale(1.05)" : undefined,
+            opacity: Math.max(0, Math.min(1, backgroundOpacity / 100)),
           }}
         />
       )}
@@ -529,99 +535,32 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         />
       )}
 
-      {/* 快捷搜索入口小按钮 */}
-      <button
-        onClick={() => setSearchOpen((prev) => !prev)}
-        title="在终端中搜索 (Ctrl+F)"
-        aria-label="在终端中搜索"
-        className="absolute right-2 top-2 z-20 rounded-os-md border border-line/10 bg-surface/80 p-1.5 text-ink-tertiary shadow-os-sm backdrop-blur-sm transition-colors duration-os ease-os hover:bg-surface hover:text-ink"
-      >
-        <SearchIcon className="h-3.5 w-3.5" />
-      </button>
-
-      {tab.status === "connecting" && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface/85 text-ink-secondary backdrop-blur-sm">
-          <div className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <p className="text-os-sm font-medium text-ink">
-            {tab.protocol === "serial" ? "正在打开串口通道..." : "正在建立 SSH 安全连接..."}
-          </p>
-          <p className="mt-1 text-os-2xs text-ink-tertiary">{tab.sessionName}</p>
-        </div>
-      )}
-
-      {tab.status === "error" && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface/95 p-6 text-center backdrop-blur-sm">
-          <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-os-lg border border-state-danger/25 bg-state-danger/5 text-state-danger">
-            <TriangleAlertIcon className="h-6 w-6" />
-          </div>
-          <h4 className="text-os-sm font-semibold text-ink">连接失败</h4>
-          <p className="mb-4 mt-1 max-w-md whitespace-pre-line text-os-xs leading-relaxed text-ink-secondary">
-            {tab.error || "网络连接失败，请稍后重试。"}
-          </p>
-          {tab.protocol !== "serial" && (
-            <div className="flex items-center gap-2">
-              <Button variant="primary" size="sm" onClick={() => setAuthModalOpen(true)}>
-                填写凭据重试
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                leading={<RefreshIcon className="h-3.5 w-3.5" />}
-                onClick={() => reconnectTab(tab.tabId)}
-              >
-                重新连接
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div ref={containerRef} className="h-full w-full" />
-
-      {ctxMenu && (
-        <div
-          className="fixed z-[70] min-w-[132px] rounded-os-md border border-line/10 bg-surface py-1 text-os-xs text-ink shadow-os-lg"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
+      {/* 终端浮动快捷工具栏 (全屏放大与快捷搜索) */}
+      <div className="absolute right-2.5 top-2.5 z-20 flex items-center gap-1.5">
+        <button
+          onClick={toggleFullscreen}
+          title={isFullscreen ? "退出终端全屏 (Esc / F11)" : "全屏放大终端 (F11)"}
+          aria-label={isFullscreen ? "退出终端全屏" : "全屏放大终端"}
+          className="rounded-lg border border-line/15 bg-surface/80 p-1.5 text-ink-secondary shadow-os-sm backdrop-blur-md transition-all hover:bg-surface hover:text-ink active:scale-95"
         >
-          <button
-            type="button"
-            className="w-full px-3 py-1.5 text-left transition-colors duration-150 hover:bg-line/5 disabled:opacity-40 disabled:hover:bg-transparent"
-            disabled={!terminalRef.current?.hasSelection()}
-            onClick={() => {
-              clipboardRef.current?.copy();
-              setCtxMenu(null);
-            }}
-          >
-            复制
-          </button>
-          <button
-            type="button"
-            className="w-full px-3 py-1.5 text-left transition-colors duration-150 hover:bg-line/5"
-            onClick={() => {
-              clipboardRef.current?.paste();
-              setCtxMenu(null);
-            }}
-          >
-            粘贴
-          </button>
-          <div className="my-1 border-t border-line/10" />
-          <button
-            type="button"
-            className="w-full px-3 py-1.5 text-left transition-colors duration-150 hover:bg-line/5"
-            onClick={() => {
-              terminalRef.current?.clear();
-              setCtxMenu(null);
-            }}
-          >
-            清屏
-          </button>
-        </div>
-      )}
+          {isFullscreen ? (
+            <MinimizeIcon className="h-3.5 w-3.5" />
+          ) : (
+            <MaximizeIcon className="h-3.5 w-3.5" />
+          )}
+        </button>
 
-      {authModalOpen && (
-        <ConnectAuthModal tab={tab} onClose={() => setAuthModalOpen(false)} />
-      )}
+        <button
+          onClick={() => setSearchOpen((prev) => !prev)}
+          title="在终端中搜索 (Ctrl+F)"
+          aria-label="在终端中搜索"
+          className="rounded-lg border border-line/15 bg-surface/80 p-1.5 text-ink-secondary shadow-os-sm backdrop-blur-md transition-all hover:bg-surface hover:text-ink active:scale-95"
+        >
+          <SearchIcon className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div ref={containerRef} className="relative z-10 h-full w-full" />
     </div>
   );
 };

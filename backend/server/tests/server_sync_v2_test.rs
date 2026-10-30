@@ -281,14 +281,9 @@ async fn v2_sync_preserves_metadata_conflicts_and_tombstones() {
         name: "Stale resurrection".to_string(),
         host: "stale.example.test".to_string(),
     };
-    let (resurrected_ciphertext, resurrected_checksum) = encrypt_entity_record(
-        &vault_key,
-        "session",
-        "session-1",
-        1,
-        &resurrected_record,
-    )
-    .expect("encrypt stale resurrection");
+    let (resurrected_ciphertext, resurrected_checksum) =
+        encrypt_entity_record(&vault_key, "session", "session-1", 1, &resurrected_record)
+            .expect("encrypt stale resurrection");
     let tombstone_conflict = second_client
         .commit_v2(CommitRequestV2 {
             schema_version: SYNC_SCHEMA_VERSION_V2,

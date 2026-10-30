@@ -30,6 +30,9 @@ const FORBIDDEN_PATH = [
   /(^|[\\/])node_modules[\\/]/,
   /(^|[\\/])data[\\/]openshell\.db/,
   /(^|[\\/])openshell\.db(-wal|-shm)?$/,
+  /(^|[\\/])(?:\.cache|cache|caches|logs|backups|local storage|session storage|indexeddb|webview2|ebwebview|user data)(?:[\\/]|$)/i,
+  /(^|[\\/])(?:vault|key[_-]?slot|updater[_-]?state)\.json$/i,
+  /\.(?:sqlite3?|osvault|pem|key|log|har|pcap|map)$/i,
 ];
 const FORBIDDEN_CONTENT = [
   /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/,

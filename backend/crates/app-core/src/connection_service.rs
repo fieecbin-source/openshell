@@ -179,7 +179,7 @@ impl ConnectionService {
             keepalive_sec: session.keepalive_sec.max(0) as u64,
             // 连续失败达到会话配置的次数才判定失联，避免偶发丢包直接断连
             keepalive_max_miss: session.keepalive_max_miss.max(1) as u32,
-            timeout_sec: 30,
+            timeout_sec: 15,
         };
 
         self.event_bus.emit(AppEvent::ConnectionState {

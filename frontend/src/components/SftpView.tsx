@@ -417,7 +417,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
   const getFileIcon = (entry: SftpFileEntry) => {
     if (entry.file_type === "directory") {
-      return <span className="text-amber-400 text-sm">📁</span>;
+      return <span className="text-state-warning text-sm">📁</span>;
     }
     if (entry.file_type === "symlink") {
       return <span className="text-cyan-400 text-sm">🔗</span>;
@@ -427,14 +427,14 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       return <span className="text-rose-400 text-sm">📦</span>;
     }
     if (name.endsWith(".sh") || name.endsWith(".py") || name.endsWith(".rs") || name.endsWith(".js") || name.endsWith(".json")) {
-      return <span className="text-emerald-400 text-sm">📄</span>;
+      return <span className="text-state-success text-sm">📄</span>;
     }
-    return <span className="text-slate-300 text-sm">📄</span>;
+    return <span className="text-ink-secondary text-sm">📄</span>;
   };
 
   return (
     <div
-      className="relative flex h-full w-full flex-col bg-surface-950 font-sans text-slate-200 select-none overflow-hidden"
+      className="relative flex h-full w-full flex-col bg-surface-muted font-sans text-ink-secondary select-none overflow-hidden"
       onContextMenu={(e) => handleContextMenu(e, null)}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -450,14 +450,14 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       />
 
       {/* 顶部工具栏与双态地址栏 */}
-      <div className="flex flex-col border-b border-surface-800 bg-surface-900/90 backdrop-blur-md px-3 py-2 space-y-2 shrink-0">
+      <div className="flex flex-col border-b border-line/15 bg-surface-muted/90 backdrop-blur-md px-3 py-2 space-y-2 shrink-0">
         <div className="flex items-center justify-between gap-3">
           {/* 左侧导航动作：后退、前进、上级、刷新、主目录 */}
           <div className="flex items-center space-x-1">
             <button
               onClick={() => goBack(connId, sessionId)}
               disabled={historyIndex <= 0}
-              className="p-1.5 rounded-lg border border-surface-700 bg-surface-800 text-slate-300 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition"
+              className="p-1.5 rounded-lg border border-line/15 bg-surface text-ink-secondary hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition"
               title="后退 (Alt+Left)"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -467,7 +467,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             <button
               onClick={() => goForward(connId, sessionId)}
               disabled={historyIndex >= history.length - 1}
-              className="p-1.5 rounded-lg border border-surface-700 bg-surface-800 text-slate-300 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition"
+              className="p-1.5 rounded-lg border border-line/15 bg-surface text-ink-secondary hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition"
               title="前进 (Alt+Right)"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -483,7 +483,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 loadRemoteFiles(connId, up, sessionId);
               }}
               disabled={remotePath === "/" || !remotePath}
-              className="p-1.5 rounded-lg border border-surface-700 bg-surface-800 text-slate-300 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition"
+              className="p-1.5 rounded-lg border border-line/15 bg-surface text-ink-secondary hover:text-ink disabled:opacity-40 disabled:pointer-events-none transition"
               title="返回上级 (Alt+Up)"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -492,16 +492,16 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             </button>
             <button
               onClick={() => refreshRemote(connId)}
-              className="p-1.5 rounded-lg border border-surface-700 bg-surface-800 text-slate-300 hover:text-white transition"
+              className="p-1.5 rounded-lg border border-line/15 bg-surface text-ink-secondary hover:text-ink transition"
               title="刷新目录 (F5)"
             >
-              <svg className={`w-3.5 h-3.5 ${remoteLoading ? "animate-spin text-emerald-400" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-3.5 h-3.5 ${remoteLoading ? "animate-spin text-state-success" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
             <button
               onClick={() => loadRemoteFiles(connId, "~", sessionId)}
-              className="p-1.5 rounded-lg border border-surface-700 bg-surface-800 text-slate-300 hover:text-white transition"
+              className="p-1.5 rounded-lg border border-line/15 bg-surface text-ink-secondary hover:text-ink transition"
               title="用户主目录 (~)"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -520,17 +520,17 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   value={pathInputValue}
                   onChange={(e) => setPathInputValue(e.target.value)}
                   onBlur={() => setIsEditingPath(false)}
-                  className="w-full rounded-lg border border-indigo-500 bg-surface-950 px-3 py-1 text-xs text-white outline-none font-mono"
+                  className="w-full rounded-lg border border-accent/30 bg-surface-muted px-3 py-1 text-xs text-ink outline-none font-mono"
                   placeholder="输入绝对路径 (回车跳转, Esc 取消)"
                 />
               </form>
             ) : (
               <div
                 onClick={() => setIsEditingPath(true)}
-                className="flex items-center space-x-1 overflow-x-auto rounded-lg border border-surface-700/80 bg-surface-950/80 px-2.5 py-1 text-xs text-slate-300 font-mono cursor-text hover:border-surface-600 transition h-[30px]"
+                className="flex items-center space-x-1 overflow-x-auto rounded-lg border border-line/15 bg-surface-muted/80 px-2.5 py-1 text-xs text-ink-secondary font-mono cursor-text hover:border-line/15 transition h-[30px]"
                 title="点击编辑路径 (Ctrl+L)"
               >
-                <span className="text-emerald-400 font-bold shrink-0">🌐</span>
+                <span className="text-state-success font-bold shrink-0">🌐</span>
                 {breadcrumbs.map((crumb, idx) => (
                   <React.Fragment key={crumb.path}>
                     <button
@@ -539,12 +539,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                         e.stopPropagation();
                         loadRemoteFiles(connId, crumb.path, sessionId);
                       }}
-                      className="rounded px-1 py-0.5 hover:bg-surface-800 hover:text-white transition shrink-0"
+                      className="rounded px-1 py-0.5 hover:bg-surface hover:text-ink transition shrink-0"
                     >
                       {crumb.label}
                     </button>
                     {idx < breadcrumbs.length - 1 && (
-                      <span className="text-slate-400 shrink-0">/</span>
+                      <span className="text-ink-tertiary shrink-0">/</span>
                     )}
                   </React.Fragment>
                 ))}
@@ -559,7 +559,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 setNewDirName("");
                 setNewDirModalOpen(true);
               }}
-              className="flex items-center space-x-1 rounded-lg border border-surface-700 bg-surface-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white hover:border-surface-600 transition"
+              className="flex items-center space-x-1 rounded-lg border border-line/15 bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink hover:border-line/15 transition"
               title="新建文件夹"
             >
               <span>+📁</span>
@@ -571,7 +571,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 setNewFileName("");
                 setNewFileModalOpen(true);
               }}
-              className="flex items-center space-x-1 rounded-lg border border-surface-700 bg-surface-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white hover:border-surface-600 transition"
+              className="flex items-center space-x-1 rounded-lg border border-line/15 bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink hover:border-line/15 transition"
               title="新建文件"
             >
               <span>+📄</span>
@@ -580,7 +580,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
             <button
               onClick={triggerUploadPicker}
-              className="flex items-center space-x-1 rounded-lg border border-emerald-600/50 bg-emerald-600/20 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-600/30 hover:border-emerald-500 transition font-medium"
+              className="flex items-center space-x-1 rounded-lg border border-state-success/30 bg-emerald-600/20 px-2.5 py-1 text-xs text-state-success hover:bg-emerald-600/30 hover:border-state-success/30 transition font-medium"
               title="从本地选择文件上传至当前目录"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -591,12 +591,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
             <button
               onClick={() => setTransferQueueOpen(true)}
-              className="flex items-center space-x-1 rounded-lg border border-surface-700 bg-surface-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white hover:border-surface-600 transition"
+              className="flex items-center space-x-1 rounded-lg border border-line/15 bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink hover:border-line/15 transition"
               title="查看传输队列"
             >
               <span>传输</span>
               {transfers.length > 0 && (
-                <span className="rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 text-[10px] font-mono">
+                <span className="rounded-full bg-state-success/100/20 text-state-success border border-state-success/30 px-1.5 text-[10px] font-mono">
                   {transfers.filter((t) => t.state === "transferring" || t.state === "queued").length}
                 </span>
               )}
@@ -605,7 +605,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
         </div>
 
         {/* 次工具条：搜索过滤框、显示隐藏文件、选中项统计 */}
-        <div className="flex items-center justify-between text-xs text-slate-300">
+        <div className="flex items-center justify-between text-xs text-ink-secondary">
           <div className="flex items-center space-x-2 w-72">
             <div className="relative flex-1">
               <input
@@ -613,12 +613,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 value={filterQuery}
                 onChange={(e) => setFilterQuery(e.target.value)}
                 placeholder="过滤当前目录文件名..."
-                className="w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1 text-xs text-white placeholder-slate-400 outline-none focus:border-indigo-500"
+                className="w-full rounded-md border border-line/15 bg-surface-muted px-2.5 py-1 text-xs text-ink placeholder-ink-tertiary outline-none focus:border-accent/30"
               />
               {filterQuery && (
                 <button
                   onClick={() => setFilterQuery("")}
-                  className="absolute right-2 top-1.5 text-slate-300 hover:text-slate-300"
+                  className="absolute right-2 top-1.5 text-ink-secondary hover:text-ink-secondary"
                 >
                   ✕
                 </button>
@@ -628,8 +628,8 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
               onClick={() => setShowHidden(!showHidden)}
               className={`p-1.5 rounded-md border transition ${
                 showHidden
-                  ? "bg-indigo-600/20 border-indigo-500/50 text-indigo-300"
-                  : "bg-surface-800 border-surface-700 text-slate-300 hover:text-white"
+                  ? "bg-indigo-600/20 border-accent/30 text-accent"
+                  : "bg-surface border-line/15 text-ink-secondary hover:text-ink"
               }`}
               title="显示/隐藏以点开头的隐藏文件 (Ctrl+H)"
             >
@@ -637,9 +637,9 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
             </button>
           </div>
 
-          <div className="flex items-center space-x-3 text-[11px] text-slate-300 font-mono">
+          <div className="flex items-center space-x-3 text-[11px] text-ink-secondary font-mono">
             {selectedPaths.length > 0 && (
-              <span className="text-emerald-400 font-semibold">
+              <span className="text-state-success font-semibold">
                 已选中 {selectedPaths.length} 项
               </span>
             )}
@@ -649,31 +649,31 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       </div>
 
       {/* 文件表格表头 */}
-      <div className="grid grid-cols-12 gap-2 border-b border-surface-800 bg-surface-900/60 px-4 py-2 text-xs font-semibold text-slate-300 shrink-0">
+      <div className="grid grid-cols-12 gap-2 border-b border-line/15 bg-surface-muted/60 px-4 py-2 text-xs font-semibold text-ink-secondary shrink-0">
         <div
           onClick={() => setSort("name")}
-          className="col-span-5 flex items-center gap-1 cursor-pointer hover:text-white transition"
+          className="col-span-5 flex items-center gap-1 cursor-pointer hover:text-ink transition"
         >
           <span>名称</span>
           {sortBy === "name" && <span>{sortAsc ? "▲" : "▼"}</span>}
         </div>
         <div
           onClick={() => setSort("size")}
-          className="col-span-2 flex items-center justify-end gap-1 cursor-pointer hover:text-white transition"
+          className="col-span-2 flex items-center justify-end gap-1 cursor-pointer hover:text-ink transition"
         >
           <span>大小</span>
           {sortBy === "size" && <span>{sortAsc ? "▲" : "▼"}</span>}
         </div>
         <div
           onClick={() => setSort("mtime")}
-          className="col-span-3 flex items-center justify-center gap-1 cursor-pointer hover:text-white transition"
+          className="col-span-3 flex items-center justify-center gap-1 cursor-pointer hover:text-ink transition"
         >
           <span>修改时间</span>
           {sortBy === "mtime" && <span>{sortAsc ? "▲" : "▼"}</span>}
         </div>
         <div
           onClick={() => setSort("permissions")}
-          className="col-span-2 flex items-center justify-end gap-1 cursor-pointer hover:text-white transition"
+          className="col-span-2 flex items-center justify-end gap-1 cursor-pointer hover:text-ink transition"
         >
           <span>权限</span>
           {sortBy === "permissions" && <span>{sortAsc ? "▲" : "▼"}</span>}
@@ -683,17 +683,17 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       {/* 虚拟滚动文件列表主体 */}
       <div ref={parentRef} className="flex-1 overflow-y-auto relative">
         {remoteLoading && visibleFiles.length === 0 ? (
-          <div className="flex h-full items-center justify-center space-x-2 text-slate-300">
-            <svg className="w-5 h-5 animate-spin text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="flex h-full items-center justify-center space-x-2 text-ink-secondary">
+            <svg className="w-5 h-5 animate-spin text-state-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             <span className="text-xs">正在读取远程目录...</span>
           </div>
         ) : visibleFiles.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center text-slate-300">
+          <div className="flex h-full flex-col items-center justify-center text-ink-secondary">
             <span className="text-3xl mb-2">📁</span>
             <span className="text-xs">此目录为空，或无匹配项</span>
-            <span className="text-[11px] text-slate-400 mt-1">
+            <span className="text-[11px] text-ink-tertiary mt-1">
               可直接将本地文件拖拽至此上传
             </span>
           </div>
@@ -724,10 +724,10 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                     height: `${virtualRow.size}px`,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
-                  className={`grid grid-cols-12 gap-2 items-center px-4 text-xs font-mono transition cursor-pointer border-b border-surface-900 ${
+                  className={`grid grid-cols-12 gap-2 items-center px-4 text-xs font-mono transition cursor-pointer border-b border-line/15 ${
                     isSelected
-                      ? "bg-indigo-600/25 text-white border-indigo-500/30"
-                      : "text-slate-100 hover:bg-surface-900/60"
+                      ? "bg-indigo-600/25 text-ink border-accent/30"
+                      : "text-ink-secondary hover:bg-surface-muted/60"
                   }`}
                 >
                   {/* 名称 */}
@@ -739,17 +739,17 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   </div>
 
                   {/* 大小 */}
-                  <div className="col-span-2 text-right text-slate-300">
+                  <div className="col-span-2 text-right text-ink-secondary">
                     {isDir ? "-" : formatSize(entry.size)}
                   </div>
 
                   {/* 修改时间 */}
-                  <div className="col-span-3 text-center text-slate-300">
+                  <div className="col-span-3 text-center text-ink-secondary">
                     {formatDate(entry.modified_at)}
                   </div>
 
                   {/* 权限 */}
-                  <div className="col-span-2 text-right text-slate-300">
+                  <div className="col-span-2 text-right text-ink-secondary">
                     {formatPermissions(entry.permissions)}
                   </div>
                 </div>
@@ -761,13 +761,13 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
       {/* 原生拖拽上传全屏遮罩 */}
       {isDraggingOver && (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-indigo-950/70 backdrop-blur-sm border-2 border-dashed border-indigo-400">
-          <div className="rounded-2xl bg-surface-900/90 border border-indigo-500/50 p-6 shadow-2xl flex flex-col items-center">
-            <svg className="w-12 h-12 text-indigo-400 mb-2 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-indigo-950/70 backdrop-blur-sm border-2 border-dashed border-accent/30">
+          <div className="rounded-2xl bg-surface-muted/90 border border-accent/30 p-6 shadow-2xl flex flex-col items-center">
+            <svg className="w-12 h-12 text-accent mb-2 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
             </svg>
-            <h3 className="text-sm font-bold text-white mb-1">释放以开始上传</h3>
-            <p className="text-xs text-indigo-300 font-mono">
+            <h3 className="text-sm font-bold text-ink mb-1">释放以开始上传</h3>
+            <p className="text-xs text-accent font-mono">
               上传目标路径: {remotePath}
             </p>
           </div>
@@ -778,7 +778,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
       {contextMenu.visible && (
         <div
           style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
-          className="fixed z-50 w-52 rounded-xl border border-surface-700 bg-surface-900/95 backdrop-blur-md p-1.5 shadow-2xl text-xs text-slate-200"
+          className="fixed z-50 w-52 rounded-xl border border-line/15 bg-surface-muted/95 backdrop-blur-md p-1.5 shadow-2xl text-xs text-ink-secondary"
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.entry ? (
@@ -789,7 +789,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                     setContextMenu((prev) => ({ ...prev, visible: false }));
                     if (contextMenu.entry) openEditor(connId, contextMenu.entry.path);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
                 >
                   <span>✏️</span>
                   <span>在线编辑</span>
@@ -801,7 +801,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                   handleDownload(contextMenu.entry || undefined);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>⬇️</span>
                 <span>下载到本地</span>
@@ -816,7 +816,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                     setRenameModalOpen(true);
                   }
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>🏷️</span>
                 <span>重命名</span>
@@ -830,7 +830,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                     setChmodModalOpen(true);
                   }
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>🔒</span>
                 <span>修改权限 (Chmod)</span>
@@ -844,13 +844,13 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                     setPropertiesModalOpen(true);
                   }
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>ℹ️</span>
                 <span>属性详情</span>
               </button>
 
-              <div className="my-1 border-t border-surface-800" />
+              <div className="my-1 border-t border-line/15" />
 
               <button
                 onClick={() => {
@@ -861,7 +861,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   setDeleteTargets(targets);
                   setDeleteModalOpen(true);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-red-500/20 text-red-300 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-state-danger/100/20 text-state-danger text-left transition"
               >
                 <span>🗑️</span>
                 <span>删除</span>
@@ -875,7 +875,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   setNewDirName("");
                   setNewDirModalOpen(true);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>📁</span>
                 <span>新建文件夹</span>
@@ -886,7 +886,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   setNewFileName("");
                   setNewFileModalOpen(true);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>📄</span>
                 <span>新建文件</span>
@@ -896,18 +896,18 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                   triggerUploadPicker();
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>⬆️</span>
                 <span>上传文件至此</span>
               </button>
-              <div className="my-1 border-t border-surface-800" />
+              <div className="my-1 border-t border-line/15" />
               <button
                 onClick={() => {
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                   refreshRemote(connId);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-800 text-left transition"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
                 <span>🔄</span>
                 <span>刷新</span>
@@ -955,9 +955,9 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
       {/* 新建文件夹模态框 */}
       {newDirModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-80 rounded-xl border border-surface-700 bg-surface-900 p-4 shadow-2xl">
-            <h4 className="text-xs font-bold text-white mb-2">新建远程文件夹</h4>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4">
+          <div className="w-80 rounded-xl border border-line/15 bg-surface-muted p-4 shadow-2xl">
+            <h4 className="text-xs font-bold text-ink mb-2">新建远程文件夹</h4>
             <input
               type="text"
               autoFocus
@@ -971,12 +971,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }
                 if (e.key === "Escape") setNewDirModalOpen(false);
               }}
-              className="w-full px-2.5 py-1.5 bg-surface-950 border border-surface-700 rounded text-xs text-white mb-3 outline-none focus:border-indigo-500 font-mono"
+              className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
             />
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setNewDirModalOpen(false)}
-                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-300 hover:text-white"
+                className="px-3 py-1 rounded bg-surface text-xs text-ink-secondary hover:text-ink"
               >
                 取消
               </button>
@@ -988,7 +988,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   }
                 }}
                 disabled={!newDirName.trim()}
-                className="px-3 py-1 rounded bg-indigo-600 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+                className="px-3 py-1 rounded bg-action text-xs font-semibold text-white hover:bg-action/90 disabled:opacity-40"
               >
                 创建
               </button>
@@ -999,9 +999,9 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
       {/* 新建文件模态框 */}
       {newFileModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-80 rounded-xl border border-surface-700 bg-surface-900 p-4 shadow-2xl">
-            <h4 className="text-xs font-bold text-white mb-2">新建空白文件</h4>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4">
+          <div className="w-80 rounded-xl border border-line/15 bg-surface-muted p-4 shadow-2xl">
+            <h4 className="text-xs font-bold text-ink mb-2">新建空白文件</h4>
             <input
               type="text"
               autoFocus
@@ -1015,12 +1015,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }
                 if (e.key === "Escape") setNewFileModalOpen(false);
               }}
-              className="w-full px-2.5 py-1.5 bg-surface-950 border border-surface-700 rounded text-xs text-white mb-3 outline-none focus:border-indigo-500 font-mono"
+              className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
             />
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setNewFileModalOpen(false)}
-                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-300 hover:text-white"
+                className="px-3 py-1 rounded bg-surface text-xs text-ink-secondary hover:text-ink"
               >
                 取消
               </button>
@@ -1032,7 +1032,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   }
                 }}
                 disabled={!newFileName.trim()}
-                className="px-3 py-1 rounded bg-indigo-600 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+                className="px-3 py-1 rounded bg-action text-xs font-semibold text-white hover:bg-action/90 disabled:opacity-40"
               >
                 创建
               </button>
@@ -1043,9 +1043,9 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
       {/* 重命名模态框 */}
       {renameModalOpen && renameTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-80 rounded-xl border border-surface-700 bg-surface-900 p-4 shadow-2xl">
-            <h4 className="text-xs font-bold text-white mb-2">重命名</h4>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4">
+          <div className="w-80 rounded-xl border border-line/15 bg-surface-muted p-4 shadow-2xl">
+            <h4 className="text-xs font-bold text-ink mb-2">重命名</h4>
             <input
               type="text"
               autoFocus
@@ -1058,12 +1058,12 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }
                 if (e.key === "Escape") setRenameModalOpen(false);
               }}
-              className="w-full px-2.5 py-1.5 bg-surface-950 border border-surface-700 rounded text-xs text-white mb-3 outline-none focus:border-indigo-500 font-mono"
+              className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
             />
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setRenameModalOpen(false)}
-                className="px-3 py-1 rounded bg-surface-800 text-xs text-slate-300 hover:text-white"
+                className="px-3 py-1 rounded bg-surface text-xs text-ink-secondary hover:text-ink"
               >
                 取消
               </button>
@@ -1075,7 +1075,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   }
                 }}
                 disabled={!newTargetName.trim()}
-                className="px-3 py-1 rounded bg-indigo-600 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+                className="px-3 py-1 rounded bg-action text-xs font-semibold text-white hover:bg-action/90 disabled:opacity-40"
               >
                 确认
               </button>
@@ -1086,49 +1086,49 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
       {/* 属性详情模态框 */}
       {propertiesModalOpen && propertiesTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-96 rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl text-xs space-y-3 font-mono">
-            <h4 className="text-sm font-bold text-white font-sans border-b border-surface-800 pb-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4">
+          <div className="w-96 rounded-xl border border-line/15 bg-surface-muted p-5 shadow-2xl text-xs space-y-3 font-mono">
+            <h4 className="text-sm font-bold text-ink font-sans border-b border-line/15 pb-2">
               文件/文件夹属性详情
             </h4>
-            <div className="space-y-1.5 text-slate-300">
+            <div className="space-y-1.5 text-ink-secondary">
               <div>
-                <span className="text-slate-300">名称: </span>
-                <span className="text-white font-bold">{propertiesTarget.name}</span>
+                <span className="text-ink-secondary">名称: </span>
+                <span className="text-ink font-bold">{propertiesTarget.name}</span>
               </div>
               <div className="break-all">
-                <span className="text-slate-300">绝对路径: </span>
+                <span className="text-ink-secondary">绝对路径: </span>
                 <span>{propertiesTarget.path}</span>
               </div>
               <div>
-                <span className="text-slate-300">类型: </span>
+                <span className="text-ink-secondary">类型: </span>
                 <span>{propertiesTarget.file_type}</span>
               </div>
               <div>
-                <span className="text-slate-300">尺寸: </span>
+                <span className="text-ink-secondary">尺寸: </span>
                 <span>{propertiesTarget.size} 字节 ({formatSize(propertiesTarget.size)})</span>
               </div>
               <div>
-                <span className="text-slate-300">权限: </span>
+                <span className="text-ink-secondary">权限: </span>
                 <span>{formatPermissions(propertiesTarget.permissions)}</span>
               </div>
               <div>
-                <span className="text-slate-300">所有者 (UID:GID): </span>
+                <span className="text-ink-secondary">所有者 (UID:GID): </span>
                 <span>{propertiesTarget.uid ?? "-"} : {propertiesTarget.gid ?? "-"}</span>
               </div>
               <div>
-                <span className="text-slate-300">最后修改时间: </span>
+                <span className="text-ink-secondary">最后修改时间: </span>
                 <span>{formatDate(propertiesTarget.modified_at)}</span>
               </div>
               <div>
-                <span className="text-slate-300">最后访问时间: </span>
+                <span className="text-ink-secondary">最后访问时间: </span>
                 <span>{formatDate(propertiesTarget.accessed_at)}</span>
               </div>
             </div>
-            <div className="flex justify-end pt-2 border-t border-surface-800 font-sans">
+            <div className="flex justify-end pt-2 border-t border-line/15 font-sans">
               <button
                 onClick={() => setPropertiesModalOpen(false)}
-                className="px-4 py-1.5 rounded-lg bg-surface-800 text-xs text-slate-200 hover:bg-surface-700 hover:text-white transition"
+                className="px-4 py-1.5 rounded-lg bg-surface text-xs text-ink-secondary hover:bg-surface hover:text-ink transition"
               >
                 关闭
               </button>

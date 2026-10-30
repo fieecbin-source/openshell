@@ -107,3 +107,51 @@ limitations under the License.
 - **用途**：构建期下载厂商 SVG 图标并内置于设置页、模型选择器与 AI 模式 Logo 流星特效；部分缺失图标由 models.dev（MIT）补充。
 - **商标声明**：文中出现的所有厂商名称、Logo 与商标均归其各自权利人所有。本项目仅在识别与展示场景中按原样式使用，不构成任何隶属、赞助、担保或背书关系。
 - **回退图标**：当厂商图标缺失或安全校验未通过时，使用 OpenShell 自绘的赛博朋克风格 AI 核心 SVG，随本项目源码以 MIT OR Apache-2.0 授权发布。
+
+
+## liquid-glass-react 1.1.1
+
+- Source: https://github.com/rdev/liquid-glass-react
+- License: MIT (distributed with the dependency).
+- Used for decorative optical surfaces. Text and controls remain outside the filter.
+- The published peer range is reconciled with upstream source package.json (React >=18);
+  the application keeps React 18.3.1 and verifies the integration in Chromium.
+
+### liquid-glass-react license text
+
+Copyright 2025 MAX ROVENSKY
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+## Tauri NSIS installer template
+
+Source: https://github.com/tauri-apps/tauri/tree/tauri-cli-v2.12.3
+
+Used under the MIT license. OpenShell changes the per-machine default directory to Program Files (x86).
+
+MIT License
+
+Copyright (c) 2017 - Present Tauri Apps Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

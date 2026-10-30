@@ -70,16 +70,16 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
         style={{ paddingLeft: 8 + depth * 12 }}
         className={`group flex items-center justify-between rounded-xl py-1.5 pr-2 text-xs font-semibold cursor-pointer select-none transition ${
           isHovered && canDropOnGroup
-            ? "bg-apple-blue/10 ring-1 ring-apple-blue/40 text-slate-900"
-            : "text-slate-700 hover:bg-black/[0.04]"
+            ? "bg-action/10 ring-1 ring-accent/40 text-ink"
+            : "text-ink-secondary hover:bg-line/5"
         }`}
         title={`${group.name}（可拖拽排序 / 移入其它分组）`}
       >
         <div className="flex min-w-0 items-center space-x-1.5">
-          <span className="inline-block text-[10px] text-slate-400 transition-transform duration-150">
+          <span className="inline-block text-[10px] text-ink-tertiary transition-transform duration-150">
             {isCollapsed ? "▶" : "▼"}
           </span>
-          <svg className="h-3.5 w-3.5 shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="h-3.5 w-3.5 shrink-0 text-ink-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -88,7 +88,7 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
             />
           </svg>
           <span className="truncate">{group.name}</span>
-          <span className="text-[10px] font-normal text-slate-400">({countSessions(node)})</span>
+          <span className="text-[10px] font-normal text-ink-tertiary">({countSessions(node)})</span>
         </div>
 
         <div className="flex items-center space-x-1 opacity-0 transition group-hover:opacity-100">
@@ -97,7 +97,7 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
               e.stopPropagation();
               api.onNewSession(group.id);
             }}
-            className="p-0.5 text-xs text-slate-500 transition hover:text-apple-blue"
+            className="p-0.5 text-xs text-ink-secondary transition hover:text-accent"
             title="在此分组下新建会话"
           >
             +
@@ -107,7 +107,7 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
               e.stopPropagation();
               api.onCreateSubGroup(group);
             }}
-            className="p-0.5 text-[11px] text-slate-500 transition hover:text-apple-blue"
+            className="p-0.5 text-[11px] text-ink-secondary transition hover:text-accent"
             title="新建子分组"
           >
             ⧉
@@ -117,7 +117,7 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
               e.stopPropagation();
               api.onRenameGroup(group);
             }}
-            className="p-0.5 text-[11px] text-slate-500 transition hover:text-slate-900"
+            className="p-0.5 text-[11px] text-ink-secondary transition hover:text-ink"
             title="重命名分组"
           >
             ✏️
@@ -127,7 +127,7 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
               e.stopPropagation();
               api.onDeleteGroup(group);
             }}
-            className="p-0.5 text-slate-500 transition hover:text-apple-red"
+            className="p-0.5 text-ink-secondary transition hover:text-state-danger"
             title="删除分组"
           >
             ✕
@@ -137,7 +137,7 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
 
       {!isCollapsed && (
         <div
-          className="ml-2.5 space-y-0.5 border-l border-slate-200 pl-2"
+          className="ml-2.5 space-y-0.5 border-l border-line/15 pl-2"
           style={{ marginLeft: 10 + depth * 12 }}
         >
           {children.map((child) => (

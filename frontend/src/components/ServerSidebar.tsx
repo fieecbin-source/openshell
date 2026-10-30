@@ -174,10 +174,10 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
   // 折叠状态显示胶囊小侧边
   if (collapsed) {
     return (
-      <aside className="w-11 shrink-0 bg-[#fbfbfd] border-r border-slate-200/80 flex flex-col items-center py-3 select-none transition-all duration-200">
+      <aside className="w-11 shrink-0 bg-surface-muted border-r border-line/15 flex flex-col items-center py-3 select-none transition-all duration-200">
         <button
           onClick={() => setCollapsed(false)}
-          className="p-1 rounded-lg text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 transition mb-4"
+          className="p-1 rounded-lg text-ink-secondary hover:text-ink hover:bg-line/10 transition mb-4"
           title="展开服务器状态侧边栏"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -195,16 +195,16 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             }}
             title={`CPU 使用率: ${cpuPct}%`}
           >
-            <span className="text-[10px] text-slate-600 font-bold mb-1">CPU</span>
-            <div className="w-2 h-14 bg-slate-200 rounded-full overflow-hidden flex flex-col justify-end">
+            <span className="text-[10px] text-ink-secondary font-bold mb-1">CPU</span>
+            <div className="w-2 h-14 bg-line/10 rounded-full overflow-hidden flex flex-col justify-end">
               <div
                 className={`w-full rounded-full transition-all duration-500 ${
-                  cpuPct > 80 ? "bg-red-500" : cpuPct > 60 ? "bg-amber-500" : "bg-apple-blue"
+                  cpuPct > 80 ? "bg-state-danger/100" : cpuPct > 60 ? "bg-state-warning/100" : "bg-action"
                 }`}
                 style={{ height: `${Math.min(cpuPct, 100)}%` }}
               />
             </div>
-            <span className="text-[9px] font-mono text-slate-600 mt-1">{cpuPct}%</span>
+            <span className="text-[9px] font-mono text-ink-secondary mt-1">{cpuPct}%</span>
           </div>
 
           <div
@@ -215,16 +215,16 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             }}
             title={`内存占用: ${memPct}%`}
           >
-            <span className="text-[10px] text-slate-600 font-bold mb-1">MEM</span>
-            <div className="w-2 h-14 bg-slate-200 rounded-full overflow-hidden flex flex-col justify-end">
+            <span className="text-[10px] text-ink-secondary font-bold mb-1">MEM</span>
+            <div className="w-2 h-14 bg-line/10 rounded-full overflow-hidden flex flex-col justify-end">
               <div
                 className={`w-full rounded-full transition-all duration-500 ${
-                  memPct > 80 ? "bg-red-500" : memPct > 60 ? "bg-amber-500" : "bg-emerald-500"
+                  memPct > 80 ? "bg-state-danger/100" : memPct > 60 ? "bg-state-warning/100" : "bg-state-success/100"
                 }`}
                 style={{ height: `${Math.min(memPct, 100)}%` }}
               />
             </div>
-            <span className="text-[9px] font-mono text-slate-600 mt-1">{memPct}%</span>
+            <span className="text-[9px] font-mono text-ink-secondary mt-1">{memPct}%</span>
           </div>
 
           {hasDocker && (
@@ -233,7 +233,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                 setCollapsed(false);
                 setActiveTab("containers");
               }}
-              className="p-1 rounded-lg text-slate-600 hover:text-apple-blue hover:bg-slate-200/60 transition mt-2"
+              className="p-1 rounded-lg text-ink-secondary hover:text-accent hover:bg-line/10 transition mt-2"
               title="容器管理"
             >
               🐳
@@ -245,13 +245,13 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
   }
 
   return (
-    <aside className="w-64 shrink-0 bg-[#fbfbfd] border-r border-slate-200/80 flex flex-col select-none overflow-hidden h-full">
+    <aside className="w-64 shrink-0 bg-surface/70 backdrop-blur-xl border-r border-line/10 flex flex-col select-none overflow-hidden h-full text-ink">
       {/* 顶部服务器概览头 */}
-      <div className="p-3 border-b border-slate-200/80 bg-white/70 backdrop-blur-sm">
+      <div className="p-3 border-b border-line/10 bg-surface/80 backdrop-blur-md">
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-1.5 overflow-hidden">
-            <span className="h-2 w-2 rounded-full bg-apple-green shrink-0 shadow-apple-sm animate-pulse" />
-            <h3 className="text-xs font-bold text-slate-900 truncate" title={tab.sessionName}>
+            <span className="h-2 w-2 rounded-full bg-state-success shrink-0 shadow-apple-sm animate-pulse" />
+            <h3 className="text-xs font-bold text-ink truncate" title={tab.sessionName}>
               {tab.sessionName}
             </h3>
           </div>
@@ -259,7 +259,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             {onOpenMonitor && (
               <button
                 onClick={onOpenMonitor}
-                className="flex items-center gap-0.5 rounded-lg border border-blue-200/70 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-[#0071e3] hover:border-blue-300 hover:bg-blue-100 transition"
+                className="flex items-center gap-0.5 rounded-lg border border-accent/30 bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-accent hover:bg-accent/25 transition"
                 title="打开全屏服务器监控大屏"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -274,7 +274,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             )}
             <button
               onClick={() => setCollapsed(true)}
-              className="p-1 rounded-lg text-slate-600 hover:text-slate-800 hover:bg-slate-100 transition"
+              className="p-1 rounded-lg text-ink-secondary hover:text-ink hover:bg-line/10 transition"
               title="收起为迷你胶囊"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -285,14 +285,14 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
         </div>
 
         {/* 基础运行信息 */}
-        <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-600 font-mono">
+        <div className="grid grid-cols-2 gap-1 text-[10px] text-ink-secondary font-mono">
           <div>
-            <span className="text-slate-600">运行: </span>
-            <span className="text-slate-700 font-semibold">{formatUptime(metrics?.uptime_seconds || 0)}</span>
+            <span className="text-ink-secondary">运行: </span>
+            <span className="text-ink font-semibold">{formatUptime(metrics?.uptime_seconds || 0)}</span>
           </div>
           <div className="text-right">
-            <span className="text-slate-600">负载: </span>
-            <span className="text-slate-700 font-semibold">
+            <span className="text-ink-secondary">负载: </span>
+            <span className="text-ink font-semibold">
               {metrics ? `${num(metrics.load_1).toFixed(1)}, ${num(metrics.load_5).toFixed(1)}` : "-"}
             </span>
           </div>
@@ -300,11 +300,11 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
       </div>
 
       {/* 4 选项卡导航 (Apple Segmented Tabs) */}
-      <div className="flex p-1 bg-slate-100/90 border-b border-slate-200/80 text-[11px] font-medium gap-0.5">
+      <div className="flex p-1 bg-surface/50 border-b border-line/10 text-[11px] font-medium gap-0.5">
         <button
           onClick={() => setActiveTab("overview")}
           className={`flex-1 py-1 rounded-md transition text-center ${
-            activeTab === "overview" ? "bg-white text-apple-blue font-bold shadow-apple-sm" : "text-slate-600 hover:text-slate-900"
+            activeTab === "overview" ? "bg-line/15 text-accent font-bold shadow-apple-sm" : "text-ink-secondary hover:text-ink"
           }`}
         >
           概览
@@ -315,7 +315,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             loadListeningPorts();
           }}
           className={`flex-1 py-1 rounded-md transition text-center ${
-            activeTab === "ports" ? "bg-white text-apple-blue font-bold shadow-apple-sm" : "text-slate-600 hover:text-slate-900"
+            activeTab === "ports" ? "bg-line/15 text-accent font-bold shadow-apple-sm" : "text-ink-secondary hover:text-ink"
           }`}
           title="查看服务器正在监听的 TCP/UDP 端口"
         >
@@ -329,7 +329,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             void poll();
           }}
           className={`flex-1 py-1 rounded-md transition text-center ${
-            activeTab === "processes" ? "bg-white text-apple-blue font-bold shadow-apple-sm" : "text-slate-600 hover:text-slate-900"
+            activeTab === "processes" ? "bg-line/15 text-accent font-bold shadow-apple-sm" : "text-ink-secondary hover:text-ink"
           }`}
         >
           进程
@@ -340,12 +340,12 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             probeDocker();
           }}
           className={`flex-1 py-1 rounded-md transition text-center flex items-center justify-center gap-0.5 ${
-            activeTab === "containers" ? "bg-white text-apple-blue font-bold shadow-apple-sm" : "text-slate-600 hover:text-slate-900"
+            activeTab === "containers" ? "bg-line/15 text-accent font-bold shadow-apple-sm" : "text-ink-secondary hover:text-ink"
           }`}
         >
           <span>容器</span>
           {containers.length > 0 && (
-            <span className="text-[9px] bg-apple-blue/10 text-apple-blue px-1 rounded-full font-bold">
+            <span className="text-[9px] bg-action/10 text-accent px-1 rounded-full font-bold">
               {containers.length}
             </span>
           )}
@@ -358,76 +358,76 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
         {activeTab === "overview" && (
           <div className="space-y-3 text-xs">
             {/* CPU 进度卡片 */}
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-white shadow-apple-sm space-y-1.5">
+            <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-slate-700 font-semibold flex items-center gap-1.5">
-                  <span className="text-apple-blue">⚡</span>
+                <span className="text-ink font-semibold flex items-center gap-1.5">
+                  <span className="text-accent">⚡</span>
                   <span>CPU 占用</span>
                 </span>
-                <span className="font-mono font-bold text-slate-900">{cpuPct}%</span>
+                <span className="font-mono font-bold text-ink">{cpuPct}%</span>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-line/10 rounded-full h-2 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${
-                    cpuPct > 80 ? "bg-red-500" : cpuPct > 60 ? "bg-amber-500" : "bg-apple-blue"
+                    cpuPct > 80 ? "bg-state-danger/100" : cpuPct > 60 ? "bg-state-warning/100" : "bg-action"
                   }`}
                   style={{ width: `${Math.min(cpuPct, 100)}%` }}
                 />
               </div>
               {metrics?.cpu_cores && metrics.cpu_cores.length > 1 && (
-                <div className="text-[9px] text-slate-600 font-mono text-right">
+                <div className="text-[9px] text-ink-secondary font-mono text-right">
                   {metrics.cpu_cores.length} 核心
                 </div>
               )}
             </div>
 
             {/* 内存已用/总计卡片 */}
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-white shadow-apple-sm space-y-1.5">
+            <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-slate-700 font-semibold flex items-center gap-1.5">
-                  <span className="text-emerald-500">🧠</span>
+                <span className="text-ink font-semibold flex items-center gap-1.5">
+                  <span className="text-state-success">🧠</span>
                   <span>内存占用</span>
                 </span>
-                <span className="font-mono font-bold text-slate-900">{memPct}%</span>
+                <span className="font-mono font-bold text-ink">{memPct}%</span>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-line/10 rounded-full h-2 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${
-                    memPct > 85 ? "bg-red-500" : memPct > 70 ? "bg-amber-500" : "bg-emerald-500"
+                    memPct > 85 ? "bg-state-danger/100" : memPct > 70 ? "bg-state-warning/100" : "bg-state-success/100"
                   }`}
                   style={{ width: `${Math.min(memPct, 100)}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between text-[10px] font-mono text-slate-600">
+              <div className="flex items-center justify-between text-[10px] font-mono text-ink-secondary">
                 <span>已用: {formatBytes(memUsed)}</span>
                 <span>总量: {formatBytes(memTotal)}</span>
               </div>
             </div>
 
             {/* 实时网络流量 */}
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-white shadow-apple-sm space-y-2">
+            <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-slate-700 font-semibold flex items-center gap-1.5">
-                  <span className="text-indigo-500">🌐</span>
+                <span className="text-ink font-semibold flex items-center gap-1.5">
+                  <span className="text-accent">🌐</span>
                   <span>网络传输速率</span>
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2 text-center">
-                <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                  <span className="text-[10px] text-slate-600 block">↑ 上行 (Tx)</span>
-                  <span className="text-xs font-mono font-bold text-indigo-600 block mt-0.5">
+                <div className="bg-surface/50 p-1.5 rounded-lg border border-line/10">
+                  <span className="text-[10px] text-ink-secondary block">↑ 上行 (Tx)</span>
+                  <span className="text-xs font-mono font-bold text-accent block mt-0.5">
                     {formatSpeed(metrics?.net_tx_bps || 0)}
                   </span>
-                  <span className="text-[9px] font-mono text-slate-600 block mt-0.5">
+                  <span className="text-[9px] font-mono text-ink-secondary block mt-0.5">
                     累计: {formatBytes(metrics?.net_tx_total || 0)}
                   </span>
                 </div>
-                <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                  <span className="text-[10px] text-slate-600 block">↓ 下行 (Rx)</span>
-                  <span className="text-xs font-mono font-bold text-emerald-600 block mt-0.5">
+                <div className="bg-surface/50 p-1.5 rounded-lg border border-line/10">
+                  <span className="text-[10px] text-ink-secondary block">↓ 下行 (Rx)</span>
+                  <span className="text-xs font-mono font-bold text-state-success block mt-0.5">
                     {formatSpeed(metrics?.net_rx_bps || 0)}
                   </span>
-                  <span className="text-[9px] font-mono text-slate-600 block mt-0.5">
+                  <span className="text-[9px] font-mono text-ink-secondary block mt-0.5">
                     累计: {formatBytes(metrics?.net_rx_total || 0)}
                   </span>
                 </div>
@@ -436,9 +436,9 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
 
             {/* 磁盘空间 */}
             {metrics?.disk_mounts && metrics.disk_mounts.length > 0 && (
-              <div className="p-2.5 rounded-xl border border-slate-200 bg-white shadow-apple-sm space-y-2">
-                <span className="text-slate-700 font-semibold flex items-center gap-1.5">
-                  <span className="text-amber-500">💾</span>
+              <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-2">
+                <span className="text-ink font-semibold flex items-center gap-1.5">
+                  <span className="text-state-warning">💾</span>
                   <span>磁盘空间</span>
                 </span>
                 <div className="space-y-2">
@@ -447,16 +447,16 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                     return (
                       <div key={`${d.mount_point || i}`} className="space-y-1">
                         <div className="flex items-center justify-between text-[10px] font-mono">
-                          <span className="text-slate-700 font-semibold truncate max-w-[120px]">
+                          <span className="text-ink-secondary font-semibold truncate max-w-[120px]">
                             {d.mount_point || "-"}
                           </span>
-                          <span className="text-slate-600">
+                          <span className="text-ink-secondary">
                             {formatBytes(d.used_bytes)} / {formatBytes(d.total_bytes)} ({fixed(usePct, 0)}%)
                           </span>
                         </div>
-                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                        <div className="w-full bg-line/5 rounded-full h-1.5 overflow-hidden">
                           <div
-                            className={`h-full rounded-full ${usePct > 85 ? "bg-red-500" : "bg-amber-500"}`}
+                            className={`h-full rounded-full ${usePct > 85 ? "bg-state-danger/100" : "bg-state-warning/100"}`}
                             style={{ width: `${usePct}%` }}
                           />
                         </div>
@@ -473,16 +473,16 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
         {activeTab === "ports" && (
           <div className="space-y-2.5 text-xs">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-slate-700">监听端口列表 (TCP / UDP)</span>
+              <span className="text-[11px] font-semibold text-ink-secondary">监听端口列表 (TCP / UDP)</span>
               <button
                 onClick={loadListeningPorts}
-                className="text-[10px] text-apple-blue hover:underline"
+                className="text-[10px] text-accent hover:underline"
               >
                 {portsLoading ? "刷新中..." : "刷新"}
               </button>
             </div>
             {listeningPorts.length === 0 ? (
-              <div className="text-center py-6 text-slate-600 text-xs">
+              <div className="text-center py-6 text-ink-secondary text-xs">
                 {portsLoading ? "正在扫描监听端口..." : "暂无监听端口信息或权限不足"}
               </div>
             ) : (
@@ -490,15 +490,15 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                 {listeningPorts.map((p, idx) => (
                   <div
                     key={idx}
-                    className="p-2 rounded-lg border border-slate-200 bg-white flex items-center justify-between font-mono text-[11px]"
+                    className="p-2 rounded-lg border border-line/15 bg-surface flex items-center justify-between font-mono text-[11px]"
                   >
                     <div className="flex items-center gap-1.5">
-                      <span className="rounded bg-indigo-50 text-indigo-700 px-1 py-0.2 text-[9px] font-bold">
+                      <span className="rounded bg-accent/10 text-accent px-1 py-0.2 text-[9px] font-bold">
                         {p.proto}
                       </span>
-                      <span className="font-bold text-slate-800">:{p.port}</span>
+                      <span className="font-bold text-ink">:{p.port}</span>
                     </div>
-                    <span className="text-slate-600 text-[10px] truncate max-w-[110px]" title={p.process}>
+                    <span className="text-ink-secondary text-[10px] truncate max-w-[110px]" title={p.process}>
                       {p.process}
                     </span>
                   </div>
@@ -511,17 +511,17 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
         {/* ================= Tab 3: 进程管理 ================= */}
         {activeTab === "processes" && (
           <div className="space-y-2 text-xs">
-            <div className="flex items-center justify-between text-slate-600 text-[11px]">
+            <div className="flex items-center justify-between text-ink-secondary text-[11px]">
               <span>Top 进程 (按 CPU/内存占用)</span>
               <span>PID / 占用</span>
             </div>
             {(!metrics?.top_processes || metrics.top_processes.length === 0) ? (
-              <div className="py-6 text-center text-xs text-slate-600 space-y-2">
+              <div className="py-6 text-center text-xs text-ink-secondary space-y-2">
                 <p className="flex items-center justify-center gap-1.5">
-                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-apple-blue" />
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-line/25 border-t-accent" />
                   正在采集进程信息...
                 </p>
-                <p className="px-2 text-[10px] leading-relaxed text-slate-600">
+                <p className="px-2 text-[10px] leading-relaxed text-ink-secondary">
                   远端 ps 较慢时会多等几秒；若长时间为空，可能是远端 ps 命令受限（BusyBox / 精简镜像）。
                 </p>
                 <button
@@ -529,7 +529,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                     ensureMonitoring();
                     void poll();
                   }}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-100"
+                  className="rounded-md border border-line/25 bg-surface px-2 py-0.5 text-[10px] font-semibold text-ink-secondary hover:bg-line/5"
                 >
                   立即重新采集
                 </button>
@@ -539,30 +539,30 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                 {metrics.top_processes.slice(0, 15).map((proc, idx) => (
                   <div
                     key={`${proc.pid}-${idx}`}
-                    className="p-2 rounded-xl border border-slate-200 bg-white flex items-center justify-between gap-1 shadow-apple-sm font-mono text-[11px]"
+                    className="p-2 rounded-xl border border-line/15 bg-surface flex items-center justify-between gap-1 shadow-apple-sm font-mono text-[11px]"
                   >
                     <div className="truncate flex-1">
                       <div
-                        className="font-semibold text-slate-800 truncate"
+                        className="font-semibold text-ink truncate"
                         title={proc.command || proc.name}
                       >
                         {proc.command || proc.name || "(unknown)"}
                       </div>
-                      <div className="text-[10px] text-slate-600">
+                      <div className="text-[10px] text-ink-secondary">
                         PID: {proc.pid} · {proc.user || "-"}
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-apple-blue font-bold text-[10px]">
+                      <div className="text-accent font-bold text-[10px]">
                         CPU {fixed(proc.cpu_percent)}%
                       </div>
-                      <div className="text-slate-600 text-[9px]">
+                      <div className="text-ink-secondary text-[9px]">
                         MEM {fixed(proc.memory_percent)}%
                       </div>
                     </div>
                     <button
                       onClick={() => setKillPid(proc.pid)}
-                      className="ml-1 p-1 rounded text-slate-600 hover:text-red-600 hover:bg-red-50 transition"
+                      className="ml-1 p-1 rounded text-ink-secondary hover:text-state-danger hover:bg-state-danger/10 transition"
                       title="终止该进程"
                     >
                       ✕
@@ -578,10 +578,10 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
         {activeTab === "containers" && (
           <div className="space-y-2.5 text-xs">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-slate-700 flex items-center gap-1">
+              <span className="text-[11px] font-semibold text-ink-secondary flex items-center gap-1">
                 <span>🐳 Docker / Podman 容器</span>
                 {containerRuntime && (
-                  <span className="font-mono text-[9px] font-normal text-slate-600">
+                  <span className="font-mono text-[9px] font-normal text-ink-secondary">
                     {containerRuntime.split("/").pop()}
                   </span>
                 )}
@@ -589,13 +589,13 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => (containerRuntime ? loadContainers() : probeDocker())}
-                  className="text-[10px] text-apple-blue hover:underline"
+                  className="text-[10px] text-accent hover:underline"
                 >
                   {containersLoading ? "刷新中..." : "刷新"}
                 </button>
                 <button
                   onClick={() => onOpenContainer?.()}
-                  className="text-[10px] font-semibold text-apple-blue hover:underline"
+                  className="text-[10px] font-semibold text-accent hover:underline"
                   title="在画布中打开容器工作区（终端让位）"
                 >
                   打开工作区 ↗
@@ -604,18 +604,18 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             </div>
 
             {containerError && (
-              <div className="p-3 rounded-xl border border-red-200 bg-red-50 text-[10px] text-red-700 space-y-1">
+              <div className="p-3 rounded-xl border border-state-danger/30 bg-state-danger/10 text-[10px] text-state-danger space-y-1">
                 <p className="text-xs font-semibold">容器列表读取失败</p>
                 <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-all font-mono leading-relaxed">
                   {containerError}
                 </p>
-                <p className="text-[10px] text-red-700 leading-relaxed">
+                <p className="text-[10px] text-state-danger leading-relaxed">
                   提示：若报 permission denied，需要把当前用户加入 docker 组（usermod -aG docker
                   $USER 后重新登录），或让 docker 守护进程对当前用户开放 socket 权限。
                 </p>
                 <button
                   onClick={() => probeDocker()}
-                  className="rounded-md border border-red-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100"
+                  className="rounded-md border border-state-danger/30 bg-surface px-2 py-0.5 text-[10px] font-semibold text-state-danger hover:bg-state-danger/10"
                 >
                   重新探测
                 </button>
@@ -623,22 +623,22 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             )}
 
             {hasDocker === false ? (
-              <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center text-slate-600 text-xs space-y-1.5">
-                <p className="font-semibold text-slate-700">未检测到容器引擎</p>
-                <p className="text-[10px] text-slate-600 leading-relaxed">
+              <div className="p-4 rounded-xl border border-dashed border-line/15 bg-surface-muted text-center text-ink-secondary text-xs space-y-1.5">
+                <p className="font-semibold text-ink-secondary">未检测到容器引擎</p>
+                <p className="text-[10px] text-ink-secondary leading-relaxed">
                   当前服务器未安装或未运行 Docker / Podman，安装启动后即可在此查看容器列表与配置。
                 </p>
                 <button
                   onClick={() => probeDocker()}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100"
+                  className="rounded-md border border-line/25 bg-surface px-2 py-0.5 text-[10px] font-semibold text-ink-secondary hover:bg-line/5"
                 >
                   重新探测
                 </button>
               </div>
             ) : containersLoading && containers.length === 0 ? (
-              <div className="text-center py-6 text-slate-600 text-xs">正在扫描运行中的容器...</div>
+              <div className="text-center py-6 text-ink-secondary text-xs">正在扫描运行中的容器...</div>
             ) : containers.length === 0 ? (
-              <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-white text-center text-slate-600 text-xs">
+              <div className="p-4 rounded-xl border border-dashed border-line/15 bg-surface text-center text-ink-secondary text-xs">
                 暂无任何容器 (可通过终端执行 docker run 启动)
               </div>
             ) : (
@@ -647,34 +647,34 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                   <div
                     key={c.id}
                     onClick={() => onOpenContainer?.(c.id)}
-                    className="p-2.5 rounded-xl border border-slate-200 bg-white hover:border-apple-blue/50 hover:shadow-apple-sm transition cursor-pointer space-y-1.5"
+                    className="p-2.5 rounded-xl border border-line/15 bg-surface hover:border-accent/50 hover:shadow-apple-sm transition cursor-pointer space-y-1.5"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-900 truncate max-w-[130px]">
+                      <span className="font-bold text-xs text-ink truncate max-w-[130px]">
                         {c.name}
                       </span>
                       <span
                         className={`px-1.5 py-0.2 rounded-full text-[9px] font-semibold uppercase ${
                           c.state === "running"
-                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            : "bg-slate-100 text-slate-600 border border-slate-200"
+                            ? "bg-state-success/10 text-state-success border border-state-success/30"
+                            : "bg-line/5 text-ink-secondary border border-line/15"
                         }`}
                       >
                         {c.state}
                       </span>
                     </div>
 
-                    <div className="text-[10px] font-mono text-slate-600 truncate" title={c.image}>
+                    <div className="text-[10px] font-mono text-ink-secondary truncate" title={c.image}>
                       {c.image}
                     </div>
 
                     {c.ports && (
-                      <div className="text-[9px] font-mono text-slate-600 truncate bg-slate-50 p-1 rounded">
+                      <div className="text-[9px] font-mono text-ink-secondary truncate bg-surface-muted p-1 rounded">
                         {c.ports}
                       </div>
                     )}
 
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[10px] text-apple-blue">
+                    <div className="flex items-center justify-between pt-1 border-t border-line/15 text-[10px] text-accent">
                       <span>进入容器工作区</span>
                       <span>→</span>
                     </div>
@@ -688,16 +688,16 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
 
       {/* 杀进程确认对话框 */}
       {killPid !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-xs p-4">
-          <div className="w-full max-w-xs bg-white rounded-2xl p-4 shadow-xl border border-slate-200 space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">确认终止进程？</h4>
-            <p className="text-xs text-slate-600">
-              即将向进程 PID <code className="font-mono bg-slate-100 px-1 rounded">{killPid}</code> 发送终止信号。
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-xs p-4">
+          <div className="w-full max-w-xs bg-surface rounded-2xl p-4 shadow-xl border border-line/15 space-y-3">
+            <h4 className="text-sm font-bold text-ink">确认终止进程？</h4>
+            <p className="text-xs text-ink-secondary">
+              即将向进程 PID <code className="font-mono bg-line/5 px-1 rounded">{killPid}</code> 发送终止信号。
             </p>
             <div className="flex justify-end gap-2 pt-1">
               <button
                 onClick={() => setKillPid(null)}
-                className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                className="px-3 py-1 rounded-lg border border-line/15 text-xs font-semibold text-ink-secondary hover:bg-surface-muted transition"
               >
                 取消
               </button>

@@ -11,7 +11,7 @@ const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 );
 
 const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = "" }) => (
-  <div className={`rounded-xl border border-black/[0.06] bg-[#f5f5f7] p-3.5 shadow-apple-sm ${className}`}>
+  <div className={`rounded-xl border border-line/10 bg-canvas p-3.5 shadow-apple-sm ${className}`}>
     {children}
   </div>
 );
@@ -60,7 +60,7 @@ export const AboutUpdateTab: React.FC = () => {
     }
     if (hasUpdate && result) {
       return (
-        <span className="rounded-md bg-[#0071e3]/[0.10] px-1.5 py-0.5 text-[11px] font-medium text-[#0071e3]">
+        <span className="rounded-md bg-[#0071e3]/[0.10] px-1.5 py-0.5 text-[11px] font-medium text-accent">
           {UPDATE_COPY.about.updateAvailableLabel} v{result.latest_version}
         </span>
       );
@@ -79,7 +79,7 @@ export const AboutUpdateTab: React.FC = () => {
     <div className="space-y-4">
       {/* 1. 版本卡 */}
       <Card className="flex items-center gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-blue-200/60 bg-white text-[#0071e3] shadow-apple-sm">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-surface text-accent shadow-apple-sm">
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
@@ -99,7 +99,7 @@ export const AboutUpdateTab: React.FC = () => {
           <button
             onClick={() => void openPath(dataDir).catch((err) => console.error("open data dir failed", err))}
             title={UPDATE_COPY.about.dataDirHint}
-            className="max-w-full truncate font-mono text-[10px] text-[#0071e3] hover:underline"
+            className="max-w-full truncate font-mono text-[10px] text-accent hover:underline"
           >
             {UPDATE_COPY.about.dataDirLabel}: {dataDir}
           </button>
@@ -133,7 +133,7 @@ export const AboutUpdateTab: React.FC = () => {
           {hasUpdate && (
             <button
               onClick={() => void openReleasePage()}
-              className="rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98]"
+              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
             >
               {UPDATE_COPY.actions.openRelease}
             </button>
@@ -166,7 +166,7 @@ export const AboutUpdateTab: React.FC = () => {
               }`}
             >
               <span
-                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-apple-sm transition-all ${
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-surface shadow-apple-sm transition-all ${
                   config.auto_check ? "left-[1.15rem]" : "left-0.5"
                 }`}
               />
@@ -178,7 +178,7 @@ export const AboutUpdateTab: React.FC = () => {
             <select
               value={config.interval_hours}
               onChange={(e) => void patchConfig({ interval_hours: Number(e.target.value) })}
-              className="rounded-lg border border-slate-200/80 bg-white px-2 py-1 text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition focus:border-[#0071e3]/50"
+              className="rounded-lg border border-line/15 bg-surface px-2 py-1 text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition focus:border-[#0071e3]/50"
             >
               {INTERVAL_OPTIONS.map((hours) => (
                 <option key={hours} value={hours}>
@@ -191,12 +191,12 @@ export const AboutUpdateTab: React.FC = () => {
           <div className="space-y-1.5">
             <p className="text-[12px] font-medium text-[#1d1d1f]">{UPDATE_COPY.about.channel}</p>
             <div className="flex items-center gap-2">
-              <div className="flex bg-black/[0.06] p-0.5 rounded-xl text-[11px] font-medium">
+              <div className="flex bg-line/5 p-0.5 rounded-xl text-[11px] font-medium">
                 <button
                   onClick={() => void patchConfig({ channel: "stable" })}
                   className={`px-3 py-1 rounded-lg transition active:scale-[0.98] ${
                     config.channel === "stable"
-                      ? "bg-white font-semibold text-[#1d1d1f] shadow-apple-sm"
+                      ? "bg-surface font-semibold text-[#1d1d1f] shadow-apple-sm"
                       : "text-[#86868b] hover:text-[#1d1d1f]"
                   }`}
                 >
@@ -206,7 +206,7 @@ export const AboutUpdateTab: React.FC = () => {
                   onClick={() => void patchConfig({ channel: "beta" })}
                   className={`px-3 py-1 rounded-lg transition active:scale-[0.98] ${
                     config.channel === "beta"
-                      ? "bg-white font-semibold text-[#1d1d1f] shadow-apple-sm"
+                      ? "bg-surface font-semibold text-[#1d1d1f] shadow-apple-sm"
                       : "text-[#86868b] hover:text-[#1d1d1f]"
                   }`}
                 >
@@ -230,7 +230,7 @@ export const AboutUpdateTab: React.FC = () => {
               value={config.fallback_source ?? ""}
               placeholder="https://"
               onChange={(e) => void patchConfig({ fallback_source: e.target.value || null })}
-              className="w-full rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 font-mono text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition placeholder:text-[#c7c7cc] focus:border-[#0071e3]/50"
+              className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition placeholder:text-[#c7c7cc] focus:border-[#0071e3]/50"
             />
             <p className="text-[10px] leading-relaxed text-[#86868b]">{UPDATE_COPY.about.fallbackSourceHint}</p>
           </div>
@@ -242,7 +242,7 @@ export const AboutUpdateTab: React.FC = () => {
               value={config.mirror_prefix ?? ""}
               placeholder="https://"
               onChange={(e) => void patchConfig({ mirror_prefix: e.target.value || null })}
-              className="w-full rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 font-mono text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition placeholder:text-[#c7c7cc] focus:border-[#0071e3]/50"
+              className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition placeholder:text-[#c7c7cc] focus:border-[#0071e3]/50"
             />
             <p className="text-[10px] leading-relaxed text-[#86868b]">{UPDATE_COPY.about.mirrorHint}</p>
           </div>
@@ -254,7 +254,7 @@ export const AboutUpdateTab: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => void openLogDir()}
-              className="rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98]"
+              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
             >
               {UPDATE_COPY.actions.openLogs}
             </button>
@@ -264,13 +264,13 @@ export const AboutUpdateTab: React.FC = () => {
                   .then(() => setBackupMsg(runtime?.backups_dir ?? null))
                   .catch((err) => console.error("backup failed", err))
               }
-              className="rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98]"
+              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
             >
               {UPDATE_COPY.actions.backupNow}
             </button>
             <button
               onClick={() => void openBackupDir()}
-              className="rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98]"
+              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
             >
               {UPDATE_COPY.actions.openBackups}
             </button>

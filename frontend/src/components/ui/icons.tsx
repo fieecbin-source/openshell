@@ -501,3 +501,15 @@ export const FolderPlusIcon = (props: IconProps) => (
     <path d="M12 11v5M9.5 13.5h5" />
   </Icon>
 );
+
+export const MaximizeIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+  </Icon>
+);
+
+export const MinimizeIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M4 14h6m0 0v6m0-6L3 21m17-7h-6m0 0v6m0-6l7 7M10 4v6m0 0H4m6 0L3 3m10 7h6m0 0V4m0 6l7-7" />
+  </Icon>
+);

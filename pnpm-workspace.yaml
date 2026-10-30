@@ -2,3 +2,10 @@ packages:
   - "frontend"
 allowBuilds:
   esbuild: true
+
+# Upstream source supports React >=18; npm 1.1.1 declares an unnecessarily
+# narrower >=19 peer range. Keep React 18 and validate the actual integration.
+peerDependencyRules:
+  allowedVersions:
+    'liquid-glass-react>react': '18'
+    'liquid-glass-react>react-dom': '18'

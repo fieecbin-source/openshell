@@ -335,14 +335,14 @@ async fn mandatory_flag_and_minimum_version_from_meta() {
     // update-meta 的说明优先于 Release 正文
     assert!(outcome.result.notes_html.contains("安全修复"));
     assert!(!outcome.result.notes_html.contains("Release 正文"));
-    // 强制更新不受「跳过」影响
+    // 远端强制标记仍尊重用户的跳过选择。
     h.service.skip_version("1.1.0").expect("skip");
     let again = h
         .service
         .check(&UpdateConfig::default(), false)
         .await
         .expect("cached");
-    assert_eq!(again.decision, NotifyDecision::Notify);
+    assert_eq!(again.decision, NotifyDecision::Skipped);
 }
 
 #[tokio::test]

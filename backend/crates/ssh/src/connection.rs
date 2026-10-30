@@ -52,7 +52,11 @@ impl SshConnection {
         opts: ConnectOptions,
         known_host_repo: Option<Arc<dyn KnownHostRepository>>,
     ) -> DomainResult<Self> {
-        let timeout_dur = Duration::from_secs(opts.timeout_sec.max(30));
+        let timeout_dur = Duration::from_secs(if opts.timeout_sec == 0 {
+            15
+        } else {
+            opts.timeout_sec.clamp(5, 60)
+        });
         let host_clean = opts.host.trim().to_string();
         let verifier = Arc::new(HostKeyVerifier::new(
             known_host_repo,
@@ -155,13 +159,15 @@ impl SshConnection {
                                 ));
                             }
                             Ok(Err(e)) => return Err(map_russh_error(e)),
+                            Ok(Ok(russh::client::KeyboardInteractiveAuthResponse::Success)) => {
+                                authenticated = true
+                            }
                             Ok(Ok(
-                                russh::client::KeyboardInteractiveAuthResponse::Success,
-                            )) => authenticated = true,
-                            Ok(Ok(russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
-                                prompts,
-                                ..
-                            })) => {
+                                russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
+                                    prompts,
+                                    ..
+                                },
+                            )) => {
                                 let responses = vec![pass.clone(); prompts.len()];
                                 match tokio::time::timeout(
                                     KBD_STEP_TIMEOUT,
@@ -182,9 +188,9 @@ impl SshConnection {
                                     Ok(Ok(_)) => {}
                                 }
                             }
-                            Ok(Ok(
-                                russh::client::KeyboardInteractiveAuthResponse::Failure { .. },
-                            )) => {}
+                            Ok(Ok(russh::client::KeyboardInteractiveAuthResponse::Failure {
+                                ..
+                            })) => {}
                         }
                     }
                 }
@@ -268,16 +274,14 @@ impl SshConnection {
                 // - Some(Some(alg))：服务器支持 SHA-2，使用返回的算法；
                 // - None：服务器未公布（多为旧版 OpenSSH），走 ssh-rsa/SHA-1 兼容路径。
                 // 不能强行指定 Sha256，否则仅支持 ssh-rsa 的旧服务器会直接拒绝认证。
-                let best_hash = match tokio::time::timeout(
-                    AUTH_STEP_TIMEOUT,
-                    handle.best_supported_rsa_hash(),
-                )
-                .await
-                {
-                    // 查询失败或超时不应阻断认证，后续按未公布处理即可
-                    Ok(Ok(v)) => v.flatten(),
-                    _ => None,
-                };
+                let best_hash =
+                    match tokio::time::timeout(AUTH_STEP_TIMEOUT, handle.best_supported_rsa_hash())
+                        .await
+                    {
+                        // 查询失败或超时不应阻断认证，后续按未公布处理即可
+                        Ok(Ok(v)) => v.flatten(),
+                        _ => None,
+                    };
                 let key = Arc::new(privkey);
                 let is_rsa = key.algorithm().is_rsa();
 
@@ -633,7 +637,7 @@ impl SshConnection {
 fn describe_methods(methods: &MethodSet) -> String {
     methods
         .iter()
-        .map(|m| <&'static str>::from(m))
+        .map(<&'static str>::from)
         .collect::<Vec<_>>()
         .join(", ")
 }

@@ -52,10 +52,12 @@ function childEnv() {
 }
 
 function run(command, args) {
-  execFileSync(command, args, { cwd: root, stdio: "inherit", env: childEnv() });
+  const needsShell = process.platform === "win32" && !command.toLowerCase().endsWith(".exe");
+  execFileSync(command, args, { cwd: root, stdio: "inherit", env: childEnv(), shell: needsShell });
 }
 
 function preflight() {
+  run(process.execPath, [join(root, "scripts/check-release-inputs.mjs")]);
   // 1. 工作区干净
   if (!arg("allow-dirty")) {
     const dirty = git(["status", "--porcelain"]);
@@ -110,11 +112,16 @@ run("pnpm", ["--filter", "@openshell/frontend", "build"]);
 run("pnpm", ["tauri", "build", "--bundles", bundles]);
 
 // 3. 规整产物命名
+// 只读取本次请求的 bundle 目录，不能把 target 内旧的便携包、测试程序混入发布。
+const bundleRoots = (bundles === "all" ? defaultBundles() : bundles)
+  .split(",")
+  .map((bundle) => join("target", "release", "bundle", bundle.trim() === "app" ? "macos" : bundle.trim()))
+  .join(",");
 run(process.execPath, [
   join(root, "scripts/release.mjs"),
   "assets",
   "--root",
-  "target",
+  bundleRoots,
   "--version",
   version,
   "--platform",

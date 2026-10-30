@@ -30,7 +30,7 @@ pub enum NotifyDecision {
 /// 计算提示策略。
 ///
 /// * `manual = true`（用户主动点「检查更新」）时忽略跳过/稍后，始终告知结果；
-/// * 强制更新永远提示，跳过与稍后都不生效（安全性优先）。
+/// * 更新始终可选，远端 mandatory 标记不覆盖用户的跳过与稍后选择。
 pub fn evaluate(
     result: &UpdateCheckResult,
     state: &UpdaterState,
@@ -40,7 +40,7 @@ pub fn evaluate(
     if !result.has_update {
         return NotifyDecision::UpToDate;
     }
-    if manual || result.mandatory {
+    if manual {
         return NotifyDecision::Notify;
     }
     if state
@@ -190,12 +190,18 @@ mod tests {
     }
 
     #[test]
-    fn mandatory_overrides_skip_and_remind() {
+    fn mandatory_metadata_respects_skip_and_remind() {
         let mut state = UpdaterState::default();
         skip_version(&mut state, "1.1.0");
         remind_later(&mut state, NOW, Some(12));
         let r = result(true, "1.1.0", true);
-        assert_eq!(evaluate(&r, &state, false, NOW), NotifyDecision::Notify);
+        assert_eq!(evaluate(&r, &state, false, NOW), NotifyDecision::Skipped);
+        state.skipped_versions.clear();
+        assert_eq!(
+            evaluate(&r, &state, false, NOW),
+            NotifyDecision::RemindLater
+        );
+        assert_eq!(evaluate(&r, &state, true, NOW), NotifyDecision::Notify);
     }
 
     #[test]

@@ -2,7 +2,6 @@ import { create } from "zustand";
 import type { CardMode, Protocol, Session, TabStatus } from "../types/ipc";
 import {
   type ReconnectPolicy,
-  nextBackoffDelay,
   policyFromSession,
 } from "../lib/backoff";
 import {
@@ -105,6 +104,10 @@ interface TerminalState {
   /** 布局模式放在 store 里，才能被顶栏、标签栏、会话树等多处入口共享 */
   layoutMode: SessionViewMode;
   setLayoutMode: (mode: SessionViewMode) => void;
+  /** 终端全屏沉浸模式 */
+  isFullscreen: boolean;
+  setFullscreen: (fullscreen: boolean) => void;
+  toggleFullscreen: () => void;
 
   openSession: (session: Session, overrides?: ConnectOverrides) => Promise<string>;
   closeTab: (tabId: string) => Promise<void>;
@@ -129,8 +132,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   activeTabId: null,
   // 连接成功后默认全终端视图（SFTP 按需从顶栏切换），避免一上来就是分屏
   layoutMode: "terminal",
+  isFullscreen: false,
 
   setLayoutMode: (layoutMode) => set({ layoutMode }),
+  setFullscreen: (isFullscreen) => set({ isFullscreen }),
+  toggleFullscreen: () => set((state) => ({ isFullscreen: !state.isFullscreen })),
 
   openSession: async (session: Session, overrides?: ConnectOverrides) => {
     const tabId = generateId();
@@ -184,6 +190,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
         return tabId;
       } catch (err: any) {
+        const errMsg = formatFriendlyError(err);
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
@@ -191,12 +198,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                   ...t,
                   status: "error",
                   connectionId: null,
-                  error: formatFriendlyError(err),
+                  error: errMsg,
                 }
               : t
           ),
         }));
-        throw err;
+        get().markDisconnected(tabId, errMsg);
+        return tabId;
       }
     } else {
       // SSH 模式
@@ -207,7 +215,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined }
+              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined, reconnectAttempt: 0 }
               : t
           ),
         }));
@@ -217,6 +225,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
         return tabId;
       } catch (err: any) {
+        const errMsg = formatFriendlyError(err);
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
@@ -224,12 +233,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                   ...t,
                   status: "error",
                   connectionId: null,
-                  error: formatFriendlyError(err),
+                  error: errMsg,
                 }
               : t
           ),
         }));
-        throw err;
+        get().markDisconnected(tabId, errMsg);
+        return tabId;
       }
     }
   },
@@ -268,7 +278,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     // 先取消已排队的定时器，避免「手动重连 + 自动重连」同时触发两次建连
     clearReconnectTimer(tabId);
-    const attemptInLoop = tab.reconnectAttempt ?? 0;
 
     set((state) => ({
       tabs: state.tabs.map((t) =>
@@ -309,17 +318,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         }));
       } catch (err: any) {
         const message = formatFriendlyError(err);
-        if (attemptInLoop > 0 && tab.reconnect.enabled) {
-          get().markDisconnected(tabId, message);
-        } else {
-          set((state) => ({
-            tabs: state.tabs.map((t) =>
-              t.tabId === tabId
-                ? { ...t, status: "disconnected", connectionId: null, error: message }
-                : t
-            ),
-          }));
-        }
+        get().markDisconnected(tabId, message);
       }
       return;
     }
@@ -346,19 +345,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       await startAutoForwardRules(tab.sessionId, res.connection_id);
     } catch (err: any) {
       const message = formatFriendlyError(err);
-      // 自动重连过程中的失败：继续按退避策略重试
-      // 手动重连失败：停在错误态，等用户处理凭据/网络
-      if (attemptInLoop > 0 && tab.reconnect.enabled) {
-        get().markDisconnected(tabId, message);
-      } else {
-        set((state) => ({
-          tabs: state.tabs.map((t) =>
-            t.tabId === tabId
-              ? { ...t, status: "error", connectionId: null, error: message }
-              : t
-          ),
-        }));
-      }
+      get().markDisconnected(tabId, message);
     }
   },
 
@@ -368,30 +355,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     clearReconnectTimer(tabId);
 
-    const policy = tab.reconnect;
     const nextAttempt = (tab.reconnectAttempt ?? 0) + 1;
-    const canRetry = policy.enabled && nextAttempt <= policy.maxAttempts;
+    // 连接失败自动重试，直到连接成功：快速退避 1.5s ~ 3s 之间
+    const delay = Math.min(1500 + nextAttempt * 300, 3000);
 
-    if (!canRetry) {
-      set((state) => ({
-        tabs: state.tabs.map((t) =>
-          t.tabId === tabId
-            ? {
-                ...t,
-                status: "disconnected",
-                error: policy.enabled
-                  ? `${reason ?? "连接已断开"}（自动重连 ${policy.maxAttempts} 次未成功，请手动重连）`
-                  : reason,
-                exitCode: exitCode ?? t.exitCode ?? null,
-                nextRetryAt: undefined,
-              }
-            : t
-        ),
-      }));
-      return;
-    }
-
-    const delay = nextBackoffDelay(nextAttempt, policy);
     set((state) => ({
       tabs: state.tabs.map((t) =>
         t.tabId === tabId

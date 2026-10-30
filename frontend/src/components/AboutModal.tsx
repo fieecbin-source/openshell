@@ -4,6 +4,7 @@ import { Button } from "./ui/Button";
 import { Switch } from "./ui/Controls";
 import { useUpdaterStore } from "../updater/store";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { version } from "../../package.json";
 
 interface AboutModalProps {
   open: boolean;
@@ -59,7 +60,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ open, onClose }) => {
             <div className="flex items-center gap-2">
               <h3 className="text-base font-bold text-ink">OpenShell</h3>
               <span className="rounded-md bg-accent/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-accent">
-                v1.1.1
+                v{version}
               </span>
             </div>
             <p className="mt-0.5 text-xs text-ink-secondary">

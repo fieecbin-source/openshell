@@ -11,11 +11,11 @@ const BASE =
   "disabled:pointer-events-none disabled:opacity-40";
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: "bg-accent text-white shadow-os-sm hover:bg-accent/90 active:bg-accent/80",
+  primary: "bg-action text-white shadow-os-sm hover:bg-action/90 active:bg-action/80",
   secondary:
     "border border-line/10 bg-surface text-ink shadow-os-sm hover:bg-surface-muted active:bg-line/5",
   ghost: "text-ink-secondary hover:bg-line/5 hover:text-ink active:bg-line/10",
-  danger: "bg-state-danger text-white shadow-os-sm hover:bg-state-danger/90 active:bg-state-danger/80",
+  danger: "bg-danger-action text-white shadow-os-sm hover:bg-danger-action/90 active:bg-danger-action/80",
 };
 
 const SIZES: Record<ControlSize, string> = {
@@ -117,7 +117,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         VARIANTS[variant],
         "px-0",
         size === "sm" ? "h-[26px] w-[26px]" : "h-[30px] w-[30px]",
-        active && "bg-accent/10 text-accent hover:bg-accent/15",
+        active && "bg-action/10 text-accent hover:bg-action/15",
         className,
       )}
       {...rest}

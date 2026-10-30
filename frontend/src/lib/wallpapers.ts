@@ -1,25 +1,36 @@
 /**
- * 内置终端 / 界面壁纸。
+ * 终端壁纸与风景背景库
  *
- * 全部使用本地 CSS 绘制（渐变、纹理或纯色），不依赖网络、不占安装体积，也不会因为
- * 分辨率不同而模糊。配色刻意控制在低对比度区间，叠加半透明遮罩后不会影响阅读。
- *
- * 预设分为两类（`kind`）：
- * - `wallpaper`：多层渐变 / 纹理壁纸，观感更丰富；
- * - `solid`：单一纯色，最省 GPU、最干净，适合追求极致简洁。
+ * 包含：
+ * 1. 精选 4K/高清电脑桌面风景壁纸（雪山、极光、暮色、迷雾森林、星河、湖泊、日落等）；
+ * 2. 质感艺术纹理/渐变备用壁纸；
+ * 3. 用户自定壁纸库管理（支持网络图片 URL 与本地图片上传，数据持久化存储）。
  */
 
-export type WallpaperKind = "wallpaper" | "solid";
+export interface ScenicWallpaper {
+  id: string;
+  name: string;
+  category: "山川湖泊" | "极光星空" | "森林秘境" | "日落霞光" | "城市天际" | "旷野大地";
+  /** 高清原图 URL (1920x1080 优化) */
+  image: string;
+  /** 轻量预览缩略图 URL (480px 宽) */
+  thumbnail: string;
+}
+
+export interface CustomWallpaperItem {
+  id: string;
+  name: string;
+  url: string;
+  addedAt: number;
+}
 
 export interface WallpaperPreset {
   id: string;
   name: string;
-  /** 预设类型，设置面板据此分组展示 */
-  kind: WallpaperKind;
-  /** 直接用于 style.backgroundImage；纯色预设为 "none" */
+  kind: "scenic" | "wallpaper" | "solid";
   image: string;
-  /** 纯色预设的背景色；渐变预设留空 */
   color?: string;
+  thumbnail?: string;
 }
 
 export interface WallpaperStyle {
@@ -28,11 +39,127 @@ export interface WallpaperStyle {
   backgroundSize?: string;
 }
 
-export const WALLPAPERS: WallpaperPreset[] = [
-  // ---- 渐变 / 纹理壁纸 ----
+/** 16 套精选高清电脑自然风光壁纸 */
+export const SCENIC_WALLPAPERS: ScenicWallpaper[] = [
   {
-    id: "aurora",
-    name: "极光",
+    id: "scenic_yosemite",
+    name: "优胜美地幽谷",
+    category: "山川湖泊",
+    image: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_aurora",
+    name: "北欧翡翠极光",
+    category: "极光星空",
+    image: "https://images.unsplash.com/photo-1517411032315-54ef2cb783bb?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1517411032315-54ef2cb783bb?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_twilight_alps",
+    name: "暮色晚霞群山",
+    category: "日落霞光",
+    image: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_misty_forest",
+    name: "晨曦迷雾杉林",
+    category: "森林秘境",
+    image: "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_milky_way",
+    name: "深邃星河银河",
+    category: "极光星空",
+    image: "https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_norway_fjord",
+    name: "挪威峡湾静湖",
+    category: "山川湖泊",
+    image: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_fuji_sakura",
+    name: "富士夕照夜樱",
+    category: "日落霞光",
+    image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_sahara_dunes",
+    name: "撒哈拉金色沙丘",
+    category: "旷野大地",
+    image: "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_tokyo_cyberpunk",
+    name: "赛博霓虹夜都",
+    category: "城市天际",
+    image: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_ocean_waves",
+    name: "碧蓝微风海岸",
+    category: "山川湖泊",
+    image: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_swiss_glacier",
+    name: "瑞士雪岭险峰",
+    category: "山川湖泊",
+    image: "https://images.unsplash.com/photo-1486870591958-9b9d0d1dda99?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1486870591958-9b9d0d1dda99?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_autumn_lake",
+    name: "湖畔秋色枫影",
+    category: "森林秘境",
+    image: "https://images.unsplash.com/photo-1507725914440-e1e434774828?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1507725914440-e1e434774828?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_shinjuku_neon",
+    name: "新宿午夜流光",
+    category: "城市天际",
+    image: "https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_alpine_lake",
+    name: "阿尔卑斯倒影静湖",
+    category: "山川湖泊",
+    image: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_sunrise_cloud",
+    name: "雪山之巅晨光云海",
+    category: "日落霞光",
+    image: "https://images.unsplash.com/photo-1454496522488-7a8e488e8606?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1454496522488-7a8e488e8606?auto=format&fit=crop&w=480&q=70",
+  },
+  {
+    id: "scenic_wilderness_stars",
+    name: "荒野星河夜话",
+    category: "极光星空",
+    image: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1920&q=80",
+    thumbnail: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=480&q=70",
+  },
+];
+
+/** 质感艺术纹理备用预设 */
+export const ARTISTIC_WALLPAPERS: WallpaperPreset[] = [
+  {
+    id: "aurora_gradient",
+    name: "幻境极光",
     kind: "wallpaper",
     image:
       "radial-gradient(120% 90% at 12% 8%, rgba(16,185,129,0.45) 0%, rgba(16,185,129,0) 55%)," +
@@ -41,8 +168,8 @@ export const WALLPAPERS: WallpaperPreset[] = [
       "linear-gradient(160deg, #0b1220 0%, #0d1117 55%, #090c12 100%)",
   },
   {
-    id: "deep_ocean",
-    name: "深海",
+    id: "deep_ocean_gradient",
+    name: "深海幽光",
     kind: "wallpaper",
     image:
       "radial-gradient(100% 80% at 20% 100%, rgba(6,182,212,0.35) 0%, rgba(6,182,212,0) 60%)," +
@@ -50,193 +177,157 @@ export const WALLPAPERS: WallpaperPreset[] = [
       "linear-gradient(180deg, #06121c 0%, #04101a 60%, #02080f 100%)",
   },
   {
-    id: "neon_night",
-    name: "霓虹夜",
+    id: "carbon_grid",
+    name: "石墨暗夜",
     kind: "wallpaper",
     image:
-      "radial-gradient(100% 80% at 15% 0%, rgba(217,70,239,0.28) 0%, rgba(217,70,239,0) 58%)," +
-      "radial-gradient(90% 70% at 85% 25%, rgba(34,211,238,0.22) 0%, rgba(34,211,238,0) 60%)," +
-      "linear-gradient(165deg, #120b20 0%, #0a0714 60%, #06040c 100%)",
+      "repeating-linear-gradient(45deg, rgba(255,255,255,0.028) 0px, rgba(255,255,255,0.028) 2px, transparent 2px, transparent 6px)," +
+      "radial-gradient(100% 80% at 50% 0%, rgba(148,163,184,0.10) 0%, rgba(148,163,184,0) 60%)," +
+      "linear-gradient(180deg, #14161a 0%, #0b0c0f 100%)",
   },
   {
-    id: "graphite",
-    name: "石墨网格",
-    kind: "wallpaper",
-    image:
-      "linear-gradient(rgba(148,163,184,0.055) 1px, transparent 1px)," +
-      "linear-gradient(90deg, rgba(148,163,184,0.055) 1px, transparent 1px)," +
-      "radial-gradient(120% 90% at 50% 0%, rgba(148,163,184,0.12) 0%, rgba(148,163,184,0) 60%)," +
-      "linear-gradient(180deg, #111318 0%, #0c0e12 100%)",
-    // 网格尺寸由 WALLPAPER_SIZES 决定
-  },
-  {
-    id: "dot_grid",
-    name: "点阵",
-    kind: "wallpaper",
-    image:
-      "radial-gradient(rgba(148,163,184,0.16) 1px, transparent 1.5px)," +
-      "radial-gradient(120% 90% at 50% 0%, rgba(99,102,241,0.14) 0%, rgba(99,102,241,0) 62%)," +
-      "linear-gradient(180deg, #10141b 0%, #0a0d13 100%)",
-  },
-  {
-    id: "mountain_dusk",
-    name: "暮色群山",
-    kind: "wallpaper",
-    image:
-      "linear-gradient(180deg, rgba(251,146,60,0.22) 0%, rgba(244,63,94,0.10) 28%, rgba(30,41,59,0) 55%)," +
-      "linear-gradient(180deg, rgba(15,23,42,0) 45%, rgba(2,6,23,0.75) 100%)," +
-      "linear-gradient(160deg, #1b2233 0%, #131a28 50%, #0a0f18 100%)",
-  },
-  {
-    id: "forest",
-    name: "森林雾霭",
-    kind: "wallpaper",
-    image:
-      "radial-gradient(110% 85% at 25% 20%, rgba(34,197,94,0.24) 0%, rgba(34,197,94,0) 58%)," +
-      "radial-gradient(100% 90% at 80% 75%, rgba(20,184,166,0.20) 0%, rgba(20,184,166,0) 62%)," +
-      "linear-gradient(170deg, #0e1a14 0%, #0b1410 55%, #070d0a 100%)",
-  },
-  {
-    id: "moss",
-    name: "苔原",
-    kind: "wallpaper",
-    image:
-      "radial-gradient(110% 85% at 20% 90%, rgba(101,163,13,0.16) 0%, rgba(101,163,13,0) 58%)," +
-      "radial-gradient(90% 80% at 80% 10%, rgba(20,83,45,0.30) 0%, rgba(20,83,45,0) 62%)," +
-      "linear-gradient(170deg, #101a12 0%, #0b1410 55%, #070d09 100%)",
-  },
-  {
-    id: "midnight_city",
-    name: "午夜城景",
-    kind: "wallpaper",
-    image:
-      "repeating-linear-gradient(90deg, rgba(96,165,250,0.06) 0px, rgba(96,165,250,0.06) 2px, transparent 2px, transparent 18px)," +
-      "repeating-linear-gradient(0deg, rgba(96,165,250,0.035) 0px, rgba(96,165,250,0.035) 2px, transparent 2px, transparent 26px)," +
-      "radial-gradient(90% 70% at 70% 10%, rgba(129,140,248,0.22) 0%, rgba(129,140,248,0) 62%)," +
-      "linear-gradient(180deg, #0b1020 0%, #070a14 100%)",
-  },
-  {
-    id: "sakura",
-    name: "夜樱",
+    id: "sakura_gradient",
+    name: "暮春夜樱",
     kind: "wallpaper",
     image:
       "radial-gradient(85% 70% at 18% 12%, rgba(244,114,182,0.22) 0%, rgba(244,114,182,0) 58%)," +
       "radial-gradient(90% 75% at 82% 30%, rgba(167,139,250,0.20) 0%, rgba(167,139,250,0) 60%)," +
       "linear-gradient(170deg, #191325 0%, #120e1c 55%, #0a0812 100%)",
   },
-  {
-    id: "sand_dune",
-    name: "沙丘",
-    kind: "wallpaper",
-    image:
-      "radial-gradient(120% 95% at 15% 100%, rgba(234,179,8,0.14) 0%, rgba(234,179,8,0) 58%)," +
-      "radial-gradient(110% 90% at 85% 0%, rgba(217,119,6,0.12) 0%, rgba(217,119,6,0) 60%)," +
-      "linear-gradient(175deg, #1a1712 0%, #14110d 55%, #0c0a08 100%)",
-  },
-  {
-    id: "carbon",
-    name: "碳纤维",
-    kind: "wallpaper",
-    image:
-      "repeating-linear-gradient(45deg, rgba(255,255,255,0.028) 0px, rgba(255,255,255,0.028) 2px, transparent 2px, transparent 6px)," +
-      "repeating-linear-gradient(-45deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 2px, transparent 2px, transparent 6px)," +
-      "radial-gradient(100% 80% at 50% 0%, rgba(148,163,184,0.10) 0%, rgba(148,163,184,0) 60%)," +
-      "linear-gradient(180deg, #14161a 0%, #0b0c0f 100%)",
-  },
-  {
-    id: "dawn_mist",
-    name: "晨雾",
-    kind: "wallpaper",
-    image:
-      "radial-gradient(100% 80% at 12% 8%, rgba(147,197,253,0.55) 0%, rgba(147,197,253,0) 62%)," +
-      "radial-gradient(90% 70% at 88% 20%, rgba(199,210,254,0.50) 0%, rgba(199,210,254,0) 60%)," +
-      "linear-gradient(160deg, #ffffff 0%, #f1f5fb 55%, #e6edf7 100%)",
-  },
-  {
-    id: "linen",
-    name: "亚麻",
-    kind: "wallpaper",
-    image:
-      "repeating-linear-gradient(45deg, rgba(180,160,130,0.05) 0px, rgba(180,160,130,0.05) 1px, transparent 1px, transparent 4px)," +
-      "radial-gradient(100% 80% at 20% 0%, rgba(251,191,36,0.10) 0%, rgba(251,191,36,0) 60%)," +
-      "linear-gradient(170deg, #faf7f0 0%, #f3eee4 60%, #ece5d8 100%)",
-  },
-
-  // ---- 纯色背景（不叠加任何纹理，最省 GPU、最干净）----
-  { id: "solid_slate", name: "石青", kind: "solid", image: "none", color: "#1f2937" },
-  { id: "solid_navy", name: "藏青", kind: "solid", image: "none", color: "#111a2e" },
-  { id: "solid_obsidian", name: "曜石", kind: "solid", image: "none", color: "#0b0d11" },
-  { id: "solid_gunmetal", name: "枪灰", kind: "solid", image: "none", color: "#232a33" },
-  { id: "solid_forest", name: "墨绿", kind: "solid", image: "none", color: "#11241b" },
-  { id: "solid_plum", name: "梅紫", kind: "solid", image: "none", color: "#241a2b" },
-  { id: "solid_mist", name: "雾灰", kind: "solid", image: "none", color: "#eceef1" },
-  { id: "solid_cloud", name: "云白", kind: "solid", image: "none", color: "#f7f7f5" },
-  { id: "solid_ivory", name: "米白", kind: "solid", image: "none", color: "#f6f4ee" },
-  { id: "solid_mint", name: "薄荷", kind: "solid", image: "none", color: "#e6f2ec" },
-  { id: "solid_azure", name: "雾蓝", kind: "solid", image: "none", color: "#e8eef6" },
-  { id: "solid_apricot", name: "暖杏", kind: "solid", image: "none", color: "#f5efe6" },
-  { id: "solid_rose", name: "浅樱", kind: "solid", image: "none", color: "#f6ecec" },
 ];
 
-/** 网格 / 点阵类壁纸需要显式 tile 尺寸，其余铺满 */
-export const WALLPAPER_SIZES: Record<string, string> = {
-  graphite: "32px 32px, 32px 32px, cover, cover",
-  carbon: "8px 8px, 8px 8px, cover, cover",
-  dot_grid: "18px 18px, cover, cover",
-  midnight_city: "18px 18px, 26px 26px, cover, cover",
-  linen: "6px 6px, cover, cover",
-};
+const CUSTOM_WALLPAPERS_STORAGE_KEY = "openshell_custom_wallpapers_v1";
 
-/** 按类型分好组的预设，设置面板直接消费，避免每处重复过滤 */
-export const WALLPAPER_PRESETS: WallpaperPreset[] = WALLPAPERS.filter((w) => w.kind === "wallpaper");
-export const SOLID_PRESETS: WallpaperPreset[] = WALLPAPERS.filter((w) => w.kind === "solid");
+/** 读取用户自定义壁纸列表 */
+export function getStoredCustomWallpapers(): CustomWallpaperItem[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = localStorage.getItem(CUSTOM_WALLPAPERS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 保存用户添加的自定义壁纸 */
+export function addStoredCustomWallpaper(name: string, url: string): CustomWallpaperItem {
+  const list = getStoredCustomWallpapers();
+  const newItem: CustomWallpaperItem = {
+    id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: name.trim() || `自定壁纸 ${list.length + 1}`,
+    url,
+    addedAt: Date.now(),
+  };
+  const updated = [newItem, ...list.slice(0, 49)];
+  try {
+    localStorage.setItem(CUSTOM_WALLPAPERS_STORAGE_KEY, JSON.stringify(updated));
+  } catch (err) {
+    console.warn("failed to save custom wallpaper to localStorage", err);
+  }
+  return newItem;
+}
+
+/** 删除某条用户自定壁纸 */
+export function removeStoredCustomWallpaper(id: string): void {
+  const list = getStoredCustomWallpapers();
+  const filtered = list.filter((item) => item.id !== id);
+  try {
+    localStorage.setItem(CUSTOM_WALLPAPERS_STORAGE_KEY, JSON.stringify(filtered));
+  } catch (err) {
+    console.warn("failed to remove custom wallpaper from localStorage", err);
+  }
+}
+
+/** 兼容旧版 WALLPAPERS 导出，避免其它可能未改动的文件报类型错误 */
+export const WALLPAPERS: WallpaperPreset[] = [
+  ...SCENIC_WALLPAPERS.map((s) => ({
+    id: s.id,
+    name: s.name,
+    kind: "scenic" as const,
+    image: `url("${s.image}")`,
+    thumbnail: s.thumbnail,
+  })),
+  ...ARTISTIC_WALLPAPERS,
+];
+
+export const WALLPAPER_PRESETS = WALLPAPERS;
+export const SOLID_PRESETS: WallpaperPreset[] = [];
+export const WALLPAPER_SIZES: Record<string, string> = {};
 
 export function getWallpaper(id: string): WallpaperPreset | undefined {
   return WALLPAPERS.find((w) => w.id === id);
 }
 
-/** 当前背景的展示名，用于设置面板「当前：xxx」文案 */
+/** 获取背景壁纸显示名称 */
 export function getBackgroundLabel(id: string): string {
-  if (!id) return "无背景";
-  if (id === "custom") return "自定义图片";
-  return getWallpaper(id)?.name ?? "未知背景";
+  if (!id) return "默认主题底色";
+  if (id === "custom") return "自定本地图片";
+  if (id.startsWith("http://") || id.startsWith("https://")) return "自定网络图片";
+
+  const scenic = SCENIC_WALLPAPERS.find((s) => s.id === id);
+  if (scenic) return scenic.name;
+
+  const custom = getStoredCustomWallpapers().find((c) => c.id === id);
+  if (custom) return custom.name;
+
+  const art = ARTISTIC_WALLPAPERS.find((a) => a.id === id);
+  if (art) return art.name;
+
+  return "已设壁纸";
 }
 
 /**
- * 判断颜色是否偏亮，用于在色块上挑选可读的前景色。
- * 采用 BT.601 亮度加权，浅色返回 true。
- */
-export function isLightColor(color?: string): boolean {
-  const hex = (color || "").replace("#", "");
-  if (hex.length !== 6) return false;
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  if ([r, g, b].some((v) => Number.isNaN(v))) return false;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62;
-}
-
-/**
- * 把设置里的 backgroundId / 自定义图片统一解析成可直接铺到 DOM 的样式。
- * 返回 null 表示「不启用背景」。
+ * 将 backgroundId 或自定义图片解析为终端画布背景样式
  */
 export function getWallpaperStyle(
   id: string,
   customDataUrl?: string | null
 ): WallpaperStyle | null {
   if (!id) return null;
+
+  // 1. 直接是 HTTP/HTTPS 图片链接
+  if (id.startsWith("http://") || id.startsWith("https://")) {
+    return {
+      backgroundImage: `url("${id}")`,
+      backgroundSize: "cover",
+    };
+  }
+
+  // 2. 自定义本地图片
   if (id === "custom") {
     return customDataUrl
-      ? { backgroundImage: `url(${customDataUrl})`, backgroundSize: "cover" }
+      ? { backgroundImage: `url("${customDataUrl}")`, backgroundSize: "cover" }
       : null;
   }
-  const preset = getWallpaper(id);
-  if (!preset) return null;
-  if (preset.image === "none") {
-    return { backgroundImage: "none", backgroundColor: preset.color };
+
+  // 3. 自然风景预设
+  const scenic = SCENIC_WALLPAPERS.find((s) => s.id === id);
+  if (scenic) {
+    return {
+      backgroundImage: `url("${scenic.image}")`,
+      backgroundSize: "cover",
+    };
   }
-  return {
-    backgroundImage: preset.image,
-    backgroundSize: WALLPAPER_SIZES[preset.id] || "cover",
-  };
+
+  // 4. 用户自定壁纸库
+  const customItem = getStoredCustomWallpapers().find((c) => c.id === id);
+  if (customItem) {
+    return {
+      backgroundImage: `url("${customItem.url}")`,
+      backgroundSize: "cover",
+    };
+  }
+
+  // 5. 艺术纹理渐变预设
+  const art = ARTISTIC_WALLPAPERS.find((a) => a.id === id);
+  if (art) {
+    return {
+      backgroundImage: art.image,
+      backgroundSize: "cover",
+    };
+  }
+
+  return null;
 }

@@ -28,15 +28,15 @@ const ROOT_DROP_ID = "__root__";
 function getColorBadge(color?: string | null) {
   switch (color) {
     case "emerald":
-      return <span className="h-1.5 w-1.5 rounded-full bg-apple-green" title="生产环境" />;
+      return <span className="h-1.5 w-1.5 rounded-full bg-state-success" title="生产环境" />;
     case "sky":
-      return <span className="h-1.5 w-1.5 rounded-full bg-apple-blue" title="测试环境" />;
+      return <span className="h-1.5 w-1.5 rounded-full bg-action" title="测试环境" />;
     case "amber":
-      return <span className="h-1.5 w-1.5 rounded-full bg-apple-orange" title="预发环境" />;
+      return <span className="h-1.5 w-1.5 rounded-full bg-state-warning" title="预发环境" />;
     case "rose":
-      return <span className="h-1.5 w-1.5 rounded-full bg-apple-red" title="核心服务" />;
+      return <span className="h-1.5 w-1.5 rounded-full bg-state-danger" title="核心服务" />;
     case "purple":
-      return <span className="h-1.5 w-1.5 rounded-full bg-apple-purple" />;
+      return <span className="h-1.5 w-1.5 rounded-full bg-accent" />;
     default:
       return null;
   }
@@ -51,7 +51,7 @@ const MenuItem: React.FC<{
   <button
     onClick={onClick}
     className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition ${
-      danger ? "text-apple-red hover:bg-red-50" : "text-slate-800 hover:bg-slate-100"
+      danger ? "text-state-danger hover:bg-state-danger/10" : "text-ink hover:bg-line/5"
     }`}
   >
     <span>{icon}</span>
@@ -367,10 +367,10 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
           e.stopPropagation();
           openContextMenu(e, { session });
         }}
-        className={`group flex cursor-pointer items-center justify-between rounded-xl px-2.5 py-1.5 text-xs text-slate-700 transition select-none ${
+        className={`group flex cursor-pointer items-center justify-between rounded-xl px-2.5 py-1.5 text-xs text-ink-secondary transition select-none ${
           isDropTarget && dragPayload
-            ? "bg-apple-blue/10 ring-1 ring-apple-blue/40"
-            : "hover:bg-black/[0.04]"
+            ? "bg-action/10 ring-1 ring-accent/40"
+            : "hover:bg-line/5"
         }`}
         title={`${session.name}（单击连接，可拖拽调整分组）`}
       >
@@ -378,35 +378,35 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
           <span
             className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-xs transition ${
               session.protocol === "serial"
-                ? "border border-apple-purple/20 bg-apple-purple/10 text-apple-purple"
-                : "border border-apple-blue/20 bg-apple-blue/10 text-apple-blue"
+                ? "border border-accent/20 bg-accent/10 text-accent"
+                : "border border-accent/20 bg-action/10 text-accent"
             }`}
           >
             {session.protocol === "serial" ? "🔌" : "⚡"}
           </span>
 
           <div className="min-w-0 truncate">
-            <div className="flex items-center gap-1.5 truncate font-semibold text-slate-900">
+            <div className="flex items-center gap-1.5 truncate font-semibold text-ink">
               <span>{session.name}</span>
               {getColorBadge(session.color)}
-              {session.favorite && <span className="text-[10px] text-apple-orange">★</span>}
+              {session.favorite && <span className="text-[10px] text-state-warning">★</span>}
               {isDirty ? (
                 <span
-                  className="inline-flex items-center rounded bg-amber-50 px-1 py-0.2 text-[9px] font-sans text-amber-600"
+                  className="inline-flex items-center rounded bg-state-warning/10 px-1 py-0.2 text-[9px] font-sans text-state-warning"
                   title="本地有待同步至云端的变更"
                 >
                   ☁️待同步
                 </span>
               ) : hasSyncVersion ? (
                 <span
-                  className="inline-flex items-center rounded bg-emerald-50 px-1 py-0.2 text-[9px] font-sans text-emerald-600"
+                  className="inline-flex items-center rounded bg-state-success/10 px-1 py-0.2 text-[9px] font-sans text-state-success"
                   title="已与云端 E2EE 服务同步一致"
                 >
                   ☁️已同步
                 </span>
               ) : null}
             </div>
-            <div className="truncate font-mono text-[10px] text-slate-500">
+            <div className="truncate font-mono text-[10px] text-ink-secondary">
               {session.protocol === "serial"
                 ? session.protocol_options_json?.port_name || "COM1"
                 : `${session.username || "root"}@${session.host || "localhost"}:${session.port || 22}`}
@@ -420,8 +420,8 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
             title={session.favorite ? "取消收藏" : "加入收藏"}
             className={`rounded-md p-1 transition ${
               session.favorite
-                ? "text-apple-orange hover:text-amber-500"
-                : "text-slate-400 hover:text-apple-orange"
+                ? "text-state-warning hover:text-state-warning"
+                : "text-ink-tertiary hover:text-state-warning"
             }`}
           >
             ★
@@ -432,7 +432,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
               void connect(session);
             }}
             title="连接会话"
-            className="rounded-md p-1 text-slate-500 transition hover:bg-apple-blue hover:text-white"
+            className="rounded-md p-1 text-ink-secondary transition hover:bg-action hover:text-white"
           >
             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
@@ -444,7 +444,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
               onEditSession(session);
             }}
             title="编辑会话"
-            className="rounded-md p-1 text-slate-500 transition hover:bg-slate-200"
+            className="rounded-md p-1 text-ink-secondary transition hover:bg-line/10"
           >
             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -482,22 +482,22 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
   };
 
   return (
-    <div className="flex h-full flex-col border-r border-slate-200/80 bg-[#fbfbfd]">
+    <div className="flex h-full flex-col border-r border-line/15 bg-surface-muted">
       {/* 顶部工具栏与同步状态指示 */}
-      <div className="space-y-2 border-b border-slate-200/80 p-3">
+      <div className="space-y-2 border-b border-line/15 p-3">
         <div className="flex items-center justify-between pb-1">
           <button
             onClick={() => setSyncModalOpen(true)}
             className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
               syncConfig?.is_logged_in
-                ? "border-apple-green/30 bg-apple-green/10 text-emerald-700 hover:bg-apple-green/20"
-                : "border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200"
+                ? "border-state-success/30 bg-state-success/10 text-state-success hover:bg-state-success/20"
+                : "border-line/15 bg-line/5 text-ink-secondary hover:bg-line/10"
             }`}
             title="点击管理 E2EE 端到端同步设置"
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                syncConfig?.is_logged_in ? "animate-pulse bg-apple-green" : "bg-slate-400"
+                syncConfig?.is_logged_in ? "animate-pulse bg-state-success" : "bg-line/20"
               }`}
             />
             <span>{syncing ? "同步中..." : syncConfig?.is_logged_in ? "E2EE 同步已连接" : "云端同步未连接"}</span>
@@ -506,7 +506,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="flex items-center gap-1 rounded-lg p-1 text-[11px] text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            className="flex items-center gap-1 rounded-lg p-1 text-[11px] text-ink-tertiary transition hover:bg-line/5 hover:text-ink-secondary"
             title="刷新会话与同步状态"
           >
             <span className={isRefreshing ? "animate-spin" : ""}>🔄</span>
@@ -521,10 +521,10 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索会话 (名称 / 主机)..."
-            className="w-full rounded-xl border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-900 placeholder-slate-400 shadow-apple-sm transition focus:border-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/20"
+            className="w-full rounded-xl border border-line/15 bg-surface py-1.5 pl-8 pr-3 text-xs text-ink placeholder-ink-tertiary shadow-apple-sm transition focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
           />
           <svg
-            className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400"
+            className="absolute left-2.5 top-2 h-3.5 w-3.5 text-ink-tertiary"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -534,7 +534,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
         </div>
 
         {/* 过滤器切换标签 */}
-        <div className="flex rounded-lg bg-slate-200/70 p-0.5 text-[11px]">
+        <div className="flex rounded-lg bg-line/10 p-0.5 text-[11px]">
           {(
             [
               ["all", `全部 (${sessions.length})`],
@@ -547,8 +547,8 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
               onClick={() => setActiveFilter(kind)}
               className={`flex-1 rounded-md py-1 text-center font-medium transition ${
                 activeFilter === kind
-                  ? "bg-white font-semibold text-slate-900 shadow-apple-sm"
-                  : "text-slate-600 hover:text-slate-900"
+                  ? "bg-surface font-semibold text-ink shadow-apple-sm"
+                  : "text-ink-secondary hover:text-ink"
               }`}
             >
               {label}
@@ -560,7 +560,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
         <div className="flex items-center space-x-1.5 pt-0.5">
           <button
             onClick={() => onNewSession()}
-            className="flex flex-1 items-center justify-center space-x-1.5 rounded-xl bg-apple-blue py-1.5 text-xs font-semibold text-white shadow-apple-sm transition hover:bg-apple-hoverBlue"
+            className="flex flex-1 items-center justify-center space-x-1.5 rounded-xl bg-action py-1.5 text-xs font-semibold text-white shadow-apple-sm transition hover:bg-action"
           >
             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -573,7 +573,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
               setShowNewGroupInput(true);
             }}
             title="新建分组"
-            className="rounded-xl border border-slate-200 bg-white p-1.5 text-slate-600 shadow-apple-sm transition hover:bg-slate-100 hover:text-slate-900"
+            className="rounded-xl border border-line/15 bg-surface p-1.5 text-ink-secondary shadow-apple-sm transition hover:bg-line/5 hover:text-ink"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -598,11 +598,11 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   : "新分组名称..."
               }
               autoFocus
-              className="flex-1 rounded-xl border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-900 focus:border-apple-blue focus:outline-none focus:ring-1 focus:ring-apple-blue"
+              className="flex-1 rounded-xl border border-line/25 bg-surface px-2.5 py-1 text-xs text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
             <button
               type="submit"
-              className="rounded-xl bg-apple-blue px-2.5 py-1 text-xs font-medium text-white hover:bg-apple-hoverBlue"
+              className="rounded-xl bg-action px-2.5 py-1 text-xs font-medium text-white hover:bg-action"
             >
               确定
             </button>
@@ -612,7 +612,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                 setShowNewGroupInput(false);
                 setNewGroupParentId(null);
               }}
-              className="rounded-xl border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+              className="rounded-xl border border-line/15 px-2 py-1 text-xs text-ink-secondary hover:bg-line/5"
             >
               取消
             </button>
@@ -625,11 +625,11 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
         {/* 最近连接：常用机器不必在树里翻找 */}
         {activeFilter === "all" && !searchQuery.trim() && recentSessions.length > 0 && (
           <div className="mb-1 space-y-0.5">
-            <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
               最近连接
             </div>
             {recentSessions.map(renderSession)}
-            <div className="my-1 border-b border-slate-200/70" />
+            <div className="my-1 border-b border-line/15" />
           </div>
         )}
 
@@ -641,7 +641,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
         <div
           className={`space-y-0.5 rounded-xl ${
             hoveredGroupId === ROOT_DROP_ID && dragPayload
-              ? "bg-apple-blue/5 ring-1 ring-apple-blue/30"
+              ? "bg-action/5 ring-1 ring-accent/30"
               : ""
           }`}
           onDragOver={(e) => {
@@ -656,30 +656,30 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
           }}
         >
           {(tree.ungrouped.length > 0 || !!dragPayload) && (
-            <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
               未分组会话
             </div>
           )}
           {tree.ungrouped.map(renderSession)}
           {dragPayload && tree.ungrouped.length === 0 && (
-            <div className="mx-2 rounded-lg border border-dashed border-slate-300 px-2 py-1.5 text-[10px] text-slate-400">
+            <div className="mx-2 rounded-lg border border-dashed border-line/25 px-2 py-1.5 text-[10px] text-ink-tertiary">
               拖到这里可移出分组
             </div>
           )}
         </div>
 
         {filteredSessions.length === 0 && (
-          <div className="flex flex-col items-center justify-center p-8 text-center text-slate-400">
+          <div className="flex flex-col items-center justify-center p-8 text-center text-ink-tertiary">
             <div className="mb-2 text-3xl opacity-60">💻</div>
-            <p className="mb-1 text-xs font-medium text-slate-600">
+            <p className="mb-1 text-xs font-medium text-ink-secondary">
               {activeFilter === "favorites"
                 ? "暂无收藏的会话"
                 : activeFilter === "recent"
                   ? "还没有连接记录"
                   : "暂无保存的会话"}
             </p>
-            <p className="mb-3 text-[11px] text-slate-400">点击下方按钮快速配置新连接</p>
-            <button onClick={() => onNewSession()} className="text-xs font-semibold text-apple-blue hover:underline">
+            <p className="mb-3 text-[11px] text-ink-tertiary">点击下方按钮快速配置新连接</p>
+            <button onClick={() => onNewSession()} className="text-xs font-semibold text-accent hover:underline">
               + 立即新建会话
             </button>
           </div>
@@ -689,7 +689,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
       {/* 右键浮动上下文菜单 */}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[176px] animate-in rounded-2xl border border-black/10 bg-white/95 py-1.5 text-xs shadow-apple-xl backdrop-blur-xl fade-in duration-100"
+          className="fixed z-50 min-w-[176px] animate-in rounded-2xl border border-line/10 bg-surface/95 py-1.5 text-xs shadow-apple-xl backdrop-blur-xl fade-in duration-100"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -724,7 +724,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   );
                 }}
               />
-              <div className="my-1 border-t border-slate-100" />
+              <div className="my-1 border-t border-line/15" />
               <MenuItem
                 icon="🖥"
                 label="复制主机地址"
@@ -743,7 +743,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   void copyText(s.username || "root", "用户名");
                 }}
               />
-              <div className="my-1 border-t border-slate-100" />
+              <div className="my-1 border-t border-line/15" />
               <MenuItem
                 icon="✏️"
                 label="编辑配置"
@@ -771,7 +771,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   void toggleFavorite(s);
                 }}
               />
-              <div className="my-1 border-t border-slate-100" />
+              <div className="my-1 border-t border-line/15" />
               <MenuItem
                 icon="🗑️"
                 label="删除会话"
@@ -818,7 +818,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   void handleRenameGroup(g);
                 }}
               />
-              <div className="my-1 border-t border-slate-100" />
+              <div className="my-1 border-t border-line/15" />
               <MenuItem
                 icon="🗑️"
                 label="删除分组"

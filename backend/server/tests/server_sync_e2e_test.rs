@@ -495,7 +495,12 @@ async fn test_single_user_bootstrap_and_login() {
     let base_url = format!("http://{}", local_addr);
 
     tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     let client = SyncClient::new(&base_url, "device_admin_1");
@@ -513,7 +518,11 @@ async fn test_single_user_bootstrap_and_login() {
             },
         })
         .await;
-    assert!(login_res.is_ok(), "single user login should succeed with username: {:?}", login_res.err());
+    assert!(
+        login_res.is_ok(),
+        "single user login should succeed with username: {:?}",
+        login_res.err()
+    );
 
     // Registration should be rejected in single-user mode
     let reg_res = client
@@ -527,5 +536,8 @@ async fn test_single_user_bootstrap_and_login() {
             invite_code: None,
         })
         .await;
-    assert!(reg_res.is_err(), "registration should be rejected in single-user mode");
+    assert!(
+        reg_res.is_err(),
+        "registration should be rejected in single-user mode"
+    );
 }

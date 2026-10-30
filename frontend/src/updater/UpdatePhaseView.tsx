@@ -52,7 +52,7 @@ const ManualHint: React.FC = () => {
       <p className="text-[11px] leading-relaxed text-[#3a3a3c]">{installHint}</p>
       <button
         onClick={() => void openDownloadDir()}
-        className="rounded-lg border border-slate-200/80 bg-white px-2 py-1 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98]"
+        className="rounded-lg border border-line/15 bg-surface px-2 py-1 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
       >
         {UPDATE_COPY.actions.openDownloads}
       </button>
@@ -81,8 +81,8 @@ export const UpdatePhaseView: React.FC<UpdatePhaseViewProps> = ({ state }) => {
             <Spinner />
             <span>{UPDATE_COPY.phase.checking}</span>
           </div>
-          <div className="h-2.5 w-3/4 animate-pulse rounded-md bg-black/[0.06]" />
-          <div className="h-2.5 w-full animate-pulse rounded-md bg-black/[0.05]" />
+          <div className="h-2.5 w-3/4 animate-pulse rounded-md bg-line/5" />
+          <div className="h-2.5 w-full animate-pulse rounded-md bg-line/5" />
           <div className="h-2.5 w-5/6 animate-pulse rounded-md bg-black/[0.04]" />
         </div>
       );
@@ -226,7 +226,7 @@ export const UpdatePhaseView: React.FC<UpdatePhaseViewProps> = ({ state }) => {
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <button
               onClick={() => void useUpdaterStore.getState().openDownloadDir()}
-              className="rounded-xl border border-slate-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98]"
+              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
             >
               {UPDATE_COPY.actions.openDownloads}
             </button>

@@ -8,7 +8,7 @@ import { UpdatePhaseView } from "./UpdatePhaseView";
 const PRIMARY =
   "rounded-xl bg-[#0071e3] px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-apple-sm transition hover:bg-[#0077ed] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
 const SECONDARY =
-  "rounded-xl border border-slate-200/80 bg-white px-3.5 py-1.5 text-[12px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-xl border border-line/15 bg-surface px-3.5 py-1.5 text-[12px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
 const GHOST =
   "rounded-lg px-2 py-1 text-[11px] font-medium text-[#86868b] transition hover:text-[#1d1d1f] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -172,10 +172,10 @@ export const UpdateModal: React.FC = () => {
         className="absolute inset-0 animate-fade-in bg-black/25 backdrop-blur-[2px]"
         onClick={() => setModalOpen(false)}
       />
-      <div className="relative w-full max-w-xl animate-zoom-in overflow-hidden rounded-2xl border border-black/[0.06] bg-white/95 shadow-apple-lg backdrop-blur-xl">
+      <div className="relative w-full max-w-xl animate-zoom-in overflow-hidden rounded-2xl border border-line/10 bg-surface/95 shadow-apple-lg backdrop-blur-xl">
         {/* 头部：版本跃迁 + 元信息 */}
-        <div className="flex items-start gap-3 border-b border-black/[0.06] px-5 py-4">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-200/60 bg-blue-50 text-[#0071e3] shadow-sm">
+        <div className="flex items-start gap-3 border-b border-line/10 px-5 py-4">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 text-accent shadow-sm">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 strokeLinecap="round"
@@ -193,7 +193,7 @@ export const UpdateModal: React.FC = () => {
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <span className="font-mono text-[11px] text-[#86868b]">v{result.current_version}</span>
                 <span className="text-[#86868b]">→</span>
-                <span className="rounded-md bg-[#0071e3]/[0.08] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#0071e3]">
+                <span className="rounded-md bg-[#0071e3]/[0.08] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-accent">
                   v{result.latest_version}
                 </span>
                 {result.published_at && (
@@ -202,7 +202,7 @@ export const UpdateModal: React.FC = () => {
                   </span>
                 )}
                 {result.asset && result.asset.size > 0 && (
-                  <span className="rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[11px] text-[#86868b]">
+                  <span className="rounded-md bg-line/5 px-1.5 py-0.5 text-[11px] text-[#86868b]">
                     {UPDATE_COPY.modal.packageSize} {formatBytes(result.asset.size)}
                   </span>
                 )}
@@ -217,7 +217,7 @@ export const UpdateModal: React.FC = () => {
           <button
             onClick={() => setModalOpen(false)}
             title={busy ? UPDATE_COPY.modal.minimize : UPDATE_COPY.modal.close}
-            className="p-1.5 text-[#86868b] rounded-lg hover:text-[#1d1d1f] hover:bg-black/[0.05] active:scale-95 transition"
+            className="p-1.5 text-[#86868b] rounded-lg hover:text-[#1d1d1f] hover:bg-line/5 active:scale-95 transition"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -231,7 +231,7 @@ export const UpdateModal: React.FC = () => {
         </div>
 
         {/* 底部操作区 */}
-        <div className="flex min-h-[48px] items-center justify-end gap-2 border-t border-black/[0.06] bg-black/[0.02] px-5 py-2.5">
+        <div className="flex min-h-[48px] items-center justify-end gap-2 border-t border-line/10 bg-line/5 px-5 py-2.5">
           {renderFooter()}
         </div>
       </div>

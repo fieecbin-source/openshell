@@ -21,6 +21,9 @@ export default {
         },
         line: 'rgb(var(--os-line) / <alpha-value>)',
         accent: 'rgb(var(--os-accent) / <alpha-value>)',
+        action: 'rgb(var(--os-action) / <alpha-value>)',
+        'danger-action': 'rgb(var(--os-danger-action) / <alpha-value>)',
+        scrim: 'rgb(var(--os-scrim) / <alpha-value>)',
         state: {
           success: 'rgb(var(--os-success) / <alpha-value>)',
           warning: 'rgb(var(--os-warning) / <alpha-value>)',
@@ -66,9 +69,9 @@ export default {
         'apple-md': '0 4px 14px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04)',
         'apple-lg': '0 10px 30px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04)',
         'apple-xl': '0 20px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06)',
-        'os-sm': '0 1px 2px rgb(var(--os-line) / 0.05), 0 1px 1px rgb(var(--os-line) / 0.03)',
-        'os-md': '0 4px 12px rgb(var(--os-line) / 0.06), 0 1px 3px rgb(var(--os-line) / 0.04)',
-        'os-lg': '0 12px 32px rgb(var(--os-line) / 0.10), 0 2px 6px rgb(var(--os-line) / 0.05)',
+        'os-sm': '0 1px 3px rgb(57 90 137 / 0.08)',
+        'os-md': '0 4px 14px rgb(57 90 137 / 0.12)',
+        'os-lg': '0 20px 56px rgb(57 90 137 / 0.18)',
       },
       // 更新弹窗与顶栏徽标专用的轻量动效（150-200ms，避免拖慢交互）
       keyframes: {

@@ -1,4 +1,10 @@
+import { GlassMaterial } from "./ui/GlassMaterial";
 import React, { useMemo, useState } from "react";
+import { FolderIcon, PlusIcon, ServerIcon, SearchIcon } from "./ui/icons";
+import { Button } from "./ui/Button";
+import { Field, Input } from "./ui/Field";
+import { Modal } from "./ui/Overlay";
+import { formatFriendlyError } from "../lib/errors";
 import type { Group, Session } from "../types/ipc";
 import { useSessionStore } from "../stores/sessionStore";
 import { useTerminalStore } from "../stores/terminalStore";
@@ -66,13 +72,42 @@ export const HomeHub: React.FC<HomeHubProps> = ({
   onConnectSession,
   onPortCheckerOpen,
 }) => {
-  const { sessions, groups, deleteSession, updateSession } = useSessionStore();
+  const { sessions, groups, createGroup, deleteSession, updateSession } = useSessionStore();
   const { tabs, setActiveTab } = useTerminalStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFilter, setSelectedFilter] = useState<FilterKey>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [deletingSession, setDeletingSession] = useState<Session | null>(null);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupError, setGroupError] = useState<string | null>(null);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
+  const handleCreateGroup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (creatingGroup) return;
+    const name = groupName.trim();
+    if (!name) { setGroupError("请输入分组名称"); return; }
+    if (groups.some((group) => !group.parent_id && group.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      setGroupError("已存在同名分组，请使用其他名称");
+      return;
+    }
+    setCreatingGroup(true);
+    setGroupError(null);
+    try {
+      const group = await createGroup(name);
+      setSelectedFilter(group.id);
+      setSearchQuery("");
+      setViewMode("grid");
+      setGroupModalOpen(false);
+      setGroupName("");
+    } catch (error) {
+      setGroupError(formatFriendlyError(error));
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
 
   /** 已连接的会话 id：用于状态点、在线计数与「在线优先」排序 */
   const onlineIds = useMemo(
@@ -154,7 +189,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           online: countOnline(list),
         };
       })
-      .filter((section) => section.sessions.length > 0);
+      .filter((section) => section.sessions.length > 0 || !searchQuery.trim());
 
     const ungrouped = filteredSessions.filter((s) => !s.group_id || !groupById.has(s.group_id));
     if (ungrouped.length > 0) {
@@ -168,7 +203,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
       });
     }
     return result;
-  }, [filteredSessions, groupById, groups, onlineIds, selectedFilter]);
+  }, [filteredSessions, groupById, groups, onlineIds, selectedFilter, searchQuery]);
 
   const onlineCount = sessions.filter((s) => onlineIds.has(s.id)).length;
   const favoriteCount = sessions.filter((s) => s.favorite).length;
@@ -196,10 +231,10 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           if (activeTab) setActiveTab(activeTab.tabId);
           else onConnectSession(s);
         }}
-        className={`group relative flex flex-col justify-between rounded-2xl border p-4 transition-all duration-200 cursor-pointer bg-white/90 backdrop-blur-sm hover:shadow-apple-md hover:-translate-y-0.5 ${
+        className={`group relative flex flex-col justify-between rounded-2xl border p-4 transition-all duration-200 cursor-pointer liquid-glass-card hover:shadow-apple-md hover:-translate-y-0.5 ${
           isOnline
-            ? "border-emerald-300 ring-2 ring-emerald-500/10"
-            : "border-slate-200/90 hover:border-apple-blue/50"
+            ? "border-state-success/30 ring-2 ring-emerald-500/10"
+            : "border-line/15 hover:border-accent/50"
         }`}
       >
         {/* 头部：主机头像 + 别名 + 状态 */}
@@ -212,22 +247,22 @@ export const HomeHub: React.FC<HomeHubProps> = ({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className="truncate font-bold text-sm text-slate-900 group-hover:text-apple-blue transition">
+              <span className="truncate font-bold text-sm text-ink group-hover:text-accent transition">
                 {s.name}
               </span>
               {(isOnline || isBusy) && (
                 <span
                   className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
                     isOnline
-                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                      : "bg-amber-50 text-amber-700 border border-amber-200"
+                      ? "bg-state-success/10 text-state-success border border-state-success/30"
+                      : "bg-state-warning/10 text-state-warning border border-state-warning/30"
                   }`}
                 >
                   {isOnline ? "在线" : activeTab?.status === "reconnecting" ? "重连中" : "连接中"}
                 </span>
               )}
             </div>
-            <div className="mt-0.5 font-mono text-[11px] text-slate-500 truncate">
+            <div className="mt-0.5 font-mono text-[11px] text-ink-secondary truncate">
               {s.protocol === "serial"
                 ? `${s.protocol_options_json?.port_name || "COM1"} @ ${s.protocol_options_json?.baud_rate || 115200}`
                 : `${s.username || "root"}@${s.host || "127.0.0.1"}:${s.port || 22}`}
@@ -243,8 +278,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               }}
               className={`p-1 rounded-lg transition ${
                 s.favorite
-                  ? "text-amber-500 hover:bg-amber-50"
-                  : "text-slate-300 hover:text-amber-500 hover:bg-amber-50"
+                  ? "text-state-warning hover:bg-state-warning/10"
+                  : "text-ink-secondary hover:text-state-warning hover:bg-state-warning/10"
               }`}
               title={s.favorite ? "取消收藏" : "收藏该主机"}
             >
@@ -262,7 +297,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                 e.stopPropagation();
                 onEditSession(s);
               }}
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition"
+              className="p-1 rounded-lg text-ink-tertiary hover:text-ink hover:bg-line/5 transition"
               title="编辑机器配置"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -274,7 +309,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                 e.stopPropagation();
                 setDeletingSession(s);
               }}
-              className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+              className="p-1 rounded-lg text-ink-tertiary hover:text-state-danger hover:bg-state-danger/10 transition"
               title="删除机器"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -289,8 +324,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           <span
             className={`rounded px-1.5 py-0.5 font-bold border ${
               s.protocol === "serial"
-                ? "bg-purple-50 text-purple-700 border-purple-200"
-                : "bg-blue-50 text-apple-blue border-blue-200"
+                ? "bg-accent/10 text-accent border-accent/30"
+                : "bg-accent/10 text-accent border-accent/30"
             }`}
           >
             {s.protocol === "serial" ? "SERIAL" : s.protocol.toUpperCase()}
@@ -298,15 +333,15 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           <span
             className={`rounded px-1.5 py-0.5 border ${
               isPublicKey
-                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                : "bg-slate-100 text-slate-600 border-slate-200"
+                ? "bg-state-success/10 text-state-success border-state-success/30"
+                : "bg-line/5 text-ink-secondary border-line/15"
             }`}
           >
             {isPublicKey ? "🛡️ 密钥" : "🔑 密码"}
           </span>
           {group && (
             <span
-              className="flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-slate-600"
+              className="flex items-center gap-1 rounded border border-line/15 bg-surface px-1.5 py-0.5 text-ink-secondary"
               title={`分组：${group.name}`}
             >
               <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: group.color || "#94a3b8" }} />
@@ -314,26 +349,26 @@ export const HomeHub: React.FC<HomeHubProps> = ({
             </span>
           )}
           {s.notes && (
-            <span className="max-w-[160px] truncate rounded bg-slate-100 px-1.5 py-0.5 text-slate-500" title={s.notes}>
+            <span className="max-w-[160px] truncate rounded bg-line/5 px-1.5 py-0.5 text-ink-secondary" title={s.notes}>
               {s.notes}
             </span>
           )}
         </div>
 
         {/* 底部：最近使用 + 动作 */}
-        <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2.5 text-[11px]">
-          <span className="text-slate-400">
+        <div className="mt-3 flex items-center justify-between border-t border-line/15 pt-2.5 text-[11px]">
+          <span className="text-ink-tertiary">
             {isOnline ? (
-              <span className="flex items-center gap-1 font-semibold text-emerald-600">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="flex items-center gap-1 font-semibold text-state-success">
+                <span className="h-1.5 w-1.5 rounded-full bg-state-success" />
                 会话进行中 · 点击切入
               </span>
             ) : (
               <span>最近使用：{formatRelative(s.last_used_at)}</span>
             )}
           </span>
-          <span className="flex items-center gap-1 font-bold text-apple-blue opacity-0 transition group-hover:opacity-100 group-hover:translate-x-0.5">
-            {isOnline ? "进入终端" : "极速连接"} →
+          <span className="flex items-center gap-1 font-bold text-accent opacity-0 transition group-hover:opacity-100 group-hover:translate-x-0.5">
+            {isOnline ? "进入终端" : "连接主机"} →
           </span>
         </div>
       </div>
@@ -341,26 +376,27 @@ export const HomeHub: React.FC<HomeHubProps> = ({
   };
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-hidden select-none bg-transparent">
+    <div className="flex h-full flex-1 flex-col overflow-hidden select-none workspace-background">
       {/* 顶部主横幅与快速控制栏 */}
-      <div className="shrink-0 border-b border-slate-200/80 bg-white/75 p-6 backdrop-blur-xl">
+      <div className="glass-host relative shrink-0 border-b border-line/15 liquid-glass-chrome p-6">
+        <GlassMaterial radius={0} />
         <div className="mx-auto flex max-w-6xl flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
             <div className="mb-1 flex items-center gap-2">
-              <span className="text-2xl">🖥️</span>
-              <h1 className="text-xl font-bold tracking-tight text-slate-900">管理中心</h1>
+              <ServerIcon className="h-6 w-6 text-accent" />
+              <h1 className="text-xl font-semibold tracking-tight text-ink">连接管理</h1>
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
-              <span className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 font-mono text-slate-600">
+              <span className="rounded-full border border-line/15 bg-surface/80 px-2 py-0.5 font-mono text-ink-secondary">
                 {sessions.length} 台主机
               </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+              <span className="rounded-full border border-state-success/30 bg-state-success/10 px-2 py-0.5 text-state-success">
                 {onlineCount} 在线
               </span>
-              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700">
+              <span className="rounded-full border border-state-warning/30 bg-state-warning/10 px-2 py-0.5 text-state-warning">
                 {favoriteCount} 收藏
               </span>
-              <span className="rounded-full border border-slate-200 bg-white/80 px-2 py-0.5 text-slate-500">
+              <span className="rounded-full border border-line/15 bg-surface/80 px-2 py-0.5 text-ink-secondary">
                 {groups.length} 个分组
               </span>
             </div>
@@ -371,20 +407,26 @@ export const HomeHub: React.FC<HomeHubProps> = ({
             {onPortCheckerOpen && (
               <button
                 onClick={() => onPortCheckerOpen()}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-apple-sm transition hover:bg-slate-50"
+                className="flex items-center gap-1.5 rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs font-semibold text-ink-secondary shadow-apple-sm transition hover:bg-surface-muted"
                 title="快速探测端口连通性"
               >
-                <span>🔍 端口探测</span>
+                <SearchIcon className="h-3.5 w-3.5" /><span>端口探测</span>
               </button>
             )}
+            <Button
+              onClick={() => { setGroupName(""); setGroupError(null); setGroupModalOpen(true); }}
+              leading={<FolderIcon className="h-4 w-4" />}
+            >
+              新建分组
+            </Button>
             <button
               onClick={() => onNewSession(newGroupId)}
-              className="flex items-center gap-2 rounded-xl bg-apple-blue px-4 py-2.5 text-xs font-semibold text-white shadow-apple-md transition duration-150 hover:bg-apple-hoverBlue active:scale-98"
+              className="flex items-center gap-2 rounded-xl bg-action px-4 py-2.5 text-xs font-semibold text-white shadow-apple-md transition duration-150 hover:bg-action active:scale-98"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
               </svg>
-              <span>+ 新建连接</span>
+              <span>新建服务器</span>
             </button>
           </div>
         </div>
@@ -397,8 +439,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               onClick={() => setSelectedFilter("all")}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
                 selectedFilter === "all"
-                  ? "bg-slate-900 text-white font-semibold shadow-apple-sm"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                  ? "bg-accent/15 text-accent font-semibold shadow-apple-sm"
+                  : "bg-line/5 text-ink-secondary hover:bg-line/10"
               }`}
             >
               全部分类 ({sessions.length})
@@ -407,8 +449,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               onClick={() => setSelectedFilter("online")}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1 ${
                 selectedFilter === "online"
-                  ? "bg-emerald-600 text-white font-semibold shadow-apple-sm"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                  ? "bg-accent/15 text-accent font-semibold shadow-apple-sm"
+                  : "bg-line/5 text-ink-secondary hover:bg-line/10"
               }`}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
@@ -418,13 +460,13 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               onClick={() => setSelectedFilter("favorites")}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1 ${
                 selectedFilter === "favorites"
-                  ? "bg-amber-500 text-white font-semibold shadow-apple-sm"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                  ? "bg-state-warning/100 text-white font-semibold shadow-apple-sm"
+                  : "bg-line/5 text-ink-secondary hover:bg-line/10"
               }`}
             >
               <span>⭐ 收藏</span>
             </button>
-            <span className="mx-1 h-4 w-px shrink-0 bg-slate-200" />
+            <span className="mx-1 h-4 w-px shrink-0 bg-line/10" />
             {[...groups]
               .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name))
               .map((g, index) => {
@@ -435,8 +477,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                     onClick={() => setSelectedFilter(g.id)}
                     className={`flex shrink-0 items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition ${
                       selectedFilter === g.id
-                        ? "bg-apple-blue text-white font-semibold shadow-apple-sm"
-                        : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                        ? "bg-action text-white font-semibold shadow-apple-sm"
+                        : "bg-line/5 text-ink-secondary hover:bg-line/10"
                     }`}
                   >
                     <span
@@ -457,10 +499,10 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="搜索别名、IP、用户或备注..."
-                className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 transition shadow-apple-sm focus:border-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/20"
+                className="w-full rounded-xl border border-line/15 bg-surface pl-8 pr-3 py-1.5 text-xs text-ink placeholder-ink-tertiary transition shadow-apple-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
               <svg
-                className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400"
+                className="absolute left-2.5 top-2 h-3.5 w-3.5 text-ink-tertiary"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -469,10 +511,10 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               </svg>
             </div>
 
-            <div className="flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+            <div className="flex items-center rounded-lg border border-line/15 bg-line/5 p-0.5">
               <button
                 onClick={() => setViewMode("grid")}
-                className={`p-1 rounded transition ${viewMode === "grid" ? "bg-white text-slate-900 shadow-apple-sm" : "text-slate-500 hover:text-slate-800"}`}
+                className={`p-1 rounded transition ${viewMode === "grid" ? "bg-surface text-ink shadow-apple-sm" : "text-ink-secondary hover:text-ink"}`}
                 title="网格卡片视图"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -481,7 +523,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               </button>
               <button
                 onClick={() => setViewMode("list")}
-                className={`p-1 rounded transition ${viewMode === "list" ? "bg-white text-slate-900 shadow-apple-sm" : "text-slate-500 hover:text-slate-800"}`}
+                className={`p-1 rounded transition ${viewMode === "list" ? "bg-surface text-ink shadow-apple-sm" : "text-ink-secondary hover:text-ink"}`}
                 title="列表表格视图"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -496,63 +538,74 @@ export const HomeHub: React.FC<HomeHubProps> = ({
       {/* 主体卡片网格 / 列表区 */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl">
-          {filteredSessions.length === 0 ? (
-            <div className="mt-4 space-y-3 rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-apple-sm">
-              <div className="mb-1 text-4xl">🖥️ ⚡</div>
-              <h3 className="text-base font-bold text-slate-800">
+          {filteredSessions.length === 0 && (!sections.length || !!searchQuery.trim() || selectedFilter === "online" || selectedFilter === "favorites") ? (
+            <div className="mt-4 space-y-3 rounded-2xl border border-dashed border-line/25 bg-surface p-12 text-center shadow-apple-sm">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-accent/20 bg-accent/10"><ServerIcon className="h-7 w-7 text-accent" /></div>
+              <h3 className="text-base font-bold text-ink">
                 {sessions.length === 0 ? "还没有配置任何服务器连接" : "未找到匹配的机器"}
               </h3>
-              <p className="mx-auto max-w-md text-xs text-slate-500">
+              <p className="mx-auto max-w-md text-xs text-ink-secondary">
                 {sessions.length === 0
-                  ? "OpenShell 支持一键保存 SSH 主机、串口设备。新建完成后，即可随时点击卡片发起极速免密或密码连接。"
+                  ? "添加 SSH 主机或串口设备，按环境分组管理，随时连接并传输文件。"
                   : "尝试清空搜索关键字，或切换上方的分类 / 在线 / 收藏筛选。"}
               </p>
               {sessions.length === 0 && (
                 <button
                   onClick={() => onNewSession()}
-                  className="mt-2 rounded-xl bg-apple-blue px-5 py-2 text-xs font-semibold text-white shadow-apple-md transition hover:bg-apple-hoverBlue"
+                  className="mt-2 rounded-xl bg-action px-5 py-2 text-xs font-semibold text-white shadow-apple-md transition hover:bg-action"
                 >
                   + 新建第一台机器连接
                 </button>
               )}
             </div>
-          ) : viewMode === "grid" ? (
+          ) : viewMode === "grid" || filteredSessions.length === 0 ? (
             <div className="space-y-6">
               {sections.map((section) => (
-                <div key={section.key}>
+                <section key={section.key} aria-label={`${section.name}服务器分组`}>
                   {/* 分类标题：分组名 + 数量 + 在线数 + 快捷新建 */}
-                  <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-slate-200/70 pb-1.5">
+                  <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-line/15 pb-1.5">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: section.dot }} />
-                      <h2 className="truncate text-[13px] font-bold text-slate-900">{section.name}</h2>
-                      <span className="shrink-0 text-[11px] font-medium text-slate-500">
+                      <h2 className="truncate text-[13px] font-bold text-ink">{section.name}</h2>
+                      <span className="shrink-0 text-[11px] font-medium text-ink-secondary">
                         {section.sessions.length} 台
                       </span>
                       {section.online > 0 && (
-                        <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                        <span className="shrink-0 rounded-full bg-state-success/10 px-1.5 py-0.5 text-[10px] font-bold text-state-success">
                           {section.online} 在线
                         </span>
                       )}
                     </div>
                     <button
                       onClick={() => onNewSession(section.groupId ?? undefined)}
-                      className="shrink-0 text-[11px] font-semibold text-apple-blue transition hover:underline"
+                      aria-label={`在${section.name}新建服务器`}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-os-md border border-accent/20 bg-surface px-3 py-1.5 text-os-xs font-medium text-accent transition hover:bg-accent/5"
                     >
-                      + 在此分组新建
+                      <PlusIcon className="h-3.5 w-3.5" /> 新建服务器
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {section.sessions.map(renderCard)}
-                  </div>
-                </div>
+                  {section.sessions.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {section.sessions.map(renderCard)}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-4 rounded-os-lg border border-dashed border-accent/20 bg-surface/90 px-5 py-6">
+                      <FolderIcon className="h-7 w-7 shrink-0 text-accent/70" />
+                      <div>
+                        <p className="text-os-sm font-medium text-ink">暂无服务器</p>
+                        <p className="mt-1 text-os-xs text-ink-secondary">点击“新建服务器”，连接将自动归入「{section.name}」。</p>
+                      </div>
+                    </div>
+                  )}
+                </section>
               ))}
             </div>
           ) : (
             /* 紧凑列表表格视图 */
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-apple-sm backdrop-blur-sm">
-              <table className="w-full text-left text-xs text-slate-700">
-                <thead className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold text-slate-500">
+            <div className="overflow-hidden rounded-2xl border border-line/15 bg-surface/90 shadow-apple-sm backdrop-blur-sm">
+              <table className="w-full text-left text-xs text-ink-secondary">
+                <thead className="border-b border-line/15 bg-surface-muted/80 text-[11px] font-semibold text-ink-secondary">
                   <tr>
                     <th className="py-2.5 px-4">状态</th>
                     <th className="py-2.5 px-4">机器别名</th>
@@ -563,7 +616,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                     <th className="py-2.5 px-4 text-right">操作</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-line/15">
                   {filteredSessions.map((s) => {
                     const activeTab = tabBySession.get(s.id);
                     const isOnline = activeTab?.status === "connected";
@@ -577,29 +630,29 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                           if (activeTab) setActiveTab(activeTab.tabId);
                           else onConnectSession(s);
                         }}
-                        className="cursor-pointer transition hover:bg-slate-50"
+                        className="cursor-pointer transition hover:bg-surface-muted"
                       >
                         <td className="py-2.5 px-4">
                           <span
                             className={`inline-block h-2.5 w-2.5 rounded-full ${
-                              isOnline ? "bg-emerald-500 animate-pulse" : isBusy ? "bg-amber-400" : "bg-slate-300"
+                              isOnline ? "bg-state-success" : isBusy ? "bg-amber-400" : "bg-line/15"
                             }`}
                           />
                         </td>
-                        <td className="py-2.5 px-4 font-bold text-slate-900">
+                        <td className="py-2.5 px-4 font-bold text-ink">
                           <span className="flex items-center gap-1">
                             {s.name}
-                            {s.favorite && <span className="text-amber-500">★</span>}
+                            {s.favorite && <span className="text-state-warning">★</span>}
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 font-mono text-slate-600">
+                        <td className="py-2.5 px-4 font-mono text-ink-secondary">
                           {s.protocol === "serial"
                             ? `${s.protocol_options_json?.port_name || "COM1"} @ ${s.protocol_options_json?.baud_rate || 115200}`
                             : `${s.username || "root"}@${s.host || "127.0.0.1"}:${s.port || 22}`}
                         </td>
                         <td className="py-2.5 px-4">
                           {group ? (
-                            <span className="flex items-center gap-1 text-slate-600">
+                            <span className="flex items-center gap-1 text-ink-secondary">
                               <span
                                 className="h-1.5 w-1.5 rounded-full"
                                 style={{ backgroundColor: group.color || "#94a3b8" }}
@@ -607,28 +660,28 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                               {group.name}
                             </span>
                           ) : (
-                            <span className="text-slate-400">未分组</span>
+                            <span className="text-ink-tertiary">未分组</span>
                           )}
                         </td>
                         <td className="py-2.5 px-4">
                           {isPublicKey ? (
-                            <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-700">
+                            <span className="rounded bg-state-success/10 px-2 py-0.5 font-mono text-[10px] text-state-success">
                               🛡️ 密钥
                             </span>
                           ) : (
-                            <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-600">
+                            <span className="rounded bg-line/5 px-2 py-0.5 font-mono text-[10px] text-ink-secondary">
                               🔑 密码
                             </span>
                           )}
                         </td>
-                        <td className="py-2.5 px-4 text-slate-500">{formatRelative(s.last_used_at)}</td>
+                        <td className="py-2.5 px-4 text-ink-secondary">{formatRelative(s.last_used_at)}</td>
                         <td className="space-x-1 py-2.5 px-4 text-right">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               onEditSession(s);
                             }}
-                            className="rounded px-2 py-1 text-slate-600 transition hover:bg-slate-200"
+                            className="rounded px-2 py-1 text-ink-secondary transition hover:bg-line/10"
                           >
                             编辑
                           </button>
@@ -637,7 +690,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                               e.stopPropagation();
                               setDeletingSession(s);
                             }}
-                            className="rounded px-2 py-1 text-red-600 transition hover:bg-red-50"
+                            className="rounded px-2 py-1 text-state-danger transition hover:bg-state-danger/10"
                           >
                             删除
                           </button>
@@ -652,18 +705,34 @@ export const HomeHub: React.FC<HomeHubProps> = ({
         </div>
       </div>
 
+      <Modal open={groupModalOpen} onClose={() => { if (!creatingGroup) setGroupModalOpen(false); }}
+        title="新建分组" description="按环境、项目或团队组织服务器。创建后即可在分组内添加服务器。"
+        widthClassName="w-full max-w-[440px]">
+        <form onSubmit={handleCreateGroup} className="space-y-5">
+          <Field label="分组名称" htmlFor="home-group-name" required error={groupError}>
+            <Input id="home-group-name" autoFocus maxLength={80} value={groupName} disabled={creatingGroup}
+              invalid={!!groupError} placeholder="例如：生产环境、预发布环境"
+              onChange={(event) => { setGroupName(event.target.value); setGroupError(null); }} />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setGroupModalOpen(false)} disabled={creatingGroup}>取消</Button>
+            <Button type="submit" variant="primary" loading={creatingGroup} disabled={!groupName.trim()}>创建分组</Button>
+          </div>
+        </form>
+      </Modal>
+
       {/* 删除机器确认弹窗 */}
       {deletingSession && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-sm space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
-            <h4 className="text-sm font-bold text-slate-900">确认删除该机器？</h4>
-            <p className="text-xs text-slate-600">
-              即将删除机器配置 <strong className="text-slate-900">{deletingSession.name}</strong>。此操作不可恢复。
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-sm space-y-3 rounded-2xl border border-line/15 bg-surface p-5 shadow-2xl">
+            <h4 className="text-sm font-bold text-ink">确认删除该机器？</h4>
+            <p className="text-xs text-ink-secondary">
+              即将删除机器配置 <strong className="text-ink">{deletingSession.name}</strong>。此操作不可恢复。
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setDeletingSession(null)}
-                className="rounded-xl border border-slate-200 px-3.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="rounded-xl border border-line/15 px-3.5 py-1.5 text-xs font-semibold text-ink-secondary transition hover:bg-surface-muted"
               >
                 取消
               </button>

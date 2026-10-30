@@ -115,11 +115,11 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
                     : "已断开";
 
           let statusDot = (
-            <span className="h-2 w-2 shrink-0 rounded-full bg-apple-green shadow-apple-sm" />
+            <span className="h-2 w-2 shrink-0 rounded-full bg-state-success shadow-apple-sm" />
           );
           if (tab.status === "connecting") {
             statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-apple-orange animate-pulse" />
+              <span className="h-2 w-2 shrink-0 rounded-full bg-state-warning animate-pulse" />
             );
           } else if (tab.status === "reconnecting") {
             statusDot = (
@@ -127,7 +127,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
             );
           } else if (tab.status === "error" || tab.status === "disconnected") {
             statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-apple-red" />
+              <span className="h-2 w-2 shrink-0 rounded-full bg-state-danger" />
             );
           }
 
@@ -230,7 +230,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
               onClick={() => setLayoutMode("terminal")}
               className={`px-2 py-0.5 rounded-md transition text-[11px] font-medium ${
                 layoutMode === "terminal"
-                  ? "bg-apple-blue/10 text-apple-blue font-bold"
+                  ? "bg-action/10 text-accent font-bold"
                   : "text-ink-secondary hover:text-ink"
               }`}
               title="全终端模式"
@@ -241,7 +241,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
               onClick={() => setLayoutMode("split")}
               className={`px-2 py-0.5 rounded-md transition text-[11px] font-medium ${
                 layoutMode === "split"
-                  ? "bg-apple-blue/10 text-apple-blue font-bold"
+                  ? "bg-action/10 text-accent font-bold"
                   : "text-ink-secondary hover:text-ink"
               }`}
               title="分屏模式 (上终端 + 下 SFTP)"
@@ -252,7 +252,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
               onClick={() => setLayoutMode("sftp")}
               className={`px-2 py-0.5 rounded-md transition text-[11px] font-medium ${
                 layoutMode === "sftp"
-                  ? "bg-apple-blue/10 text-apple-blue font-bold"
+                  ? "bg-action/10 text-accent font-bold"
                   : "text-ink-secondary hover:text-ink"
               }`}
               title="全屏 SFTP 视图"

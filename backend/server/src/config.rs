@@ -63,12 +63,19 @@ impl Config {
 
         // 确保 DATA_DIR 存在
         if let Err(e) = std::fs::create_dir_all(&self.data_dir) {
-            return Err(format!("Failed to create DATA_DIR {:?}: {}", self.data_dir, e));
+            return Err(format!(
+                "Failed to create DATA_DIR {:?}: {}",
+                self.data_dir, e
+            ));
         }
 
         // 解析数据库路径
         if self.database_url.trim().is_empty() {
-            self.database_url = self.data_dir.join("openshell-server.db").to_string_lossy().to_string();
+            self.database_url = self
+                .data_dir
+                .join("openshell-server.db")
+                .to_string_lossy()
+                .to_string();
         }
 
         // JWT Secret 自动生成并持久化

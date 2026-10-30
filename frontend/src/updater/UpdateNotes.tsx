@@ -46,11 +46,11 @@ export const UpdateNotes: React.FC<UpdateNotesProps> = ({ html, fallback }) => {
         "[&_p]:my-1.5 [&_p]:text-[#3a3a3c]",
         "[&_ul]:my-1.5 [&_ul]:pl-4 [&_ul]:list-disc [&_ol]:my-1.5 [&_ol]:pl-4 [&_ol]:list-decimal",
         "[&_li]:my-0.5 [&_li]:marker:text-[#86868b]",
-        "[&_code]:rounded-md [&_code]:bg-black/[0.05] [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[11px]",
-        "[&_pre]:my-2 [&_pre]:rounded-lg [&_pre]:bg-black/[0.05] [&_pre]:p-2.5 [&_pre]:overflow-x-auto",
-        "[&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-black/10 [&_blockquote]:pl-3 [&_blockquote]:text-[#86868b]",
-        "[&_hr]:my-3 [&_hr]:border-black/[0.06]",
-        "[&_a]:text-[#0071e3] [&_a]:underline-offset-2 hover:[&_a]:underline [&_a]:cursor-pointer",
+        "[&_code]:rounded-md [&_code]:bg-line/5 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[11px]",
+        "[&_pre]:my-2 [&_pre]:rounded-lg [&_pre]:bg-line/5 [&_pre]:p-2.5 [&_pre]:overflow-x-auto",
+        "[&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-line/10 [&_blockquote]:pl-3 [&_blockquote]:text-[#86868b]",
+        "[&_hr]:my-3 [&_hr]:border-line/10",
+        "[&_a]:text-accent [&_a]:underline-offset-2 hover:[&_a]:underline [&_a]:cursor-pointer",
       ].join(" ")}
       dangerouslySetInnerHTML={{ __html: html }}
     />

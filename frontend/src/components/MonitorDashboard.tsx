@@ -3,21 +3,15 @@ import { useMonitorStore } from "../stores/monitorStore";
 import type { ProcessMetrics } from "../types/ipc";
 import { formatFriendlyError } from "../lib/errors";
 
-/**
- * 服务器监控大屏。
- *
- * 配色不跟随 app 的 `surface-*` 主题令牌：那套令牌是「浅色 Apple 风」，
- * 在浅灰底上再用 `text-slate-200` 会得到一片看不清的灰字（历史 bug）。
- * 这里统一使用固定的深色大屏色板，与主题无关，任何背景下都保持高对比。
- */
+/** 与工作区共享浅色玻璃材质和语义状态色。 */
 const C = {
-  page: "bg-[#070c16]",
-  panel: "bg-[#0e1826] border border-[#1d2c44]",
-  sub: "bg-[#0a1220] border border-[#1a2740]",
-  header: "bg-[#0b1322]/95 border-b border-[#1d2c44]",
-  ink: "text-[#e9eef8]",
-  inkDim: "text-[#9db0cc]",
-  inkFaint: "text-[#7d90ad]",
+  page: "workspace-background",
+  panel: "liquid-glass-card border border-line/15",
+  sub: "bg-surface-muted/70 border border-line/15",
+  header: "liquid-glass-chrome border-b border-line/15",
+  ink: "text-ink",
+  inkDim: "text-ink-secondary",
+  inkFaint: "text-ink-tertiary",
 } as const;
 
 interface MonitorDashboardProps {
@@ -150,9 +144,9 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       <div className={`h-14 shrink-0 px-6 flex items-center justify-between ${C.header}`}>
         <div className="flex items-center gap-3 min-w-0">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-          <h3 className="text-sm font-bold text-white whitespace-nowrap">服务器实时监控</h3>
+          <h3 className="text-sm font-bold text-ink whitespace-nowrap">服务器实时监控</h3>
           {latest && (
-            <span className={`text-xs ${C.inkDim} font-mono bg-white/5 border border-white/10 px-2 py-0.5 rounded-md whitespace-nowrap`}>
+            <span className={`text-xs ${C.inkDim} font-mono bg-line/5 border border-line/10 px-2 py-0.5 rounded-md whitespace-nowrap`}>
               运行时长 {formatUptime(latest.uptime_seconds)}
             </span>
           )}
@@ -161,11 +155,11 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         {/* 退出出口：整块面板盖住了工作区，必须给一个显眼、带文字的返回按钮 */}
         <div className="flex items-center gap-3 shrink-0">
           <span className={`hidden sm:inline text-[11px] ${C.inkFaint}`}>
-            按 <kbd className="px-1 py-0.5 rounded border border-white/20 bg-white/5 font-mono text-[10px] text-[#c7d5e8]">Esc</kbd> 返回
+            按 <kbd className="px-1 py-0.5 rounded border border-line/20 bg-line/5 font-mono text-[10px] text-ink-secondary">Esc</kbd> 返回
           </span>
           <button
             onClick={onClose}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#e9eef8] bg-white/10 border border-white/15 hover:bg-white/20 hover:border-white/25 transition"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary bg-line/10 border border-line/15 hover:bg-line/20 hover:border-line/25 transition"
             title="返回终端 (Esc)"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -178,7 +172,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {error && (
-          <div className="p-3 bg-red-500/15 border border-red-400/40 rounded-xl text-xs text-red-200 flex items-center gap-2">
+          <div className="p-3 bg-red-500/15 border border-red-400/40 rounded-xl text-xs text-state-danger flex items-center gap-2">
             <span>⚠️</span>
             <span>{error}</span>
           </div>
@@ -190,13 +184,13 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
           <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-medium ${C.inkDim}`}>CPU 使用率</span>
-              <span className="text-lg font-bold text-emerald-300 font-mono">
+              <span className="text-lg font-bold text-state-success font-mono">
                 {latest ? `${Number(latest.cpu_percent || 0).toFixed(1)}%` : "-"}
               </span>
             </div>
             {renderHistoryChart(cpuHistory, "#34d399")}
             {latest?.cpu_cores && latest.cpu_cores.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-white/10">
+              <div className="mt-3 pt-3 border-t border-line/10">
                 <div className={`text-[10px] ${C.inkFaint} mb-1.5`}>
                   {latest.cpu_cores.length} 核心负载
                 </div>
@@ -218,7 +212,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
           <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-medium ${C.inkDim}`}>物理内存</span>
-              <span className="text-lg font-bold text-sky-300 font-mono">
+              <span className="text-lg font-bold text-accent font-mono">
                 {latest && latest.memory_total_bytes > 0
                   ? `${((latest.memory_used_bytes / latest.memory_total_bytes) * 100).toFixed(1)}%`
                   : "-"}
@@ -226,7 +220,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
             </div>
             {renderHistoryChart(memHistory, "#60a5fa")}
             {latest && (
-              <div className="mt-3 pt-3 border-t border-white/10 text-xs space-y-1">
+              <div className="mt-3 pt-3 border-t border-line/10 text-xs space-y-1">
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>已用</span>
                   <span className={`font-mono ${C.ink}`}>{formatBytes(latest.memory_used_bytes)}</span>
@@ -253,7 +247,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               <div>
                 <div className="flex justify-between text-[11px] mb-1">
                   <span className={C.inkDim}>接收 RX</span>
-                  <span className="font-mono text-emerald-300 font-semibold">
+                  <span className="font-mono text-state-success font-semibold">
                     {latest ? formatBps(latest.net_rx_bps) : "-"}
                   </span>
                 </div>
@@ -265,7 +259,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               <div>
                 <div className="flex justify-between text-[11px] mb-1">
                   <span className={C.inkDim}>发送 TX</span>
-                  <span className="font-mono text-sky-300 font-semibold">
+                  <span className="font-mono text-accent font-semibold">
                     {latest ? formatBps(latest.net_tx_bps) : "-"}
                   </span>
                 </div>
@@ -291,7 +285,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 ].map((item) => (
                   <div key={item.label} className={`${C.sub} rounded-lg p-2 text-center`}>
                     <div className={`text-[10px] ${C.inkFaint}`}>{item.label}</div>
-                    <div className="text-base font-bold text-white font-mono mt-0.5">
+                    <div className="text-base font-bold text-ink font-mono mt-0.5">
                       {Number(item.value || 0).toFixed(2)}
                     </div>
                   </div>
@@ -305,7 +299,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         {latest?.disk_mounts && latest.disk_mounts.length > 0 && (
           <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>
             <h4 className={`text-xs font-bold ${C.ink} mb-3 flex items-center gap-1.5`}>
-              <svg className="w-4 h-4 text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 text-state-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
               </svg>
               <span>磁盘存储分区</span>
@@ -323,7 +317,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                         {usePct.toFixed(0)}%
                       </span>
                     </div>
-                    <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden mb-2">
+                    <div className="w-full bg-line/10 rounded-full h-1.5 overflow-hidden mb-2">
                       <div
                         className={`h-full rounded-full ${
                           usePct > 85
@@ -362,12 +356,12 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 placeholder="搜索进程名 / 用户 / PID..."
                 value={filterProcess}
                 onChange={(e) => setFilterProcess(e.target.value)}
-                className={`w-full px-3 py-1.5 ${C.sub} rounded-lg text-xs text-white placeholder-[#6f829e] outline-none focus:border-emerald-400/70`}
+                className={`w-full px-3 py-1.5 ${C.sub} rounded-lg text-xs text-ink placeholder-[#6f829e] outline-none focus:border-emerald-400/70`}
               />
             </div>
           </div>
 
-          <div className="overflow-x-auto border border-[#1a2740] rounded-lg">
+          <div className="overflow-x-auto border border-line/15 rounded-lg">
             <table className="w-full text-left text-xs font-mono">
               <thead className={`${C.sub} ${C.inkDim} text-[11px]`}>
                 <tr>
@@ -379,7 +373,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                   <th className="py-2 px-3 font-semibold text-right">操作</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.06] text-[#dbe5f3]">
+              <tbody className="divide-y divide-line/[0.06] text-ink-secondary">
                 {filteredProcesses.length === 0 ? (
                   <tr>
                     <td colSpan={6} className={`py-8 text-center ${C.inkDim} font-sans`}>
@@ -388,17 +382,17 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                   </tr>
                 ) : (
                   filteredProcesses.map((p, idx) => (
-                    <tr key={`${p.pid}-${idx}`} className="hover:bg-white/[0.04] transition">
-                      <td className="py-2 px-3 text-emerald-300 font-semibold">{p.pid}</td>
+                    <tr key={`${p.pid}-${idx}`} className="hover:bg-line/[0.04] transition">
+                      <td className="py-2 px-3 text-state-success font-semibold">{p.pid}</td>
                       <td className={`py-2 px-3 ${C.inkDim}`}>{p.user || "-"}</td>
                       <td className={`py-2 px-3 font-semibold ${C.ink}`}>
                         {Number(p.cpu_percent || 0).toFixed(1)}%
                       </td>
-                      <td className="py-2 px-3 text-[#dbe5f3]">
+                      <td className="py-2 px-3 text-ink-secondary">
                         {Number(p.memory_percent || 0).toFixed(1)}%
                       </td>
                       <td
-                        className="py-2 px-3 font-semibold text-white truncate max-w-xs"
+                        className="py-2 px-3 font-semibold text-ink truncate max-w-xs"
                         title={p.command || p.name}
                       >
                         {p.command || p.name || "-"}
@@ -410,7 +404,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                             setKillModal(p);
                             setKillSignal(15);
                           }}
-                          className="px-2 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-400/30 text-[10px] font-sans font-medium transition"
+                          className="px-2 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-state-danger border border-red-400/30 text-[10px] font-sans font-medium transition"
                         >
                           终止
                         </button>
@@ -426,12 +420,12 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
 
       {/* 结束进程确认弹窗 */}
       {killModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-96 bg-[#0e1826] border border-[#243753] rounded-xl p-5 shadow-2xl">
-            <h4 className="text-sm font-bold text-white mb-2">结束远端进程</h4>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 p-4">
+          <div className="w-96 bg-surface border border-line/15 rounded-xl p-5 shadow-2xl">
+            <h4 className="text-sm font-bold text-ink mb-2">结束远端进程</h4>
             <p className={`text-xs ${C.inkDim} mb-4`}>
               确定要终止进程{" "}
-              <span className="font-mono text-emerald-300 font-bold">{killModal.command}</span>{" "}
+              <span className="font-mono text-state-success font-bold">{killModal.command}</span>{" "}
               (PID: {killModal.pid}) 吗？
             </p>
 
@@ -445,7 +439,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 />
                 <span>SIGTERM (15 - 正常终止，推荐)</span>
               </label>
-              <label className="flex items-center gap-2 text-xs text-red-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-xs text-state-danger cursor-pointer">
                 <input
                   type="radio"
                   name="signal"
@@ -457,7 +451,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               {killError && (
                 <div
                   role="alert"
-                  className="rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-[11px] font-medium leading-relaxed text-red-200"
+                  className="rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-[11px] font-medium leading-relaxed text-state-danger"
                 >
                   {killError}
                 </div>
@@ -468,7 +462,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               <button
                 onClick={() => setKillModal(null)}
                 disabled={killing}
-                className="px-3 py-1.5 bg-white/10 text-[#e9eef8] rounded-lg text-xs hover:bg-white/20 transition"
+                className="px-3 py-1.5 bg-line/10 text-ink-secondary rounded-lg text-xs hover:bg-line/20 transition"
               >
                 取消
               </button>
@@ -487,7 +481,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                     setKilling(false);
                   }
                 }}
-                className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-medium rounded-lg text-xs shadow-sm transition"
+                className="px-3 py-1.5 bg-danger-action hover:bg-danger-action/90 text-white font-medium rounded-lg text-xs shadow-sm transition"
               >
                 {killing ? "终止中..." : "确认终止"}
               </button>

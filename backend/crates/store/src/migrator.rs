@@ -25,7 +25,12 @@ const MIGRATION_003: &str = include_str!("../migrations/003_sync_v2.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_ai.sql");
 
 /// 迁移脚本清单：`(目标版本, SQL)`，必须按版本升序。
-const MIGRATIONS: &[(u32, &str)] = &[(1, MIGRATION_001), (2, MIGRATION_002), (3, MIGRATION_003), (4, MIGRATION_004)];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (1, MIGRATION_001),
+    (2, MIGRATION_002),
+    (3, MIGRATION_003),
+    (4, MIGRATION_004),
+];
 
 /// 测试注入点：命中该版本时在提交前抛错，用于验证回滚与快照恢复。0 表示不注入。
 static FAIL_MIGRATION_AT: AtomicU32 = AtomicU32::new(0);

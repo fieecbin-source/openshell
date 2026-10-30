@@ -322,13 +322,13 @@ export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
     brightWhite: "#ffffff",
   },
   clean_light: {
-    name: "Clean Light (明亮极简)",
-    background: "#f6f8fa",
-    foreground: "#24292f",
-    cursor: "#0969da",
+    name: "清晰白 · 默认",
+    background: "#fcfdff",
+    foreground: "#000000",
+    cursor: "#000000",
     cursorAccent: "#ffffff",
-    selectionBackground: "#0969da20",
-    black: "#24292f",
+    selectionBackground: "#c5dcff80",
+    black: "#000000",
     red: "#cf222e",
     green: "#1a7f37",
     yellow: "#9a6700",
@@ -343,7 +343,7 @@ export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
     brightBlue: "#0550ae",
     brightMagenta: "#6639ba",
     brightCyan: "#124f54",
-    brightWhite: "#24292f",
+    brightWhite: "#000000",
   },
   solarized_light: {
     name: "Solarized Light",
@@ -400,12 +400,13 @@ export type ThemeMap = Record<string, TerminalThemeConfig>;
 
 /** 合并内置主题与用户导入的主题（自定义同名时覆盖内置）。 */
 export function allThemes(customThemes: ThemeMap): ThemeMap {
-  return { ...THEMES, ...customThemes };
+  return Object.fromEntries(Object.entries({ ...THEMES, ...customThemes })
+    .filter(([, config]) => isLightBackground(config.background)));
 }
 
-/** 解析主题键；未知键回退到 dark，避免终端渲染时拿到 undefined。 */
+/** 解析主题键；未知或深色主题回退到清晰白，避免终端渲染时拿到 undefined。 */
 export function resolveTheme(key: string, customThemes: ThemeMap): TerminalThemeConfig {
-  return allThemes(customThemes)[key] ?? THEMES.dark;
+  return allThemes(customThemes)[key] ?? THEMES.clean_light;
 }
 
 function normalizeCustomThemes(raw: unknown): ThemeMap {
@@ -422,23 +423,6 @@ function normalizeCustomThemes(raw: unknown): ThemeMap {
   return Object.fromEntries(entries) as ThemeMap;
 }
 
-function hexToRgb(hex: string): string {
-  const clean = hex.replace("#", "");
-  if (clean.length === 3) {
-    const r = parseInt(clean[0] + clean[0], 16);
-    const g = parseInt(clean[1] + clean[1], 16);
-    const b = parseInt(clean[2] + clean[2], 16);
-    return `${r} ${g} ${b}`;
-  }
-  if (clean.length >= 6) {
-    const r = parseInt(clean.slice(0, 2), 16);
-    const g = parseInt(clean.slice(2, 4), 16);
-    const b = parseInt(clean.slice(4, 6), 16);
-    return `${r} ${g} ${b}`;
-  }
-  return "255 255 255";
-}
-
 export function isLightBackground(hexColor?: string): boolean {
   if (!hexColor) return false;
   const hex = hexColor.replace("#", "");
@@ -450,36 +434,35 @@ export function isLightBackground(hexColor?: string): boolean {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55;
 }
 
-/** 动态同步全局 CSS 变量与主题类别，彻底解决“所有主题看起来都一样”的问题 */
-export function applyThemeToDocument(themeKey: string, customThemes: ThemeMap = {}) {
+/** 保持系统全局默认干净中性色板，终端主题色仅在终端内生效，禁止污染系统外层界面 */
+export function applyThemeToDocument(_themeKey: string, _customThemes: ThemeMap = {}) {
   if (typeof document === "undefined") return;
-  const cfg = resolveTheme(themeKey, customThemes);
   const root = document.documentElement;
+  root.classList.remove("dark");
+  root.classList.add("light");
+  // 清理可能遗留的全局系统颜色覆盖，确保系统其他部分完全使用默认原生系统色
+  root.style.removeProperty("--os-canvas");
+  root.style.removeProperty("--os-surface");
+  root.style.removeProperty("--os-surface-muted");
+  root.style.removeProperty("--os-line");
+  root.style.removeProperty("--os-ink");
+  root.style.removeProperty("--os-ink-secondary");
+  root.style.removeProperty("--os-ink-tertiary");
+  root.style.removeProperty("--os-accent");
+}
 
-  const isLight = isLightBackground(cfg.background);
+export type TerminalColorKey = Exclude<keyof TerminalThemeConfig, "name" | "cursorAccent">;
 
-  root.setAttribute("data-theme", themeKey);
-  root.classList.toggle("dark", !isLight);
-
-  if (isLight) {
-    root.style.setProperty("--os-canvas", hexToRgb(cfg.background));
-    root.style.setProperty("--os-surface", "255 255 255");
-    root.style.setProperty("--os-surface-muted", hexToRgb(cfg.selectionBackground ? cfg.selectionBackground.slice(0, 7) : "#f6f8fa"));
-    root.style.setProperty("--os-line", "0 0 0");
-    root.style.setProperty("--os-ink", hexToRgb(cfg.foreground));
-    root.style.setProperty("--os-ink-secondary", hexToRgb(cfg.brightBlack || "#6e7781"));
-    root.style.setProperty("--os-ink-tertiary", "138 138 144");
-    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || "#0969da"));
-  } else {
-    root.style.setProperty("--os-canvas", hexToRgb(cfg.background));
-    root.style.setProperty("--os-surface", hexToRgb(cfg.black || "#1a1b26"));
-    root.style.setProperty("--os-surface-muted", hexToRgb(cfg.background));
-    root.style.setProperty("--os-line", "255 255 255");
-    root.style.setProperty("--os-ink", hexToRgb(cfg.foreground));
-    root.style.setProperty("--os-ink-secondary", hexToRgb(cfg.brightBlack || "#94a3b8"));
-    root.style.setProperty("--os-ink-tertiary", hexToRgb(cfg.white || "#64748b"));
-    root.style.setProperty("--os-accent", hexToRgb(cfg.blue || cfg.cursor || "#38bdf8"));
-  }
+/** WCAG relative luminance, shared by the editor and persistence validation. */
+export function colorContrast(foreground: string, background: string): number {
+  const luminance = (hex: string) => {
+    const channels = hex.slice(1, 7).match(/.{2}/g)?.map((v) => parseInt(v, 16) / 255);
+    if (!channels || channels.length !== 3 || channels.some(Number.isNaN)) return 0;
+    return channels.map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+      .reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
+  };
+  const a = luminance(foreground), b = luminance(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
 export type CursorStyle = "bar" | "block" | "underline";
@@ -490,6 +473,7 @@ interface SettingsState {
   customThemes: ThemeMap;
   fontSize: number;
   fontFamily: string;
+  fontWeight: 400 | 500 | 600;
   cursorBlink: boolean;
   cursorStyle: CursorStyle;
   /** 终端滚动缓冲行数（xterm 默认仅 1000 行，排查长日志时不够用） */
@@ -514,6 +498,8 @@ interface SettingsState {
   setTheme: (theme: string) => Promise<void>;
   setFontSize: (fontSize: number) => Promise<void>;
   setFontFamily: (fontFamily: string) => Promise<void>;
+  setFontWeight: (weight: 400 | 500 | 600) => Promise<void>;
+  setTerminalColor: (key: TerminalColorKey, value: string) => Promise<void>;
   setCursorBlink: (cursorBlink: boolean) => Promise<void>;
   setCursorStyle: (cursorStyle: CursorStyle) => Promise<void>;
   setScrollback: (scrollback: number) => Promise<void>;
@@ -531,14 +517,16 @@ interface SettingsState {
 
 export const DEFAULT_SETTINGS = {
   theme: "clean_light" as TerminalTheme,
-  fontSize: 13,
-  fontFamily: 'Menlo, Monaco, "Courier New", Consolas, monospace',
+  fontSize: 14,
+  fontFamily: 'Consolas, "Cascadia Mono", "Microsoft YaHei UI", Menlo, monospace',
+  fontWeight: 500 as 400 | 500 | 600,
   cursorBlink: true,
   cursorStyle: "bar" as CursorStyle,
   scrollback: 5000,
   renderer: "dom" as RendererKind,
   logSessionOutput: false,
   keepaliveDefaultSec: 30,
+  backgroundOpacity: 100,
 } as const;
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -546,6 +534,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   customThemes: {},
   fontSize: DEFAULT_SETTINGS.fontSize,
   fontFamily: DEFAULT_SETTINGS.fontFamily,
+  fontWeight: DEFAULT_SETTINGS.fontWeight,
   cursorBlink: DEFAULT_SETTINGS.cursorBlink,
   cursorStyle: DEFAULT_SETTINGS.cursorStyle,
   scrollback: DEFAULT_SETTINGS.scrollback,
@@ -555,8 +544,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   keepaliveDefaultSec: DEFAULT_SETTINGS.keepaliveDefaultSec,
   backgroundId: "",
   backgroundCustom: null,
-  backgroundOpacity: 45,
-  backgroundBlur: 6,
+  backgroundOpacity: DEFAULT_SETTINGS.backgroundOpacity,
+  backgroundBlur: 0,
 
   loadSettings: async () => {
     try {
@@ -564,6 +553,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const fontRec = await settingsGet("user", "terminal.font_size");
       // 历史 bug：字体族写入后从未读取，重启即被重置为默认值
       const fontFamilyRec = await settingsGet("user", "terminal.font_family");
+      const weightRec = await settingsGet("user", "terminal.font_weight");
+      const clarityRec = await settingsGet("user", "appearance.daylight_v1");
       const cursorBlinkRec = await settingsGet("user", "terminal.cursor_blink");
       const cursorStyleRec = await settingsGet("user", "terminal.cursor_style");
       const scrollbackRec = await settingsGet("user", "terminal.scrollback");
@@ -586,8 +577,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         // 缺省值与初始 state 保持一致，避免首屏闪一下主题
         customThemes,
         theme,
-        fontSize: (fontRec?.value_json as number) || DEFAULT_SETTINGS.fontSize,
-        fontFamily: (fontFamilyRec?.value_json as string) || DEFAULT_SETTINGS.fontFamily,
+        fontSize: clarityRec?.value_json === true
+          ? (fontRec?.value_json as number) || DEFAULT_SETTINGS.fontSize
+          : Math.max(DEFAULT_SETTINGS.fontSize, (fontRec?.value_json as number) || 0),
+        fontFamily: typeof fontFamilyRec?.value_json === "string" &&
+          !fontFamilyRec.value_json.startsWith("Menlo, Monaco")
+          ? fontFamilyRec.value_json : DEFAULT_SETTINGS.fontFamily,
+        fontWeight: [400, 500, 600].includes(weightRec?.value_json as number)
+          ? weightRec!.value_json as 400 | 500 | 600 : DEFAULT_SETTINGS.fontWeight,
         cursorBlink:
           typeof cursorBlinkRec?.value_json === "boolean"
             ? (cursorBlinkRec.value_json as boolean)
@@ -606,18 +603,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             : DEFAULT_SETTINGS.keepaliveDefaultSec,
         backgroundId: (bgIdRec?.value_json as string) || "",
         backgroundOpacity:
-          typeof bgOpacityRec?.value_json === "number" ? (bgOpacityRec.value_json as number) : 45,
+          typeof bgOpacityRec?.value_json === "number" && Number.isFinite(bgOpacityRec.value_json)
+            ? Math.max(0, Math.min(100, Math.round(bgOpacityRec.value_json))) : DEFAULT_SETTINGS.backgroundOpacity,
         backgroundBlur:
-          typeof bgBlurRec?.value_json === "number" ? (bgBlurRec.value_json as number) : 6,
+          typeof bgBlurRec?.value_json === "number" ? (bgBlurRec.value_json as number) : 0,
         backgroundCustom: (bgCustomRec?.value_json as string) || null,
       });
       applyThemeToDocument(theme, customThemes);
+      if (clarityRec?.value_json !== true) {
+        await settingsSet("user", "terminal.font_size", get().fontSize);
+        await settingsSet("user", "terminal.font_family", get().fontFamily);
+        await settingsSet("user", "terminal.theme", theme);
+        await settingsSet("user", "appearance.daylight_v1", true);
+      }
     } catch (e) {
       console.warn("load settings error", e);
     }
   },
 
-  setTheme: async (theme: string) => {
+  setTheme: async (requested: string) => {
+    const theme = allThemes(get().customThemes)[requested] ? requested : DEFAULT_SETTINGS.theme;
     set({ theme });
     applyThemeToDocument(theme, get().customThemes);
     try {
@@ -636,6 +641,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ fontFamily });
     try {
       await settingsSet("user", "terminal.font_family", fontFamily);
+    } catch {}
+  },
+
+  setFontWeight: async (fontWeight: 400 | 500 | 600) => {
+    set({ fontWeight });
+    try { await settingsSet("user", "terminal.font_weight", fontWeight); } catch {}
+  },
+
+  setTerminalColor: async (key: TerminalColorKey, value: string) => {
+    if (!/^#[0-9a-f]{6}$/i.test(value)) throw new Error("请输入六位十六进制颜色，如 #24466B");
+    const current = resolveTheme(get().theme, get().customThemes);
+    const config = { ...current, name: "自定义浅色", [key]: key === "selectionBackground" ? `${value}40` : value };
+    config.cursorAccent = config.background;
+    if (!isLightBackground(config.background)) throw new Error("请使用浅色背景，系统不支持黑色或深色底色");
+    if (colorContrast(config.foreground, config.background) < 4.5) throw new Error("文字与背景对比度需达到 4.5:1，请选择更清晰的颜色");
+    const theme = "custom_display";
+    const customThemes = { ...get().customThemes, [theme]: config };
+    set({ theme, customThemes });
+    try {
+      await settingsSet("user", "terminal.custom_themes", customThemes);
+      await settingsSet("user", "terminal.theme", theme);
     } catch {}
   },
 
@@ -687,6 +713,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setSettingsModalOpen: (settingsModalOpen: boolean) => set({ settingsModalOpen }),
 
   saveCustomTheme: async (id: string, config: TerminalThemeConfig) => {
+    if (!isLightBackground(config.background)) throw new Error("仅支持浅色终端背景");
     const updated = { ...get().customThemes, [id]: config };
     set({ customThemes: updated });
     try {
@@ -708,7 +735,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch {}
   },
 
-  setBackgroundOpacity: async (backgroundOpacity: number) => {
+  setBackgroundOpacity: async (value: number) => {
+    const backgroundOpacity = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : DEFAULT_SETTINGS.backgroundOpacity)));
     set({ backgroundOpacity });
     try {
       await settingsSet("user", "terminal.background_opacity", backgroundOpacity);

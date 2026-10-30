@@ -6,32 +6,32 @@ const LEVEL_STYLE: Record<
   { bar: string; icon: string; iconBg: string; title: string; card: string }
 > = {
   info: {
-    bar: "bg-apple-blue",
+    bar: "bg-action",
     icon: "ℹ️",
-    iconBg: "bg-blue-50 border-blue-200",
-    title: "text-slate-900",
-    card: "border-slate-300 bg-white",
+    iconBg: "bg-accent/10 border-accent/30",
+    title: "text-ink",
+    card: "border-line/25 bg-surface",
   },
   success: {
-    bar: "bg-apple-green",
+    bar: "bg-state-success",
     icon: "✅",
-    iconBg: "bg-emerald-50 border-emerald-200",
-    title: "text-emerald-900",
-    card: "border-emerald-200 bg-emerald-50/60",
+    iconBg: "bg-state-success/10 border-state-success/30",
+    title: "text-state-success",
+    card: "border-state-success/30 bg-state-success/10",
   },
   warning: {
     bar: "bg-amber-400",
     icon: "⚠️",
-    iconBg: "bg-amber-50 border-amber-200",
-    title: "text-amber-900",
-    card: "border-amber-300 bg-amber-50",
+    iconBg: "bg-state-warning/10 border-state-warning/30",
+    title: "text-state-warning",
+    card: "border-state-warning/30 bg-state-warning/10",
   },
   error: {
-    bar: "bg-red-500",
+    bar: "bg-state-danger/100",
     icon: "⛔",
-    iconBg: "bg-red-50 border-red-200",
-    title: "text-red-900",
-    card: "border-red-300 bg-red-50",
+    iconBg: "bg-state-danger/10 border-state-danger/30",
+    title: "text-state-danger",
+    card: "border-state-danger/30 bg-state-danger/10",
   },
 };
 
@@ -79,13 +79,13 @@ export const ToastHost: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setExpanded((prev) => ({ ...prev, [t.id]: !prev[t.id] }))}
-                      className="text-[11px] font-medium text-slate-600 underline decoration-dotted underline-offset-2 hover:text-slate-900"
+                      className="text-[11px] font-medium text-ink-secondary underline decoration-dotted underline-offset-2 hover:text-ink"
                     >
                       {isOpen ? "收起" : "查看详情"}
                     </button>
                     {isOpen && (
                       <>
-                        <div className="mt-1.5 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md border border-black/5 bg-white p-2 text-[12px] leading-relaxed text-slate-700 select-text">
+                        <div className="mt-1.5 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line/10 bg-surface p-2 text-[12px] leading-relaxed text-ink-secondary select-text">
                           {t.detail}
                         </div>
                         <button
@@ -93,7 +93,7 @@ export const ToastHost: React.FC = () => {
                           onClick={() => {
                             navigator.clipboard?.writeText(t.detail ?? "").catch(() => {});
                           }}
-                          className="mt-1.5 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-apple-blue hover:bg-slate-50"
+                          className="mt-1.5 rounded-md border border-line/25 bg-surface px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-surface-muted"
                         >
                           复制详情
                         </button>
@@ -105,7 +105,7 @@ export const ToastHost: React.FC = () => {
               <button
                 type="button"
                 onClick={() => dismiss(t.id)}
-                className="rounded-md p-1 text-slate-500 transition hover:bg-black/5 hover:text-slate-800"
+                className="rounded-md p-1 text-ink-secondary transition hover:bg-scrim/65 hover:text-ink"
                 title="关闭"
               >
                 ✕

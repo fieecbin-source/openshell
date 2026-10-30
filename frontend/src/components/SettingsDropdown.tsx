@@ -1,162 +1,110 @@
+import { GlassMaterial } from "./ui/GlassMaterial";
 import React, { useEffect, useRef, useState } from "react";
+import { useUpdaterStore } from "../updater/store";
+import { shouldShowBadge } from "../updater/state";
+import { GlobeIcon, InfoIcon, LockIcon, RefreshIcon, SettingsIcon, TerminalIcon, LayersIcon, PaletteIcon } from "./ui/icons";
 
 interface SettingsDropdownProps {
-  onOpenSettings: (tab?: "general" | "wallpaper" | "terminal" | "security") => void;
+  onOpenSettings: (tab?: "wallpaper" | "terminal" | "colors" | "security") => void;
   onOpenSync: () => void;
   onOpenAbout: () => void;
   onCheckUpdate: () => void;
 }
 
 export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
-  onOpenSettings,
-  onOpenSync,
-  onOpenAbout,
-  onCheckUpdate,
+  onOpenSettings, onOpenSync, onOpenAbout, onCheckUpdate,
 }) => {
   const [open, setOpen] = useState(false);
+  const updateState = useUpdaterStore((s) => s.state);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     };
     window.addEventListener("mousedown", handleOutsideClick);
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
     return () => window.removeEventListener("mousedown", handleOutsideClick);
   }, [open]);
+
+  const items = [
+    { icon: LayersIcon, label: "终端背景与壁纸", hint: "背景图片、透明度与模糊", action: () => onOpenSettings("wallpaper") },
+    { icon: TerminalIcon, label: "终端显示偏好", hint: "字体、光标与渲染引擎", action: () => onOpenSettings("terminal") },
+    { icon: PaletteIcon, label: "终端颜色调整", hint: "浅色主题、文字与 ANSI 配色", action: () => onOpenSettings("colors") },
+    { icon: LockIcon, label: "安全与主密码", hint: "管理主保险库密码", action: () => onOpenSettings("security") },
+    { icon: GlobeIcon, label: "账号与云同步", hint: "自建服务端与多端同步", action: onOpenSync },
+    ...(shouldShowBadge(updateState) ? [{ icon: RefreshIcon, label: "发现新版本", action: onCheckUpdate }] : []),
+    { icon: InfoIcon, label: "关于 OpenShell", action: onOpenAbout },
+  ];
 
   return (
     <div ref={containerRef} className="relative inline-block text-left">
       <button
+        ref={triggerRef}
+        type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className={`p-1.5 rounded-xl border transition shadow-apple-sm ${
-          open
-            ? "border-accent bg-accent/10 text-accent"
-            : "border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-        }`}
-        title="系统设置与偏好 (点击展开分项菜单)"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+        className={`flex h-8 w-8 items-center justify-center rounded-os-md border transition-colors ${open
+          ? "border-accent/40 bg-accent/10 text-accent"
+          : "border-line/15 bg-line/5 text-ink-secondary hover:bg-line/10 hover:text-ink"}`}
+        title="系统偏好设置"
         aria-label="设置菜单"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? "settings-menu" : undefined}
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-          />
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-          />
-        </svg>
+        <SettingsIcon className="h-4 w-4" />
       </button>
-
       {open && (
-        <div className="absolute right-0 mt-1.5 w-52 origin-top-right rounded-xl border border-line/10 bg-white/95 backdrop-blur-xl py-1 text-xs text-slate-700 shadow-apple-lg z-50 animate-fade-in">
-          <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-            系统偏好设置
-          </div>
-
-          <button
-            onClick={() => {
+        <div
+          id="settings-menu"
+          ref={menuRef}
+          role="menu"
+          aria-label="系统偏好设置"
+          className="glass-host absolute right-0 z-50 mt-2 w-64 origin-top-right rounded-os-xl liquid-glass-panel p-1.5 animate-zoom-in"
+          onKeyDown={(event) => {
+            const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? []);
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            if (event.key === "Escape" || event.key === "Tab") {
+              if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); triggerRef.current?.focus(); }
               setOpen(false);
-              onOpenSettings("general");
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">🎨</span>
-            <div>
-              <div className="font-medium text-slate-800">系统主题与配色</div>
-              <div className="text-[10px] text-slate-400">深色/明亮多套精选主题</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              setOpen(false);
-              onOpenSettings("wallpaper");
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">🖼️</span>
-            <div>
-              <div className="font-medium text-slate-800">壁纸与背景设置</div>
-              <div className="text-[10px] text-slate-400">本地图片、丰富纯色与艺术纹理</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              setOpen(false);
-              onOpenSettings("terminal");
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">📟</span>
-            <div>
-              <div className="font-medium text-slate-800">终端显示偏好</div>
-              <div className="text-[10px] text-slate-400">字体、字号、光标与渲染引擎</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              setOpen(false);
-              onOpenSettings("security");
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">🔒</span>
-            <div>
-              <div className="font-medium text-slate-800">安全与主密码</div>
-              <div className="text-[10px] text-slate-400">主保险库密码与密钥派生</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              setOpen(false);
-              onOpenSync();
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">☁️</span>
-            <div>
-              <div className="font-medium text-slate-800">账号与云同步</div>
-              <div className="text-[10px] text-slate-400">自建服务端与多端同步</div>
-            </div>
-          </button>
-
-          <div className="my-1 border-t border-slate-100" />
-
-          <button
-            onClick={() => {
-              setOpen(false);
-              onCheckUpdate();
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">🔄</span>
-            <span className="font-medium text-slate-800">检查软件更新...</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setOpen(false);
-              onOpenAbout();
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left hover:bg-slate-100/80 transition"
-          >
-            <span className="text-sm">ℹ️</span>
-            <span className="font-medium text-slate-800">关于 OpenShell</span>
-          </button>
+            } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+              event.preventDefault();
+              const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+                : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+              buttons[next]?.focus();
+            }
+          }}
+        >
+          <GlassMaterial />
+          <div className="px-3 pb-2 pt-1.5 text-os-2xs font-medium text-ink-tertiary">系统偏好设置</div>
+          {items.map(({ icon: Icon, label, hint, action }, index) => (
+            <React.Fragment key={label}>
+              {index === 5 && <div role="separator" className="my-1.5 border-t border-line/10" />}
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-3 rounded-os-md px-3 py-2 text-left text-ink-secondary transition-colors hover:bg-line/5 focus-visible:bg-line/5 focus-visible:text-ink"
+                onClick={() => { triggerRef.current?.focus(); setOpen(false); action(); }}
+              >
+                <Icon className="h-4 w-4 shrink-0 text-ink-tertiary" />
+                <span>
+                  <span className="block text-os-xs font-medium text-ink">{label}</span>
+                  {hint && <span className="mt-0.5 block text-os-2xs text-ink-tertiary">{hint}</span>}
+                </span>
+              </button>
+            </React.Fragment>
+          ))}
         </div>
       )}
     </div>
   );
 };
-

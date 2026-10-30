@@ -11,7 +11,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getAppInfo, settingsGet, settingsSet } from "../lib/ipc";
 import type { AppInfo } from "../types/ipc";
 import * as api from "./ipc";
-import { currentResult, reduce, type UpdateEvent, type UpdateState } from "./state";
+import { currentResult, isBusy, reduce, type UpdateEvent, type UpdateState } from "./state";
 import {
   DEFAULT_UPDATE_CONFIG,
   type BackupInfo,
@@ -160,18 +160,20 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
     setModalOpen: (open) => set({ modalOpen: open }),
 
     check: async (manual = true) => {
+      if (isBusy(get().state)) return;
       dispatch({ type: "check_started", manual });
       const { config } = get();
       await api
         .checkForUpdate(config, manual)
         .then((view) => {
-          dispatch({ type: "check_succeeded", result: view.result });
+          // Updates are always optional. Background checks only expose an entry
+          // point, and honor skip/snooze without opening a dialog or downloading.
+          const result = { ...view.result, mandatory: false };
+          const suppressed = !manual && (view.decision === "skipped" || view.decision === "remind_later");
+          if (suppressed) set({ state: { kind: "idle" } });
+          else dispatch({ type: "check_succeeded", result });
           set({ lastError: null });
-          const result = view.result;
-          // 只有手动检查、强制更新，或用户尚未跳过该版本时才主动弹窗
-          const shouldOpen =
-            result.has_update &&
-            (manual || result.mandatory || view.decision === "notify");
+          const shouldOpen = result.has_update && manual;
           if (shouldOpen) set({ modalOpen: true });
           return get().refreshRuntime();
         })
@@ -231,15 +233,13 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
           .skipVersion(result.latest_version)
           .catch((err) => console.error("skip version failed", err));
       }
-      dispatch({ type: "dismissed" });
-      set({ modalOpen: false });
+      set({ modalOpen: false, state: { kind: "idle" } });
       await get().refreshRuntime();
     },
 
     remindLater: async () => {
       await api.remindLater().catch((err) => console.error("remind later failed", err));
-      dispatch({ type: "dismissed" });
-      set({ modalOpen: false });
+      set({ modalOpen: false, state: { kind: "idle" } });
       await get().refreshRuntime();
     },
 

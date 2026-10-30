@@ -147,7 +147,7 @@ function assetSize(result: UpdateCheckResult): number | undefined {
 
 /** 顶栏是否应该显示红点（有新版本可提示）。 */
 export function shouldShowBadge(state: UpdateState): boolean {
-  return state.kind === "available" || state.kind === "download_failed" || state.kind === "ready";
+  return Boolean(currentResult(state)?.has_update) && state.kind !== "latest";
 }
 
 /** 是否强制更新（用于徽标改成红色感叹号并隐藏跳过/稍后）。 */

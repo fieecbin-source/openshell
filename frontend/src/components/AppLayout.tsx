@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { GlassMaterial } from "./ui/GlassMaterial";
+import React, { useEffect, useState } from "react";
 import type { Session, SessionInput } from "../types/ipc";
 import { useVaultStore } from "../stores/vaultStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { getWallpaperStyle } from "../lib/wallpapers";
 import { useSessionStore } from "../stores/sessionStore";
 import { HomeHub } from "./HomeHub";
 import { ServerSidebar } from "./ServerSidebar";
@@ -60,9 +60,12 @@ export const AppLayout: React.FC = () => {
   const [multiExecOpen, setMultiExecOpen] = useState(false);
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [portCheckerOpen, setPortCheckerOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "wallpaper" | "terminal" | "security">("general");
+  const [settingsTab, setSettingsTab] = useState<"wallpaper" | "terminal" | "colors" | "security">("wallpaper");
   const [aboutModalOpen, setAboutModalOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const isFullscreen = useTerminalStore((s) => s.isFullscreen);
+  const setFullscreen = useTerminalStore((s) => s.setFullscreen);
+  const toggleFullscreen = useTerminalStore((s) => s.toggleFullscreen);
 
   // FinalShell 经典布局：全终端 / 上下分屏 / 全 SFTP。
   // 布局状态收敛到 store，顶栏、标签栏、会话树共用同一份状态，避免出现「多个 SFTP 视图」互相打架。
@@ -70,27 +73,6 @@ export const AppLayout: React.FC = () => {
   const setSessionViewMode = useTerminalStore((s) => s.setLayoutMode);
   const [splitRatio, setSplitRatio] = useState<number>(55);
   const [sidebarView, setSidebarView] = useState<"server" | "tree">("server");
-
-  // 系统外观：壁纸 / 纯色背景同时作用于主界面与终端画布
-  const backgroundId = useSettingsStore((s) => s.backgroundId);
-  const backgroundCustom = useSettingsStore((s) => s.backgroundCustom);
-  const backgroundOpacity = useSettingsStore((s) => s.backgroundOpacity);
-  const backgroundBlur = useSettingsStore((s) => s.backgroundBlur);
-  const shellBackground = useMemo(
-    () => getWallpaperStyle(backgroundId, backgroundCustom),
-    [backgroundId, backgroundCustom]
-  );
-  const shellBackgroundStyle: React.CSSProperties | null = shellBackground
-    ? {
-        backgroundImage: shellBackground.backgroundImage,
-        backgroundSize: shellBackground.backgroundSize,
-        backgroundColor: shellBackground.backgroundColor,
-        backgroundPosition: "center",
-        filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
-        transform: backgroundBlur > 0 ? "scale(1.06)" : undefined,
-        opacity: Math.max(0, Math.min(100, backgroundOpacity)) / 100,
-      }
-    : null;
 
   // 拖动上下分屏分割条
   const handleSplitMouseDown = (e: React.MouseEvent) => {
@@ -129,11 +111,11 @@ export const AppLayout: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "F11") {
         e.preventDefault();
-        setIsFullscreen((prev) => !prev);
+        toggleFullscreen();
         return;
       }
       if (e.key === "Escape" && isFullscreen) {
-        setIsFullscreen(false);
+        setFullscreen(false);
         return;
       }
       const target = e.target as HTMLElement | null;
@@ -268,34 +250,26 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans antialiased select-none text-ink">
-      {/* 系统外观背景层：壁纸 / 纯色，位于所有面板之下，不拦截任何交互 */}
-      {shellBackgroundStyle && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 z-0 transition-opacity duration-300"
-          style={shellBackgroundStyle}
-        />
-      )}
-
       {/* 顶部主导航栏 (Apple Translucent Frosted Glass Header) */}
       {!isFullscreen && (
-        <header className="relative z-20 flex h-11 shrink-0 items-center gap-2 border-b border-line/10 bg-surface/85 backdrop-blur-xl px-3 text-ink">
+        <header className="glass-host relative z-50 flex h-11 shrink-0 items-center gap-2 border-b border-line/10 liquid-glass-chrome px-3 text-ink">
+          <GlassMaterial radius={0} />
           {/* 顶部左侧品牌区已移除：logo / OpenShell 字样 / 版本号会与左上角区域冲突 */}
 
           {/* 顶部中央快捷搜索与直连触发器 (⌘K) */}
           <div className="flex min-w-0 flex-1 justify-center px-2">
             <button
               onClick={() => setCommandPaletteOpen(true)}
-              className="flex w-full max-w-[18rem] items-center justify-between gap-2 px-3 py-1.5 rounded-xl border border-slate-200/80 bg-slate-100/70 text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition text-xs shadow-apple-sm"
+              className="flex w-full max-w-[18rem] items-center justify-between gap-2 px-3 py-1.5 rounded-xl border border-line/15 bg-line/5 text-ink-secondary hover:text-ink hover:bg-line/5 transition text-xs shadow-apple-sm"
               title="搜索会话、快速连接或切换主题 (Ctrl+K / ⌘K)"
             >
               <div className="flex min-w-0 items-center space-x-1.5">
-                <svg className="w-3.5 h-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5 shrink-0 text-ink-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
-                <span className="truncate text-slate-500">快速搜索会话或直连...</span>
+                <span className="truncate text-ink-secondary">快速搜索会话或直连...</span>
               </div>
-              <kbd className="hidden shrink-0 px-1.5 py-0.2 text-[10px] font-mono bg-white border border-slate-200/80 rounded-md text-slate-400 shadow-apple-sm md:inline">
+              <kbd className="hidden shrink-0 px-1.5 py-0.2 text-[10px] font-mono bg-surface border border-line/15 rounded-md text-ink-tertiary shadow-apple-sm md:inline">
                 ⌘K
               </kbd>
             </button>
@@ -309,8 +283,8 @@ export const AppLayout: React.FC = () => {
                 onClick={handleOpenMonitor}
                 className={`flex items-center space-x-1 rounded-xl border px-2.5 py-1 font-semibold transition shadow-apple-sm ${
                   monitorOpen
-                    ? "border-blue-400 bg-blue-100 text-[#0071e3]"
-                    : "border-blue-200/80 bg-blue-50 text-[#0071e3] hover:border-blue-300 hover:bg-blue-100"
+                    ? "border-accent/30 bg-accent/10 text-accent"
+                    : "border-accent/30 bg-accent/10 text-accent hover:border-accent/30 hover:bg-accent/10"
                 }`}
                 title={monitorOpen ? "返回终端 (再次点击或按 Esc 切回)" : "打开全屏服务器监控大屏"}
               >
@@ -328,10 +302,10 @@ export const AppLayout: React.FC = () => {
 
             <button
               onClick={() => setForwardModalOpen(true)}
-              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border border-line/15 bg-line/5 hover:bg-line/10 text-ink transition shadow-apple-sm font-medium"
               title="端口转发与隧道"
             >
-              <svg className="w-3.5 h-3.5 shrink-0 text-apple-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 shrink-0 text-state-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
               </svg>
               <span className="hidden xl:inline">端口转发</span>
@@ -341,8 +315,8 @@ export const AppLayout: React.FC = () => {
               onClick={() => setMultiExecOpen(!multiExecOpen)}
               className={`hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border transition shadow-apple-sm font-medium ${
                 multiExecOpen
-                  ? "bg-amber-50 border-amber-300 text-amber-800"
-                  : "bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50"
+                  ? "bg-state-warning/100/25 border-state-warning/30 text-state-warning"
+                  : "border-line/15 bg-line/5 hover:bg-line/10 text-ink"
               }`}
               title="多会话同步输入"
             >
@@ -354,10 +328,10 @@ export const AppLayout: React.FC = () => {
 
             <button
               onClick={() => setPortCheckerOpen(true)}
-              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border border-line/15 bg-line/5 hover:bg-line/10 text-ink transition shadow-apple-sm font-medium"
               title="网络连通探测 (Ping / TCP)"
             >
-              <svg className="w-3.5 h-3.5 shrink-0 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
               <span className="hidden xl:inline">连通探测</span>
@@ -365,10 +339,10 @@ export const AppLayout: React.FC = () => {
 
             <button
               onClick={() => setImportExportOpen(true)}
-              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border bg-white border-slate-200/80 text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition shadow-apple-sm font-medium"
+              className="hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-xl border border-line/15 bg-line/5 hover:bg-line/10 text-ink transition shadow-apple-sm font-medium"
               title="导入 / 导出备份"
             >
-              <svg className="w-3.5 h-3.5 shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               <span className="hidden xl:inline">导入/导出</span>
@@ -383,23 +357,21 @@ export const AppLayout: React.FC = () => {
             {/* 设置下拉入口 */}
             <SettingsDropdown
               onOpenSettings={(tab) => {
-                setSettingsTab(tab || "general");
+                setSettingsTab(tab || "wallpaper");
                 setSettingsModalOpen(true);
               }}
               onOpenSync={() => useSyncStore.getState().setModalOpen(true)}
               onOpenAbout={() => setAboutModalOpen(true)}
-              onCheckUpdate={async () => {
-                await useUpdaterStore.getState().check(true);
-              }}
+              onCheckUpdate={() => useUpdaterStore.getState().setModalOpen(true)}
             />
 
             {status && status.state === "unlocked" && (
               <button
                 onClick={() => lock()}
-                className="flex items-center space-x-1.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-apple-sm"
+                className="flex items-center space-x-1.5 rounded-xl border border-line/15 bg-surface px-2.5 py-1 text-xs font-semibold text-ink-secondary hover:bg-surface-muted transition shadow-apple-sm"
                 title="锁定主保险库"
               >
-                <svg className="h-3.5 w-3.5 shrink-0 text-apple-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-3.5 w-3.5 shrink-0 text-state-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
                 </svg>
                 <span className="hidden xl:inline">锁定</span>
@@ -409,14 +381,14 @@ export const AppLayout: React.FC = () => {
         </header>
       )}
 
-      {/* 终端全屏退出悬浮按钮 */}
+      {/* 终端全屏退出悬浮胶囊按钮 (Liquid Glass Exit Capsule) */}
       {isFullscreen && (
         <button
-          onClick={() => setIsFullscreen(false)}
-          className="fixed top-2 right-4 z-50 flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/80 text-white text-xs backdrop-blur-md hover:bg-slate-900 shadow-apple-md transition opacity-50 hover:opacity-100"
-          title="退出全屏 (Esc / F11)"
+          onClick={() => setFullscreen(false)}
+          className="fixed top-2.5 right-4 z-50 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full liquid-glass-panel text-ink  text-xs shadow-lg hover:scale-105 transition-all backdrop-blur-xl font-medium border border-white/20 active:scale-95"
+          title="退出终端全屏 (Esc / F11)"
         >
-          <span>✕ 退出全屏 (Esc)</span>
+          <span>✕ 退出全屏 (Esc / F11)</span>
         </button>
       )}
 
@@ -424,15 +396,11 @@ export const AppLayout: React.FC = () => {
       <RecoveryBanner />
 
       {/* 主工作区 */}
-      <div
-        className={`relative z-10 flex flex-1 flex-col overflow-hidden ${
-          shellBackgroundStyle ? "bg-transparent" : "bg-canvas"
-        }`}
-      >
+      <div className="relative z-10 flex flex-1 flex-col overflow-hidden bg-canvas">
         {/* 顶部标签栏（含常驻 🏠 主页 标签，随时点击无缝返回大盘） */}
         <TerminalTabs
           isFullscreen={isFullscreen}
-          onToggleFullscreen={() => setIsFullscreen((prev) => !prev)}
+          onToggleFullscreen={toggleFullscreen}
           onNewTabClick={() => handleNewSession()}
           onHomeClick={() => useTerminalStore.getState().setActiveTab("home")}
         />
@@ -442,11 +410,7 @@ export const AppLayout: React.FC = () => {
               这样「终端 → 主页 → 切回终端」不会销毁 xterm 实例、不会丢 scrollback，
               也不会在远端重复打开 shell。 */}
           {isHomeActive && (
-            <div
-              className={`absolute inset-0 z-30 overflow-hidden ${
-                shellBackgroundStyle ? "bg-white/60" : "bg-white"
-              }`}
-            >
+            <div className="absolute inset-0 z-30 overflow-hidden bg-canvas text-ink">
               <HomeHub
                 onNewSession={(groupId) => handleNewSession(groupId)}
                 onEditSession={handleEditSession}
@@ -469,8 +433,8 @@ export const AppLayout: React.FC = () => {
                     onClick={() => setSidebarView("server")}
                     className={`flex-1 py-1 rounded-md transition text-center ${
                       sidebarView === "server"
-                        ? "bg-white text-apple-blue shadow-apple-sm font-bold"
-                        : "text-slate-600 hover:text-slate-900"
+                        ? "bg-accent/15 text-accent font-bold"
+                        : "text-ink-secondary hover:text-ink"
                     }`}
                     title="查看服务器资源监控、端口与容器"
                   >
@@ -480,8 +444,8 @@ export const AppLayout: React.FC = () => {
                     onClick={() => setSidebarView("tree")}
                     className={`flex-1 py-1 rounded-md transition text-center ${
                       sidebarView === "tree"
-                        ? "bg-white text-apple-blue shadow-apple-sm font-bold"
-                        : "text-slate-600 hover:text-slate-900"
+                        ? "bg-accent/15 text-accent font-bold"
+                        : "text-ink-secondary hover:text-ink"
                     }`}
                     title="查看主机连接列表与快捷管理"
                   >
@@ -501,7 +465,7 @@ export const AppLayout: React.FC = () => {
                         }}
                       />
                     ) : (
-                      <div className="w-64 h-full overflow-y-auto bg-[#fbfbfd]">
+                      <div className="w-64 h-full overflow-y-auto bg-surface-muted">
                         <SessionTree
                           onNewSession={(gId) => handleNewSession(gId)}
                           onEditSession={handleEditSession}
@@ -513,17 +477,13 @@ export const AppLayout: React.FC = () => {
               </div>
             )}
 
-            <div
-              className={`flex-1 flex flex-col overflow-hidden ${
-                shellBackgroundStyle ? "bg-transparent" : "bg-canvas"
-              }`}
-            >
+            <div className="flex-1 flex flex-col overflow-hidden bg-canvas">
               {/* 快捷命令片段栏 (SSH 模式)；容器工作区打开时一并让位 */}
               {activeTab && activeTab.protocol !== "serial" && !containerWorkspaceOpen && (
                 <SnippetBar activeTabId={activeTabId} />
               )}
 
-              <div className="relative flex-1 overflow-hidden bg-transparent">
+              <div className="relative flex-1 overflow-hidden bg-surface">
                 {/* 终端宿主：所有已打开标签的 xterm 实例常驻挂载，切换标签/视图不重建 */}
                 <TerminalHost
                   visible={sessionTerminalVisible}
@@ -533,7 +493,7 @@ export const AppLayout: React.FC = () => {
                 {/* 资源监控覆盖层 */}
                 {monitorOpen && terminalIsSsh && !!activeTab?.connectionId && sessionTerminalVisible && (
                   // 大屏固定深色底：父层先铺深色，避免挂载瞬间闪出白底
-                  <div className="absolute inset-0 z-20 overflow-hidden bg-[#070c16]">
+                  <div className="absolute inset-0 z-20 overflow-hidden bg-canvas">
                     <OverlayBoundary resetKey={`monitor|${activeTab!.connectionId}`}>
                       <MonitorDashboard
                         connId={activeTab!.connectionId!}
@@ -547,7 +507,7 @@ export const AppLayout: React.FC = () => {
                 {/* 全 SFTP 视图 / 上下分屏的下半区（覆盖在终端宿主之上，终端仍保持挂载） */}
                 {terminalIsSsh && !!activeTab?.connectionId && sessionViewMode !== "terminal" && (
                   <div
-                    className="absolute inset-x-0 bottom-0 z-20 overflow-hidden border-t border-slate-200 bg-white"
+                    className="absolute inset-x-0 bottom-0 z-20 overflow-hidden border-t border-line/15 bg-surface"
                     style={{ top: sessionViewMode === "split" ? `calc(${splitRatio}% + 8px)` : 0 }}
                   >
                     <OverlayBoundary resetKey={`sftp|${activeTab!.connectionId}`}>
@@ -572,10 +532,10 @@ export const AppLayout: React.FC = () => {
                   <div
                     onMouseDown={handleSplitMouseDown}
                     style={{ top: `${splitRatio}%` }}
-                    className="group absolute inset-x-0 z-30 flex h-2 cursor-row-resize select-none items-center justify-center border-y border-slate-300/40 bg-slate-200/90 transition-colors hover:bg-apple-blue"
+                    className="group absolute inset-x-0 z-30 flex h-2 cursor-row-resize select-none items-center justify-center border-y border-line/25 bg-line/10 transition-colors hover:bg-action"
                     title="上下拖拽调整终端与 SFTP 占比"
                   >
-                    <div className="h-1 w-12 rounded-full bg-slate-400 transition-colors group-hover:bg-white" />
+                    <div className="h-1 w-12 rounded-full bg-line/20 transition-colors group-hover:bg-surface" />
                   </div>
                 )}
               </div>
@@ -590,76 +550,74 @@ export const AppLayout: React.FC = () => {
       </div>
 
       {/* 底部状态栏 (Apple Light Status Bar) */}
-      <footer
-        className={`relative z-10 flex h-7 shrink-0 items-center justify-between border-t border-black/[0.08] px-3 text-[11px] text-slate-600 select-none ${
-          shellBackgroundStyle ? "bg-[#f5f5f7]/85" : "bg-[#f5f5f7]"
-        }`}
-      >
-        <div className="flex items-center space-x-3">
-          <span className="flex items-center space-x-1.5">
-            <span className="h-2 w-2 rounded-full bg-apple-green shadow-apple-sm" />
-            <span className="font-medium text-slate-700">核心引擎: Ready</span>
-          </span>
+      {!isFullscreen && (
+        <footer className="relative z-10 flex h-7 shrink-0 items-center justify-between border-t border-line/10 px-3 text-[11px] text-ink-secondary select-none bg-surface/85 backdrop-blur-xl">
+          <div className="flex items-center space-x-3">
+            <span className="flex items-center space-x-1.5">
+              <span className="h-2 w-2 rounded-full bg-state-success shadow-apple-sm" />
+              <span className="font-medium text-ink-secondary">核心引擎: Ready</span>
+            </span>
 
-          {activeTab && (
-            <>
-              <span className="text-slate-300">|</span>
-              <span className="text-slate-800 font-semibold">
-                当前: {activeTab.sessionName} (
-                {activeTab.protocol === "serial"
-                  ? "串口"
-                  : sessionViewMode === "sftp"
-                    ? "SFTP 视图"
-                    : sessionViewMode === "split"
-                      ? "分屏 · 终端 + SFTP"
-                      : "终端命令行"}
-                )
-              </span>
+            {activeTab && (
+              <>
+                <span className="text-ink-secondary">|</span>
+                <span className="text-ink font-semibold">
+                  当前: {activeTab.sessionName} (
+                  {activeTab.protocol === "serial"
+                    ? "串口"
+                    : sessionViewMode === "sftp"
+                      ? "SFTP 视图"
+                      : sessionViewMode === "split"
+                        ? "分屏 · 终端 + SFTP"
+                        : "终端命令行"}
+                  )
+                </span>
 
-              {/* 快捷保存/编辑活动会话动作 */}
+                {/* 快捷保存/编辑活动会话动作 */}
+                <button
+                  onClick={handleSaveActiveTabAsSession}
+                  className="text-[11px] text-accent hover:underline px-1 py-0.5 rounded transition font-medium"
+                  title="保存或编辑该活动会话属性"
+                >
+                  💾 保存会话
+                </button>
+
+                {activeTab.protocol === "ssh" && (
+                  <span className="text-ink-tertiary font-mono">延迟: ~18ms</span>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-3">
+            {transfers.length > 0 && (
               <button
-                onClick={handleSaveActiveTabAsSession}
-                className="text-[11px] text-apple-blue hover:underline px-1 py-0.5 rounded transition font-medium"
-                title="保存或编辑该活动会话属性"
+                onClick={() => setTransferQueueOpen(!transferQueueOpen)}
+                className="flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-surface border border-line/15 text-ink-secondary hover:bg-surface-muted shadow-apple-sm transition"
+                title="点击打开/关闭传输抽屉"
               >
-                💾 保存会话
+                <span className="text-accent font-bold">⚡</span>
+                <span>
+                  传输: {transfers.filter((t) => t.state === "transferring" || t.state === "queued").length} 活动 / {transfers.length} 项
+                </span>
               </button>
+            )}
 
-              {activeTab.protocol === "ssh" && (
-                <span className="text-slate-400 font-mono">延迟: ~18ms</span>
-              )}
-            </>
-          )}
-        </div>
+            {/* 底部常驻同步小组件 */}
+            <SyncStatusWidget variant="footer" />
 
-        <div className="flex items-center space-x-3">
-          {transfers.length > 0 && (
-            <button
-              onClick={() => setTransferQueueOpen(!transferQueueOpen)}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-apple-sm transition"
-              title="点击打开/关闭传输抽屉"
-            >
-              <span className="text-apple-blue font-bold">⚡</span>
-              <span>
-                传输: {transfers.filter((t) => t.state === "transferring" || t.state === "queued").length} 活动 / {transfers.length} 项
-              </span>
-            </button>
-          )}
+            <span className="text-ink-secondary">|</span>
+            <span className="text-ink-secondary font-mono">UTF-8</span>
 
-          {/* 底部常驻同步小组件 */}
-          <SyncStatusWidget variant="footer" />
-
-          <span className="text-slate-300">|</span>
-          <span className="text-slate-500 font-mono">UTF-8</span>
-
-          <span className="flex items-center space-x-1 text-emerald-700 font-medium">
-            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-            <span>XChaCha20-Poly1305</span>
-          </span>
-        </div>
-      </footer>
+            <span className="flex items-center space-x-1 text-state-success font-medium">
+              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              <span>XChaCha20-Poly1305</span>
+            </span>
+          </div>
+        </footer>
+      )}
 
       {/* 全局模态弹窗与抽屉 */}
       <VaultUnlockModal />

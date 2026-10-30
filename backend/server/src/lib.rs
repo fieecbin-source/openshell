@@ -16,8 +16,8 @@ pub fn bootstrap_single_user(db: &DbPool, config: &Config) -> Result<(), String>
         _ => return Ok(()),
     };
 
-    let password_hash = auth::hash_password(password)
-        .map_err(|e| format!("Failed to hash sync password: {e}"))?;
+    let password_hash =
+        auth::hash_password(password).map_err(|e| format!("Failed to hash sync password: {e}"))?;
 
     let now = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
