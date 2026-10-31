@@ -29,7 +29,7 @@ CI 的 glibc 二进制不适用于 Alpine 或 ARM64；这些环境请使用匹�
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl python3
 sudo install -d -m 0755 /opt/openshell/deploy
-sudo install -m 0600 /dev/null /opt/openshell/deploy/.env
+sudo test -f /opt/openshell/deploy/.env || sudo install -m 0600 /dev/null /opt/openshell/deploy/.env
 sudo nano /opt/openshell/deploy/.env
 ```
 
