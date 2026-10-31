@@ -1,0 +1,58 @@
+{
+  "version": "1.1.4",
+  "tag": "v1.1.4",
+  "name": "OpenShell 1.1.4",
+  "published_at": "2026-10-31T09:44:40.440Z",
+  "mandatory": false,
+  "release_page": "https://github.com/fieecbin-source/openshell/releases",
+  "assets": [
+    {
+      "name": "OpenShell-1.1.4-linux-x86_64.AppImage",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.4/OpenShell-1.1.4-linux-x86_64.AppImage",
+      "size": 85256696,
+      "sha256": "aa843c2bcdecf76b7fb0b64fa2398a9a29be518cf9c13a8f3fdc3080b518e0c9",
+      "platform": "linux",
+      "arch": "x86_64"
+    },
+    {
+      "name": "OpenShell-1.1.4-linux-x86_64.deb",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.4/OpenShell-1.1.4-linux-x86_64.deb",
+      "size": 7310970,
+      "sha256": "41565f21fbca9da74111e96b2a17d67886f135b9d89c36c4e0d0c797637f3db6",
+      "platform": "linux",
+      "arch": "x86_64"
+    },
+    {
+      "name": "OpenShell-1.1.4-macos-universal.dmg",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.4/OpenShell-1.1.4-macos-universal.dmg",
+      "size": 13416749,
+      "sha256": "1d7a492ee70e6bbc0e7c10e9f15709b124eb410da2f8139509f7e14541b15596",
+      "platform": "macos",
+      "arch": "universal"
+    },
+    {
+      "name": "OpenShell-1.1.4-macos-universal-portable.zip",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.4/OpenShell-1.1.4-macos-universal-portable.zip",
+      "size": 13350963,
+      "sha256": "bd50d9f24ac7cf1ea7068637ad5abc55b7492c983c25649092f2774359c88377",
+      "platform": "macos",
+      "arch": "universal"
+    },
+    {
+      "name": "OpenShell-1.1.4-windows-x86_64.exe",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.4/OpenShell-1.1.4-windows-x86_64.exe",
+      "size": 4640438,
+      "sha256": "c22b450f6e304bf85a9505404e89514c5145d7dec44ae1035b083645728a3932",
+      "platform": "windows",
+      "arch": "x86_64"
+    },
+    {
+      "name": "OpenShell-1.1.4-windows-x86_64-portable.zip",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.4/OpenShell-1.1.4-windows-x86_64-portable.zip",
+      "size": 5937980,
+      "sha256": "1563c7ee3670f9769125537d42f72be37b86ee8da60127b4a763811ae6d7ff03",
+      "platform": "windows",
+      "arch": "x86_64"
+    }
+  ]
+}
