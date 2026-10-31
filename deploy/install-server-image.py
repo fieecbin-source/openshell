@@ -313,7 +313,7 @@ def main():
             public = config["SYNC_PUBLIC_URL"]
             assert request(public, "/readyz")["status"] == "ready"
             verify_login(public, config)
-            for path, payload in [("/v1/auth/register", {"email": "unauthorized-user", "password": "test-only-password", "device_name": "blocked-registration", "device_platform": "linux", "device_arch": "amd64", "device_public_key": "test-only"})]:
+            for path, payload in [("/v1/auth/register", {"email": "probe@example.invalid", "password": "test-only-password", "device_name": "blocked-registration", "device_platform": "linux", "device_arch": "amd64", "device_public_key": "test-only"})]:
                 try:
                     request(public, path, payload)
                     raise RuntimeError("Public registration unexpectedly succeeded.")
