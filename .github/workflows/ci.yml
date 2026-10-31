@@ -164,7 +164,7 @@ jobs:
 
       - name: Build Server Container (Dry Run)
         if: steps.check_file.outputs.exists == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/server/Dockerfile
