@@ -7,7 +7,7 @@ Docker Hub 是其中一种部署方式。仍可选择 [二进制与 systemd](SYN
 
 ## 用户：拉取后直接运行
 
-Docker Hub 镜像地址将在首次成功发布后填写在本页。镜像同时支持 `linux/amd64` 和 `linux/arm64`。
+公开镜像：[yilecbin/openshell-server](https://hub.docker.com/r/yilecbin/openshell-server)。镜像同时支持 `linux/amd64` 和 `linux/arm64`。
 服务器只需 Docker，无需 Node.js、Rust、前端源码或本地编译。
 
 先创建自己的 `openshell.env`（不要提交到 Git）：
@@ -21,12 +21,22 @@ SYNC_PASSWORD=replace_with_your_strong_password
 镜像没有预设账号、密码、数据库、连接或缓存，示例密码不会被允许启动。
 
 ```bash
-docker pull YOUR_DOCKERHUB_NAMESPACE/openshell-server:latest
+docker pull yilecbin/openshell-server:1.1.2
 docker run -d --name openshell-server --restart unless-stopped \
   --env-file ./openshell.env \
   -p 127.0.0.1:8085:8080 \
   -v openshell-server-data:/data \
-  YOUR_DOCKERHUB_NAMESPACE/openshell-server:latest
+  yilecbin/openshell-server:1.1.2
+```
+
+也可以使用下列一条命令；先将账号、密码替换为自己的值（示例密码会被拒绝启动）：
+
+```bash
+docker run -d --name openshell-server --restart unless-stopped \
+  -e SYNC_USERNAME=your_account \
+  -e SYNC_PASSWORD=replace_with_your_strong_password \
+  -p 127.0.0.1:8085:8080 -v openshell-server-data:/data \
+  yilecbin/openshell-server:1.1.2
 ```
 
 具名数据卷保存数据库与随机 JWT 密钥，重启、拉取新镜像不会清空账号或同步数据。
@@ -58,7 +68,7 @@ curl -fsS http://127.0.0.1:8085/readyz
 下载仓库 `deploy/compose.image.yml`，将 `openshell.env` 放在同一目录，执行：
 
 ```bash
-OPENSHELL_IMAGE=YOUR_DOCKERHUB_NAMESPACE/openshell-server:latest \
+OPENSHELL_IMAGE=yilecbin/openshell-server:1.1.2 \
   docker compose -f compose.image.yml up -d
 ```
 
