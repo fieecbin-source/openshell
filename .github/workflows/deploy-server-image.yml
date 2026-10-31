@@ -68,7 +68,9 @@ jobs:
           if [ "$4" = true ]; then args+=(--deploy); fi
           if [ "$(id -u)" -eq 0 ]; then
             python3 "${args[@]}"
-          else
+          elif sudo -n true 2>/dev/null; then
             sudo -n python3 "${args[@]}"
+          else
+            python3 "${args[@]}"
           fi
           REMOTE
