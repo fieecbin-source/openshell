@@ -28,6 +28,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate deployment helper
         run: python3 -m py_compile deploy/install-server-image.py
+      - name: Verify the published image with isolated credentials and storage
+        if: inputs.deploy
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE" =~ ^(docker.io/)?yilecbin/openshell-server(:[a-zA-Z0-9_.-]+|@sha256:[a-f0-9]{64})$ ]]
+          docker pull "$IMAGE"
+          python3 scripts/smoke-server-image.py "$IMAGE"
       - name: Inspect or replace only the OpenShell runtime
         env:
           SERVER_HOST: ${{ secrets.DEPLOY_HOST || secrets.SERVER_HOST }}
