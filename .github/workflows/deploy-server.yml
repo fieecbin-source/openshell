@@ -87,11 +87,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$SERVER_HOST" && test -n "$SERVER_USER" && test -n "$SERVER_SSH_KEY"
-          [[ "$SERVER_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
-          [[ "$SERVER_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-          [[ "$SERVER_PORT" =~ ^[0-9]+$ ]]
-          [[ "$DEPLOY_DIR" =~ ^/(opt|srv)/[a-zA-Z0-9/_-]+$ ]]
+          test -n "$SERVER_HOST" || { echo '::error::SERVER_HOST (or DEPLOY_HOST) is missing.'; exit 1; }
+          test -n "$SERVER_USER" || { echo '::error::SERVER_USER (or DEPLOY_USER) is missing.'; exit 1; }
+          test -n "$SERVER_SSH_KEY" || { echo '::error::SERVER_SSH_KEY (or DEPLOY_SSH_KEY) is missing.'; exit 1; }
+          [[ "$SERVER_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || { echo '::error::SERVER_USER must be a Linux username without whitespace.'; exit 1; }
+          [[ "$SERVER_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo '::error::SERVER_HOST must be an SSH hostname or IPv4 address, without a scheme, port, path, or whitespace.'; exit 1; }
+          [[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || { echo '::error::SERVER_PORT must contain only the SSH port number.'; exit 1; }
+          [[ "$DEPLOY_DIR" =~ ^/(opt|srv)/[a-zA-Z0-9/_-]+$ ]] || { echo '::error::DEPLOY_DIR (or DEPLOY_PATH) must be an absolute installation path below /opt or /srv.'; exit 1; }
           install -d -m 0700 ~/.ssh
           printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/openshell_deploy_key
           chmod 0600 ~/.ssh/openshell_deploy_key
