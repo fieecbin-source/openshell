@@ -100,6 +100,17 @@ impl VaultManager {
         Ok(())
     }
 
+    /// Restore the same local vault using its authenticated remote key slot.
+    pub fn unlock_with_key(&self, parts: &KeySlotParts, key: VaultKey) -> DomainResult<()> {
+        KeySlot::from_parts(parts)?.verify_key(&key)?;
+        let mut inner = self.write_inner();
+        inner.state = VaultState::Unlocked;
+        inner.key = Some(key);
+        inner.slot = Some(parts.clone());
+        inner.key_version = INITIAL_KEY_VERSION;
+        Ok(())
+    }
+
     /// 锁定保险库并清零内存中的 VaultKey（幂等）。
     pub fn lock(&self) {
         let mut inner = self.write_inner();

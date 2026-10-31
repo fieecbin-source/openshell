@@ -85,6 +85,16 @@ impl KeySlot {
         Ok(vault_key)
     }
 
+    /// Check an already authenticated vault key without changing the local password.
+    pub fn verify_key(&self, key: &VaultKey) -> DomainResult<()> {
+        let check = record_cipher::open_bytes(key.as_bytes(), SLOT_AAD, &self.key_check)
+            .map_err(|_| error::decrypt_failed())?;
+        if check != KEY_CHECK_PLAINTEXT {
+            return Err(error::decrypt_failed());
+        }
+        Ok(())
+    }
+
     /// 拆分为可直接写入 `vault` 行的字段。
     pub fn to_parts(&self) -> KeySlotParts {
         KeySlotParts {

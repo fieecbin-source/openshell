@@ -78,6 +78,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/relay/tickets", post(relay::create_ticket))
         .route("/v1/relay/tickets/:id", delete(relay::delete_ticket))
         .route("/v1/relay/stream", get(relay::relay_stream))
+        .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)

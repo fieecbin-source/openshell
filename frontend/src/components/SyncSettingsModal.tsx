@@ -80,10 +80,11 @@ export const SyncSettingsModal: React.FC = () => {
     try {
       if (mode === "register") {
         await register(target, email, password, inviteCode || undefined);
-        setSyncFeedback("注册并登录成功！");
+        setSyncFeedback("注册并完成首次同步。");
       } else {
         await login(target, email, password);
-        setSyncFeedback("登录成功！");
+        setPassword("");
+        setSyncFeedback("登录并完成首次同步，后续变更将自动同步。");
       }
     } catch {
       // handled by store error
@@ -124,8 +125,8 @@ export const SyncSettingsModal: React.FC = () => {
     <Modal
       open
       onClose={() => setModalOpen(false)}
-      title="自建服务端与 E2EE 云同步"
-      description="基于 Argon2id + XChaCha20-Poly1305 的零知识加密同步"
+      title="自建服务端与加密同步"
+      description="填写自己的域名、账号和密码，登录后自动同步"
       widthClassName="w-full max-w-[520px]"
     >
       <div className="space-y-3.5">
@@ -134,11 +135,11 @@ export const SyncSettingsModal: React.FC = () => {
           title={
             <span className="flex items-center gap-1.5">
               <ShieldIcon className="h-3.5 w-3.5" />
-              端到端加密（E2EE）
+              客户端加密同步
             </span>
           }
         >
-          所有会话、凭据、私钥及命令均在本地用您的保险库主密钥加密后再上送，自建服务端仅保存不可读密文。
+          数据在客户端加密后上传。同步密码同时用于解锁同步保险库，请妥善保管服务器上的账号配置。
         </InlineNotice>
 
         {error && (

@@ -197,6 +197,18 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, crate::middleware::ApiError> {
+    if !state.config.allow_multi_user
+        && state
+            .config
+            .sync_username
+            .as_deref()
+            .is_some_and(|username| username.trim() != req.email)
+    {
+        return Err(make_error(
+            ApiErrorCode::Unauthenticated,
+            "Invalid credentials",
+        ));
+    }
     let now = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();

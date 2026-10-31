@@ -10,7 +10,7 @@ on:
       image:
         description: 'Published OpenShell server image (version tag or digest)'
         required: true
-        default: 'docker.io/yilecbin/openshell-server:1.1.2'
+        default: 'docker.io/yilecbin/openshell-server:1.1.3'
 
 permissions:
   contents: read
@@ -47,6 +47,7 @@ jobs:
           LEGACY_DIR: ${{ secrets.DEPLOY_PATH || secrets.DEPLOY_DIR || '/opt/openshell' }}
           IMAGE: ${{ inputs.image }}
           DEPLOY: ${{ inputs.deploy }}
+          PUBLIC_URL: ${{ secrets.SYNC_PUBLIC_URL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -70,10 +71,12 @@ jobs:
           scp -P "$SERVER_PORT" -i ~/.ssh/openshell_deploy_key -o StrictHostKeyChecking=yes \
             deploy/install-server-image.py "$SERVER_USER@$SERVER_HOST:$stage/install-server-image.py"
           legacy_b64=$(printf '%s' "$LEGACY_DIR" | base64 -w0)
-          ssh "${ssh_args[@]}" "$SERVER_USER@$SERVER_HOST" bash -s -- "$stage" "$legacy_b64" "$IMAGE" "$DEPLOY" <<'REMOTE'
+          public_b64=$(printf '%s' "$PUBLIC_URL" | base64 -w0)
+          ssh "${ssh_args[@]}" "$SERVER_USER@$SERVER_HOST" bash -s -- "$stage" "$legacy_b64" "$IMAGE" "$DEPLOY" "$public_b64" <<'REMOTE'
           set -euo pipefail
           stage="$1"
           args=("$stage/install-server-image.py" --legacy-dir-base64 "$2" --image "$3")
+          if [ -n "$5" ]; then args+=(--public-url-base64 "$5"); fi
           if [ "$4" = true ]; then args+=(--deploy); fi
           if [ "$(id -u)" -eq 0 ]; then
             python3 "${args[@]}"

@@ -78,7 +78,9 @@ def private_write(path, text):
 
 
 def request(base, path, payload=None, token=None, device=None, method=None):
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": "OpenShell/deployment-verification"}
+    if path.startswith("/v2/"):
+        headers["X-Api-Version"] = "2"
     if token:
         headers.update({"Authorization": "Bearer " + token, "X-Device-Id": device})
     data = json.dumps(payload).encode() if payload is not None else None
@@ -196,7 +198,7 @@ def deploy(legacy, image, containers, config, config_path):
             config["SYNC_PASSWORD"] = secrets.token_urlsafe(32)
         if config["SYNC_PASSWORD"] == "replace_with_your_strong_password":
             raise RuntimeError("Replace the example account password before deployment.")
-        allowed = {key: config[key] for key in ("SYNC_USERNAME", "SYNC_PASSWORD", "JWT_SECRET") if config.get(key)}
+        allowed = {key: config[key] for key in ("SYNC_USERNAME", "SYNC_PASSWORD", "JWT_SECRET", "SYNC_PUBLIC_URL") if config.get(key)}
         allowed.update({"ALLOW_MULTI_USER": "false", "RELAY_ENABLED": "false"})
         if any("\n" in value or "\r" in value for value in allowed.values()):
             raise RuntimeError("Docker environment values must not contain newlines.")
@@ -225,6 +227,11 @@ def deploy(legacy, image, containers, config, config_path):
         run("docker", "restart", "openshell-server", check=True)
         wait_ready(base)
         verify_login(base, config)
+        if config.get("SYNC_PUBLIC_URL"):
+            public = config["SYNC_PUBLIC_URL"]
+            if request(public, "/readyz").get("status") != "ready":
+                raise RuntimeError("The private HTTPS endpoint is not ready.")
+            verify_login(public, config)
     except BaseException:
         if started_new:
             run("docker", "rm", "-f", "openshell-server")
@@ -272,6 +279,7 @@ def main():
     parser.add_argument("--legacy-dir-base64", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--deploy", action="store_true")
+    parser.add_argument("--public-url-base64", default="")
     args = parser.parse_args()
     raw = base64.b64decode(args.legacy_dir_base64).decode().strip()
     legacy = Path(raw).expanduser()
@@ -279,6 +287,11 @@ def main():
         raise SystemExit("Legacy deployment directory must be absolute (or start with ~/).")
     legacy = legacy.resolve()
     containers, config, config_path = inspect(legacy)
+    if args.public_url_base64:
+        public_url = base64.b64decode(args.public_url_base64).decode().strip().rstrip("/")
+        if not re.fullmatch(r"https://[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?", public_url):
+            raise SystemExit("SYNC_PUBLIC_URL must be an HTTPS origin without credentials or a path.")
+        config["SYNC_PUBLIC_URL"] = public_url
     active = run("systemctl", "is-active", "--quiet", "openshell-server.service").returncode == 0
     print(json.dumps({"mode": "inspect", "docker_installed": bool(shutil.which("docker")),
                       "docker_available": bool(shutil.which("docker")) and run("docker", "info").returncode == 0,
@@ -295,6 +308,21 @@ def main():
         except Exception as error:
             # urllib exception URLs, Docker stderr, and config values can contain private data.
             raise SystemExit("Server image deployment failed (" + type(error).__name__ + "). Previous runtime recovery was attempted.") from None
+    elif config.get("SYNC_PUBLIC_URL") and config.get("SYNC_USERNAME") and config.get("SYNC_PASSWORD"):
+        try:
+            public = config["SYNC_PUBLIC_URL"]
+            assert request(public, "/readyz")["status"] == "ready"
+            verify_login(public, config)
+            for path, payload in [("/v1/auth/register", {"email": "unauthorized-user", "password": "test-only-password", "device_name": "blocked-registration", "device_platform": "linux", "device_arch": "amd64", "device_public_key": "test-only"})]:
+                try:
+                    request(public, path, payload)
+                    raise RuntimeError("Public registration unexpectedly succeeded.")
+                except urllib.error.HTTPError as error:
+                    if error.code not in (401, 403):
+                        raise
+            print(json.dumps({"public_https_ready": True, "public_login": "passed", "public_registration": "blocked", "domain_logged": False}), flush=True)
+        except Exception as error:
+            raise SystemExit("Private HTTPS verification failed (" + type(error).__name__ + ").") from None
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ pub mod op_registry;
 pub mod session_service;
 pub mod sync_codec;
 pub mod sync_service;
+mod sync_vault;
 pub mod terminal_router;
 pub mod vault_service;
 

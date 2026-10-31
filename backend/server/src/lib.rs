@@ -32,9 +32,13 @@ pub fn bootstrap_single_user(db: &DbPool, config: &Config) -> Result<(), String>
             )
             .ok();
 
-        if let Some((_id, _old_hash)) = existing {
+        if let Some((id, old_hash)) = existing {
+            if !auth::verify_password(password, &old_hash) {
+                conn.execute("UPDATE account SET token_epoch = token_epoch + 1 WHERE id = ?1", [&id])?;
+                conn.execute("UPDATE refresh_token SET revoked_at = ?1 WHERE account_id = ?2 AND revoked_at IS NULL", rusqlite::params![&now, &id])?;
+            }
             conn.execute(
-                "UPDATE account SET password_hash = ?1 WHERE email = ?2",
+                "UPDATE account SET password_hash = ?1, disabled_at = NULL WHERE email = ?2",
                 rusqlite::params![&password_hash, username],
             )?;
             tracing::info!("Single-user account '{}' verified and updated", username);
@@ -45,6 +49,17 @@ pub fn bootstrap_single_user(db: &DbPool, config: &Config) -> Result<(), String>
                 rusqlite::params![&account_id, username, &password_hash, &now],
             )?;
             tracing::info!("Single-user account '{}' created successfully", username);
+        }
+        if !config.allow_multi_user {
+            // Closing registration also invalidates accounts and sessions left by an older multi-user instance.
+            conn.execute(
+                "UPDATE account SET disabled_at = ?1, token_epoch = token_epoch + 1 WHERE email <> ?2 AND disabled_at IS NULL",
+                rusqlite::params![&now, username],
+            )?;
+            conn.execute(
+                "UPDATE refresh_token SET revoked_at = ?1 WHERE account_id IN (SELECT id FROM account WHERE email <> ?2) AND revoked_at IS NULL",
+                rusqlite::params![&now, username],
+            )?;
         }
         Ok(())
     }).map_err(|e| format!("Failed to bootstrap single user in database: {e}"))?;

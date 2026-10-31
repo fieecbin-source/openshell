@@ -33,6 +33,7 @@ deploy/backups/
 **/backups/
 .env
 .env.*
+*.env
 !.env.example
 *.pem
 *.key

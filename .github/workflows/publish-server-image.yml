@@ -40,6 +40,10 @@ jobs:
       version: ${{ steps.settings.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Reject private deployment information in image source inputs
+        env:
+          OPENSHELL_PRIVATE_MARKERS: ${{ secrets.SYNC_PUBLIC_URL }}
+        run: node scripts/check-release-inputs.mjs
       - id: settings
         name: Resolve version and publication settings
         env:

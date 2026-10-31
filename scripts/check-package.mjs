@@ -18,12 +18,14 @@ import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { privateMarkers } from "./private-markers.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const DEFAULT_DIRS = ["frontend/dist", "artifacts"];
 const FORBIDDEN_PATH = [
   /(^|[\\/])\.env(\..*)?$/,
+  /\.env$/i,
   /(^|[\\/])target[\\/]/,
   /(^|[\\/])backend[\\/]server[\\/]/,
   /(^|[\\/])\.git[\\/]/,
@@ -79,6 +81,7 @@ function collectLocalMarkers() {
     if (/^(127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.255)$/.test(text)) return;
     if (!markers.has(text)) markers.set(text, source);
   };
+  for (const marker of privateMarkers()) add(marker, "部署私有信息");
 
   // 1) 本机用户名路径（只匹配带路径的形态，避免误伤普通单词）
   const user = (() => {
@@ -165,7 +168,7 @@ for (const target of targets) {
       if (localMarkers.size > 0) {
         for (const [marker, source] of localMarkers) {
           if (text.includes(marker)) {
-            problems.push(`${rel}：包含${source}「${marker}」`);
+            problems.push(`${rel}：包含${source}（具体值已隐藏）`);
             break;
           }
         }
@@ -179,7 +182,7 @@ for (const target of targets) {
       const strings = printableStrings(readFileSync(file));
       for (const [marker, source] of localMarkers) {
         if (strings.includes(marker)) {
-          problems.push(`${rel}：二进制产物里出现${source}「${marker}」`);
+          problems.push(`${rel}：二进制产物里出现${source}（具体值已隐藏）`);
           break;
         }
       }

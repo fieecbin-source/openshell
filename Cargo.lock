@@ -3742,7 +3742,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-ai"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3766,9 +3766,11 @@ dependencies = [
 
 [[package]]
 name = "openshell-app-core"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
+ "axum",
+ "base64 0.22.1",
  "openshell-ai",
  "openshell-core-domain",
  "openshell-extension-sample",
@@ -3776,6 +3778,7 @@ dependencies = [
  "openshell-importer",
  "openshell-monitor",
  "openshell-serial",
+ "openshell-server",
  "openshell-sftp",
  "openshell-ssh",
  "openshell-store",
@@ -3797,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-core-domain"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "serde",
@@ -3811,7 +3814,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-desktop"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "openshell-app-core",
  "openshell-core-domain",
@@ -3842,7 +3845,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-extension-sample"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3856,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-forward"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3870,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-importer"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3884,7 +3887,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-monitor"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3898,7 +3901,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-serial"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3914,7 +3917,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-server"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "argon2 0.5.3",
  "axum",
@@ -3947,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-sftp"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3964,7 +3967,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-ssh"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3981,7 +3984,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-store"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "openshell-core-domain",
@@ -3999,7 +4002,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-sync-client"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4019,7 +4022,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-sync-protocol"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4030,7 +4033,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-updater"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "ammonia",
  "async-trait",
@@ -4052,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-vault"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "argon2 0.5.3",
  "async-trait",
@@ -4071,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "openshell-xtask"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "flate2",
  "reqwest 0.12.28",

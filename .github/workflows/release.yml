@@ -44,6 +44,8 @@ jobs:
         run: node scripts/release.mjs check --tag "${{ github.event.inputs.tag_name || github.ref_name }}"
 
       - name: Validate clean release inputs and bundled resource allowlist
+        env:
+          OPENSHELL_PRIVATE_MARKERS: ${{ secrets.SYNC_PUBLIC_URL }}
         run: node scripts/check-release-inputs.mjs
 
       # 发布守卫 1：仓库里一旦混入本地数据库/环境文件，先在这里拦住，
@@ -132,6 +134,8 @@ jobs:
         run: pnpm --filter @openshell/frontend build
 
       - name: Validate frontend and appearance regressions
+        env:
+          OPENSHELL_PRIVATE_MARKERS: ${{ secrets.SYNC_PUBLIC_URL }}
         run: |
           pnpm lint
           pnpm test
@@ -163,9 +167,14 @@ jobs:
         run: |
           cargo build --release -p openshell-server --target x86_64-unknown-linux-gnu
           VERSION=$(node scripts/version.mjs --print)
-          mkdir -p target/server-pkg artifacts
+          mkdir -p target/server-pkg/deploy artifacts
           cp target/x86_64-unknown-linux-gnu/release/openshell-server target/server-pkg/
-          cp -r deploy target/server-pkg/
+          for file in Caddyfile systemd.env.example README.md .env.example docker-compose.yml compose.image.yml openshell-server.service; do
+            install -m 0644 "deploy/$file" target/server-pkg/deploy/
+          done
+          for file in deploy.sh install-server.sh install-server-image.py; do
+            install -m 0755 "deploy/$file" target/server-pkg/deploy/
+          done
           cp docs/SYNC.md target/server-pkg/
           tar -czf "artifacts/openshell-server-${VERSION}-linux-x86_64.tar.gz" -C target/server-pkg .
           node --input-type=module <<'NODE'
@@ -192,6 +201,8 @@ jobs:
             --out artifacts
 
       - name: Check release artifacts for local data
+        env:
+          OPENSHELL_PRIVATE_MARKERS: ${{ secrets.SYNC_PUBLIC_URL }}
         run: node scripts/check-package.mjs artifacts
 
       - uses: actions/upload-artifact@v4

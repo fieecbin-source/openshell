@@ -52,7 +52,7 @@ export const SyncStatusWidget: React.FC<SyncStatusWidgetProps> = ({ variant = "f
     : hasConflict
     ? `冲突 (${config?.conflict_count})`
     : isLoggedIn
-    ? "E2EE 同步"
+    ? "加密同步"
     : "未同步";
 
   const pillTone = hasConflict
@@ -75,7 +75,7 @@ export const SyncStatusWidget: React.FC<SyncStatusWidgetProps> = ({ variant = "f
             "transition-[background-color,border-color,color] duration-os ease-os",
             pillTone,
           )}
-          title="E2EE 云端同步与状态"
+          title="加密同步与状态"
         >
           {syncing ? (
             <RefreshIcon className="h-3.5 w-3.5 animate-spin text-accent" />
@@ -104,7 +104,7 @@ export const SyncStatusWidget: React.FC<SyncStatusWidgetProps> = ({ variant = "f
                   )}
                 />
                 <span className="truncate">
-                  {isLoggedIn ? "E2EE 端到端同步已连接" : "云端同步未连接"}
+                  {isLoggedIn ? "加密同步已连接" : "云端同步未连接"}
                 </span>
               </span>
               <Button

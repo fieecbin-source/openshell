@@ -32,13 +32,26 @@ pub struct SyncClient {
 
 impl SyncClient {
     pub fn new(server_url: impl Into<String>, device_id: impl Into<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
+        let server_url = server_url.into().trim_end_matches('/').to_string();
+        let mut builder = reqwest::Client::builder()
+            .user_agent(concat!("OpenShell/", env!("CARGO_PKG_VERSION")))
+            .timeout(Duration::from_secs(15));
+        let loopback = reqwest::Url::parse(&server_url).ok().is_some_and(|url| {
+            url.host_str().is_some_and(|host| {
+                host == "localhost"
+                    || host
+                        .trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+        });
+        if loopback {
+            builder = builder.no_proxy();
+        }
+        let client = builder.build().unwrap_or_default();
 
         Self {
-            server_url: server_url.into().trim_end_matches('/').to_string(),
+            server_url,
             device_id: device_id.into(),
             access_token: None,
             client,

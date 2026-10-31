@@ -6,6 +6,7 @@ import { useTerminalStore } from "./stores/terminalStore";
 import { AppLayout } from "./components/AppLayout";
 import { ToastHost } from "./components/ToastHost";
 import { useVaultAutoLock } from "./lib/useVaultAutoLock";
+import { useAutoSync } from "./lib/useAutoSync";
 
 export const App: React.FC = () => {
   const { checkStatus, status } = useVaultStore();
@@ -24,6 +25,7 @@ export const App: React.FC = () => {
 
   // 解锁后 15 分钟无操作自动锁定保险库（避免进程长期持有解密后的会话密钥）
   useVaultAutoLock();
+  useAutoSync();
 
   // 监听后端推送的 AppEvent
   useEffect(() => {

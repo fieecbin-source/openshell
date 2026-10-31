@@ -28,8 +28,11 @@ parking_lot = "0.12"
 zeroize = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 time = { workspace = true }
+base64 = "0.22"
 
 [dev-dependencies]
 openshell-extension-sample = { workspace = true }
 tempfile = "3"
+openshell-server = { path = "../../server" }
+axum = "0.7"
 

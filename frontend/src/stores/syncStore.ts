@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFriendlyError } from "../lib/errors";
+import { useSessionStore } from "./sessionStore";
+import { useVaultStore } from "./vaultStore";
+
+const refreshSyncedViews = async () => {
+  await Promise.all([useSessionStore.getState().loadAll(), useVaultStore.getState().checkStatus()]);
+};
 
 export interface SyncConfig {
   server_url: string | null;
@@ -87,6 +93,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
         inviteCode: inviteCode || null,
       });
       await get().loadConfig();
+      await refreshSyncedViews();
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });
       throw err;
@@ -100,6 +107,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     try {
       await invoke("sync_login", { serverUrl, email, password });
       await get().loadConfig();
+      await refreshSyncedViews();
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });
       throw err;
@@ -135,6 +143,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       const result = await invoke<SyncResult>("sync_now");
       set({ lastResult: result });
       await get().loadConfig();
+      await refreshSyncedViews();
       return result;
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });

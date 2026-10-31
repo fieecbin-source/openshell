@@ -4,13 +4,22 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { privateMarkers } from "./private-markers.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const problems = [];
 const tracked = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).split("\n");
-const privateFile = /(^|\/)\.env(?:\.(?!example$)[^/]+)?$|\.(?:db(?:-wal|-shm)?|sqlite3?|osvault|pem|key|log|har|pcap)$/i;
+const privateFile = /(^|\/)\.env(?:\.(?!example$)[^/]+)?$|\.(?:env|db(?:-wal|-shm)?|sqlite3?|osvault|pem|key|log|har|pcap)$/i;
+const markers = privateMarkers().flatMap((marker) => [Buffer.from(marker), Buffer.from(marker, "utf16le")]);
 for (const file of tracked) {
   if (privateFile.test(file)) problems.push(`Private data must not be tracked: ${file}`);
+  const path = join(root, file);
+  if (file && existsSync(path) && markers.length) {
+    const content = readFileSync(path);
+    if (markers.some((marker) => content.includes(marker))) {
+      problems.push(`Deployment-private information found in tracked file: ${file}`);
+    }
+  }
 }
 for (const directory of [root, join(root, "frontend")]) {
   for (const file of readdirSync(directory)) {
