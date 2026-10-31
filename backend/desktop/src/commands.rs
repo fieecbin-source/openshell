@@ -1269,12 +1269,13 @@ pub async fn sync_register(
     email: String,
     password: String,
     invite_code: Option<String>,
-) -> Result<openshell_sync_protocol::AuthResponse, IpcError> {
-    let auth = state
+) -> Result<openshell_app_core::SyncConfig, IpcError> {
+    let password = zeroize::Zeroizing::new(password);
+    state
         .sync
         .register(&server_url, &email, &password, invite_code)
         .await?;
-    Ok(auth)
+    Ok(state.sync.get_config()?)
 }
 
 #[tauri::command]
@@ -1283,9 +1284,10 @@ pub async fn sync_login(
     server_url: String,
     email: String,
     password: String,
-) -> Result<openshell_sync_protocol::AuthResponse, IpcError> {
-    let auth = state.sync.login(&server_url, &email, &password).await?;
-    Ok(auth)
+) -> Result<openshell_app_core::SyncConfig, IpcError> {
+    let password = zeroize::Zeroizing::new(password);
+    state.sync.login(&server_url, &email, &password).await?;
+    Ok(state.sync.get_config()?)
 }
 
 #[tauri::command]

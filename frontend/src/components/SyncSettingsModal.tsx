@@ -45,7 +45,7 @@ export const SyncSettingsModal: React.FC = () => {
   } = useSyncStore();
 
   const [mode, setMode] = useState<AuthMode>("login");
-  const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8080");
+  const [serverUrl, setServerUrl] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
@@ -55,8 +55,12 @@ export const SyncSettingsModal: React.FC = () => {
   useEffect(() => {
     if (modalOpen) {
       loadConfig();
+    } else {
+      setPassword("");
+      setEmail("");
+      setInviteCode("");
     }
-  }, [modalOpen]);
+  }, [modalOpen, loadConfig]);
 
   useEffect(() => {
     if (config) {
@@ -88,6 +92,8 @@ export const SyncSettingsModal: React.FC = () => {
       }
     } catch {
       // handled by store error
+    } finally {
+      setPassword("");
     }
   };
 
@@ -246,7 +252,7 @@ export const SyncSettingsModal: React.FC = () => {
           </div>
         ) : (
           /* 登录 / 注册表单 */
-          <form onSubmit={handleSubmitAuth} className="space-y-3">
+          <form onSubmit={handleSubmitAuth} className="space-y-3" autoComplete="off">
             <Segmented<AuthMode>
               value={mode}
               onChange={setMode}
@@ -261,6 +267,7 @@ export const SyncSettingsModal: React.FC = () => {
             <Field label="服务端地址 (HTTPS/HTTP)" required>
               <Input
                 type="text"
+                autoComplete="off"
                 required
                 mono
                 value={serverUrl}
@@ -272,6 +279,7 @@ export const SyncSettingsModal: React.FC = () => {
             <Field label="账号 / 用户名" required hint="支持单用户自用模式下配置的用户名或邮箱">
               <Input
                 type="text"
+                autoComplete="off"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -282,10 +290,11 @@ export const SyncSettingsModal: React.FC = () => {
             <Field label="密码" required hint="非空，最多 128 位">
               <Input
                 type="password"
+                autoComplete="new-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
+                placeholder="请输入同步密码"
               />
             </Field>
 

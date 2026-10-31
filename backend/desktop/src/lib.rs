@@ -2,6 +2,7 @@
 
 mod commands;
 mod error;
+mod profile;
 mod updater;
 
 use commands::*;
@@ -10,6 +11,32 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 pub fn run() {
+    let launch = profile::LaunchOptions::parse().unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
+    if launch.verify_clean {
+        let check = || -> Result<bool, Box<dyn std::error::Error>> {
+            let directory = launch
+                .profile_dir
+                .as_ref()
+                .ok_or("Missing isolated profile directory")?;
+            let exe = std::env::current_exe()?;
+            reject_install_dir(
+                directory,
+                exe.parent().ok_or("Missing executable directory")?,
+            )
+            .map_err(std::io::Error::other)?;
+            let services = AppServices::new(directory.clone())?;
+            let report = profile::factory_state(&services).map_err(std::io::Error::other)?;
+            std::fs::write(
+                directory.join("factory-state.json"),
+                serde_json::to_vec_pretty(&report)?,
+            )?;
+            Ok(report.clean)
+        };
+        std::process::exit(if matches!(check(), Ok(true)) { 0 } else { 2 });
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -17,17 +44,27 @@ pub fn run() {
         )
         .init();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default();
+    let portable = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|dir| dir.join("openshell.portable").is_file())
+        })
+        .unwrap_or(false);
+    if launch.profile_dir.is_none() && !cfg!(debug_assertions) && !portable {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let data_dir = match resolve_data_dir(app) {
+        .setup(move |app| {
+            let data_dir = match resolve_data_dir(app, &launch) {
                 Ok(dir) => dir,
                 Err(err) => {
                     // 宁可拒绝启动，也不要把连接配置写进安装目录（更新/卸载会一并删除）。
@@ -50,7 +87,7 @@ pub fn run() {
             tracing::info!(dir = %data_dir.display(), "using user data directory");
 
             let services =
-                Arc::new(AppServices::new(data_dir).expect("failed to initialize AppServices"));
+                Arc::new(AppServices::new(data_dir.clone()).expect("failed to initialize AppServices"));
 
             // 注册内置扩展示例模块（Architecture §21 / P1-M5-1）
             services
@@ -97,6 +134,12 @@ pub fn run() {
                 .await;
             });
 
+            // Create the webview only after choosing the private profile and registering services.
+            // Incognito mode prevents browser form/password storage from crossing launches.
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &app.config().app.windows[0])?
+                .data_directory(data_dir.join("webview"))
+                .incognito(true)
+                .build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -238,19 +281,28 @@ pub fn run() {
 /// * 必须能通过 Tauri 的 `app_data_dir()` 解析。旧实现失败时会静默退化成相对路径 `data`，
 ///   等于把数据库写进进程 CWD（通常是安装目录），更新/卸载时会被一并删除 —— 这里改为拒绝启动。
 /// * 数据目录不得等于或位于可执行文件所在目录内，防止便携版误配置导致数据跟着安装包走。
-fn resolve_data_dir(app: &tauri::App) -> Result<std::path::PathBuf, String> {
-    let data_dir = app
+fn resolve_data_dir(
+    app: &tauri::App,
+    launch: &profile::LaunchOptions,
+) -> Result<std::path::PathBuf, String> {
+    let base = app
         .path()
         .app_data_dir()
         .map_err(|err| format!("无法解析应用数据目录：{err}"))?;
-    if data_dir.as_os_str().is_empty() {
+    if base.as_os_str().is_empty() {
         return Err("解析出的应用数据目录为空".to_string());
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            reject_install_dir(&data_dir, exe_dir)?;
-        }
-    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe.parent().ok_or("无法解析应用安装目录")?;
+    let data_dir = launch.profile_dir.clone().unwrap_or_else(|| {
+        profile::default_directory(
+            &base,
+            exe_dir,
+            cfg!(debug_assertions),
+            exe_dir.join("openshell.portable").is_file(),
+        )
+    });
+    reject_install_dir(&data_dir, exe_dir)?;
     Ok(data_dir)
 }
 

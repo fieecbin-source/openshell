@@ -152,20 +152,13 @@ async fn three_field_login_restores_credentials_and_bidirectional_changes() {
         .unwrap()
         .is_empty());
 
-    let auth = a
-        .store
-        .with_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT value_json FROM setting WHERE scope='sync' AND key='auth'",
-                    [],
-                    |r| r.get::<_, String>(0),
-                )
-                .unwrap())
-        })
-        .unwrap();
-    assert!(!auth.contains(PASSWORD));
-    assert!(!auth.contains("access_token"));
+    let persisted_auth: i64 = a.store.with_conn(|conn| {
+        Ok(conn.query_row("SELECT COUNT(*) FROM setting WHERE scope='sync' AND key IN ('auth','access_token','refresh_token','password')", [], |r| r.get(0)).unwrap())
+    }).unwrap();
+    assert_eq!(
+        persisted_auth, 0,
+        "login material must remain in memory only"
+    );
     server_db
         .with_conn(|conn| {
             let mut stmt = conn.prepare("SELECT ciphertext FROM record").unwrap();
@@ -183,6 +176,11 @@ async fn three_field_login_restores_credentials_and_bidirectional_changes() {
     assert!(
         !reopened.sync.get_config().unwrap().is_logged_in,
         "an account ID alone is not a login session"
+    );
+    reopened.vault.unlock(Some(PASSWORD), false).unwrap();
+    assert!(
+        !reopened.sync.get_config().unwrap().is_logged_in,
+        "unlock must not restore a login session"
     );
     reopened
         .sync

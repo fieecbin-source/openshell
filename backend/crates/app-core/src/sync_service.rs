@@ -37,14 +37,21 @@ pub struct SyncResult {
 pub struct SyncService {
     store: Store,
     vault_manager: Arc<VaultManager>,
-    cached_token: RwLock<Option<String>>,
-    cached_refresh: RwLock<Option<String>>,
+    cached_token: RwLock<Option<Zeroizing<String>>>,
+    cached_refresh: RwLock<Option<Zeroizing<String>>>,
     expires_at: RwLock<Option<String>>,
     operation: tokio::sync::Mutex<()>,
 }
 
 impl SyncService {
     pub fn new(store: Store, vault_manager: Arc<VaultManager>) -> Self {
+        // Do not restore login material left by earlier versions, even after vault unlock.
+        let _ = store.with_conn(|conn| {
+            conn.pragma_update(None, "secure_delete", true).map_err(|e| DomainError::internal(e.to_string()))?;
+            conn.execute("DELETE FROM setting WHERE scope='sync' AND key IN ('auth','access_token','refresh_token','password','login_password','remember_password')", [])
+                .map_err(|e| DomainError::internal(e.to_string()))?;
+            Ok(())
+        });
         Self {
             store,
             vault_manager,
@@ -81,9 +88,6 @@ impl SyncService {
     }
 
     pub fn get_config(&self) -> DomainResult<SyncConfig> {
-        if self.vault_manager.is_unlocked() {
-            self.restore_auth()?;
-        }
         let device_id = self.get_or_create_device_id();
         self.store.with_conn(|conn| {
             let server_url: Option<String> = conn
@@ -294,39 +298,9 @@ impl SyncService {
     }
 
     fn cache_auth(&self, auth: &AuthResponse) -> DomainResult<()> {
-        let plaintext = Zeroizing::new(
-            serde_json::to_vec(auth).map_err(|e| DomainError::internal(e.to_string()))?,
-        );
-        let cipher = self
-            .vault_manager
-            .encrypt_record("sync_auth", "current", &plaintext)?;
-        self.put_setting(
-            "auth",
-            &serde_json::to_string(&cipher).map_err(|e| DomainError::internal(e.to_string()))?,
-        )?;
-        *self.cached_token.write() = Some(auth.access_token.clone());
-        *self.cached_refresh.write() = Some(auth.refresh_token.clone());
+        *self.cached_token.write() = Some(Zeroizing::new(auth.access_token.clone()));
+        *self.cached_refresh.write() = Some(Zeroizing::new(auth.refresh_token.clone()));
         *self.expires_at.write() = Some(auth.access_expires_at.clone());
-        Ok(())
-    }
-
-    fn restore_auth(&self) -> DomainResult<()> {
-        if self.cached_token.read().is_none() {
-            if let Some(value) = self.setting("auth")? {
-                let cipher: openshell_vault::RecordCipher = serde_json::from_str(&value)
-                    .map_err(|_| DomainError::validation("Invalid saved sync session"))?;
-                let plaintext = Zeroizing::new(self.vault_manager.decrypt_record(
-                    "sync_auth",
-                    "current",
-                    &cipher,
-                )?);
-                let auth: AuthResponse = serde_json::from_slice(&plaintext)
-                    .map_err(|_| DomainError::validation("Invalid saved sync session"))?;
-                *self.cached_token.write() = Some(auth.access_token);
-                *self.cached_refresh.write() = Some(auth.refresh_token);
-                *self.expires_at.write() = Some(auth.access_expires_at);
-            }
-        }
         Ok(())
     }
 
@@ -404,7 +378,6 @@ impl SyncService {
                 "Vault must be unlocked to perform sync",
             ));
         }
-        self.restore_auth()?;
         let config = self.get_config()?;
         let url = config
             .server_url
@@ -415,7 +388,7 @@ impl SyncService {
         let token = self.cached_token.read().clone().ok_or_else(|| {
             DomainError::new(ErrorCode::AuthFailed, "Not logged in to sync server")
         })?;
-        let mut client = SyncClient::new(&url, &config.device_id).with_access_token(token);
+        let mut client = SyncClient::new(&url, &config.device_id).with_access_token(token.as_str());
         let expiry = self.expires_at.read().clone();
         let expires_soon = expiry
             .as_deref()
@@ -430,7 +403,7 @@ impl SyncService {
                 self.cached_refresh.read().clone().ok_or_else(|| {
                     DomainError::new(ErrorCode::AuthFailed, "Please log in again")
                 })?;
-            let renewed = client.refresh(&refresh).await.map_err(network)?;
+            let renewed = client.refresh(refresh.as_str()).await.map_err(network)?;
             client.set_access_token(&renewed.access_token);
             self.cache_auth(&AuthResponse {
                 account_id: config.account_id.clone().unwrap_or_default(),

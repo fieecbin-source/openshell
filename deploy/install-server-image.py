@@ -102,7 +102,7 @@ def wait_ready(base):
     raise RuntimeError("The new OpenShell container did not become ready.")
 
 
-def verify_login(base, config):
+def verify_login(base, config, revoke_all=False):
     auth = request(base, "/v1/auth/login", {
         "email": config["SYNC_USERNAME"], "password": config["SYNC_PASSWORD"],
         "device": {"id": "ci-image-deployment", "name": "CI deployment verification", "platform": "linux",
@@ -116,7 +116,14 @@ def verify_login(base, config):
         if error.code != 404:
             raise
         sync = "awaiting_client_vault_initialization"
-    request(base, "/v1/auth/logout", {"all_devices": False}, token=token, device=device)
+    request(base, "/v1/auth/logout", {"all_devices": revoke_all}, token=token, device=device)
+    if revoke_all:
+        try:
+            request(base, "/v1/account", token=token, device=device)
+            raise RuntimeError("The old login session was not revoked.")
+        except urllib.error.HTTPError as error:
+            if error.code not in (401, 403):
+                raise
     return sync
 
 
@@ -279,6 +286,8 @@ def main():
     parser.add_argument("--legacy-dir-base64", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--deploy", action="store_true")
+    parser.add_argument("--revoke-sessions", action="store_true")
+    parser.add_argument("--rotate-password-if-empty", action="store_true")
     parser.add_argument("--public-url-base64", default="")
     args = parser.parse_args()
     raw = base64.b64decode(args.legacy_dir_base64).decode().strip()
@@ -300,6 +309,17 @@ def main():
                       "config_file_found": config_path is not None,
                       "legacy_location": "root-home" if legacy.is_relative_to(Path("/root")) else "other",
                       "image": args.image}), flush=True)
+    if args.rotate_password_if_empty:
+        public = config.get("SYNC_PUBLIC_URL")
+        if not public or not config.get("SYNC_USERNAME") or not config.get("SYNC_PASSWORD"):
+            raise SystemExit("Private HTTPS account configuration is required for password rotation.")
+        status = verify_login(public, config, revoke_all=True)
+        if status != "awaiting_client_vault_initialization":
+            raise SystemExit("Old sessions revoked. Password rotation stopped because encrypted sync keys already exist; preserve those keys before rotating.")
+        config["SYNC_PASSWORD"] = secrets.token_urlsafe(32)
+        deploy(legacy, args.image, containers, config, config_path)
+        print(json.dumps({"server_password_rotated": True, "old_sessions_revoked": True, "password_logged": False}), flush=True)
+        return
     if args.deploy:
         try:
             deploy(legacy, args.image, containers, config, config_path)
@@ -312,7 +332,7 @@ def main():
         try:
             public = config["SYNC_PUBLIC_URL"]
             assert request(public, "/readyz")["status"] == "ready"
-            verify_login(public, config)
+            sync_status = verify_login(public, config, revoke_all=args.revoke_sessions)
             for path, payload in [("/v1/auth/register", {"email": "probe@example.invalid", "password": "test-only-password", "device_name": "blocked-registration", "device_platform": "linux", "device_arch": "amd64", "device_public_key": "test-only"})]:
                 try:
                     request(public, path, payload)
@@ -320,7 +340,8 @@ def main():
                 except urllib.error.HTTPError as error:
                     if error.code not in (401, 403):
                         raise
-            print(json.dumps({"public_https_ready": True, "public_login": "passed", "public_registration": "blocked", "domain_logged": False}), flush=True)
+            print(json.dumps({"public_https_ready": True, "public_login": "passed", "public_registration": "blocked", "domain_logged": False,
+                              "old_sessions_revoked": args.revoke_sessions, "remote_vault_initialized": sync_status == "available"}), flush=True)
         except Exception as error:
             raise SystemExit("Private HTTPS verification failed (" + type(error).__name__ + ").") from None
 

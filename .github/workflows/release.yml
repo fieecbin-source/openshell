@@ -144,6 +144,22 @@ jobs:
       - name: Build desktop bundles
         run: pnpm tauri build ${{ matrix.args }} --bundles ${{ matrix.bundles }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify the shipped application starts with an empty profile
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = windows ]; then
+            executable=target/x86_64-pc-windows-msvc/release/OpenShell.exe
+          elif [ "${{ matrix.platform }}" = macos ]; then
+            executable=target/universal-apple-darwin/release/bundle/macos/OpenShell.app/Contents/MacOS/OpenShell
+          else
+            executable=target/x86_64-unknown-linux-gnu/release/OpenShell
+          fi
+          python scripts/check-factory-profile.py "$executable"
+
       - name: Package Windows portable zip
         if: matrix.platform == 'windows'
         shell: bash
@@ -152,7 +168,7 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/OpenShell.exe target/portable/OpenShell.exe
           touch target/portable/openshell.portable
           cp THIRD_PARTY_NOTICES.md target/portable/
-          powershell -Command "Compress-Archive -Path target/portable/* -DestinationPath target/portable-archives/OpenShell-portable.zip -Force"
+          powershell -Command "Compress-Archive -Path target/portable/OpenShell.exe,target/portable/openshell.portable,target/portable/THIRD_PARTY_NOTICES.md -DestinationPath target/portable-archives/OpenShell-portable.zip -Force"
 
       - name: Package macOS portable zip
         if: matrix.platform == 'macos'
@@ -160,34 +176,6 @@ jobs:
         run: |
           mkdir -p target/portable-archives
           (cd target/universal-apple-darwin/release/bundle/macos && zip -r -y "$GITHUB_WORKSPACE/target/portable-archives/OpenShell-portable.zip" OpenShell.app)
-
-      - name: Build Linux standalone server binary
-        if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          cargo build --release -p openshell-server --target x86_64-unknown-linux-gnu
-          VERSION=$(node scripts/version.mjs --print)
-          mkdir -p target/server-pkg/deploy artifacts
-          cp target/x86_64-unknown-linux-gnu/release/openshell-server target/server-pkg/
-          for file in Caddyfile systemd.env.example README.md .env.example docker-compose.yml compose.image.yml openshell-server.service; do
-            install -m 0644 "deploy/$file" target/server-pkg/deploy/
-          done
-          for file in deploy.sh install-server.sh install-server-image.py; do
-            install -m 0755 "deploy/$file" target/server-pkg/deploy/
-          done
-          cp docs/SYNC.md target/server-pkg/
-          tar -czf "artifacts/openshell-server-${VERSION}-linux-x86_64.tar.gz" -C target/server-pkg .
-          node --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { readFileSync, statSync, writeFileSync } from 'node:fs';
-          const version = JSON.parse(readFileSync('frontend/package.json', 'utf8')).version;
-          const name = `openshell-server-${version}-linux-x86_64.tar.gz`;
-          const path = `artifacts/${name}`;
-          writeFileSync('artifacts/assets-server-linux-x86_64.json', JSON.stringify({
-            platform: 'linux-server', arch: 'x86_64', version,
-            files: [{ name, size: statSync(path).size, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }],
-          }, null, 2));
-          NODE
 
       - name: Normalize asset names
         shell: bash
@@ -203,7 +191,9 @@ jobs:
       - name: Check release artifacts for local data
         env:
           OPENSHELL_PRIVATE_MARKERS: ${{ secrets.SYNC_PUBLIC_URL }}
-        run: node scripts/check-package.mjs artifacts
+        run: |
+          node scripts/check-package.mjs artifacts
+          python scripts/check-release-archives.py artifacts
 
       - uses: actions/upload-artifact@v4
         with:
@@ -279,7 +269,6 @@ jobs:
           overwrite_files: false
           files: |
             artifacts/OpenShell-*
-            artifacts/openshell-server-*
             artifacts/SHA256SUMS.txt
             artifacts/update-meta.json
 
