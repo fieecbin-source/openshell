@@ -12,7 +12,7 @@ import {
 } from "../lib/wallpapers";
 import { useDialogBehavior } from "../lib/useDialogBehavior";
 import { TerminalColorSettings } from "./settings/TerminalColorSettings";
-import { SettingsIcon } from "./ui/icons";
+import { ImageIcon, MountainIcon, SettingsIcon, SlidersIcon } from "./ui/icons";
 import { useVaultStore } from "../stores/vaultStore";
 
 const MAX_BACKGROUND_BYTES = 10 * 1024 * 1024;
@@ -307,7 +307,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
               <div className="p-4 rounded-2xl liquid-glass-card space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-base">🎛️</span>
+                    <SlidersIcon className="h-4 w-4 text-ink-secondary" />
                     <div>
                       <h4 className="font-bold text-xs text-ink ">
                         壁纸不透明度
@@ -376,7 +376,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <h3 className="font-bold text-sm text-ink  flex items-center gap-1.5">
-                      <span>🏔️</span> 精选电脑风景桌面壁纸
+                      <MountainIcon className="h-4 w-4" /> 精选电脑风景桌面壁纸
                     </h3>
                     <p className="text-[11px] text-ink-secondary  mt-0.5">
                       点击即可瞬间切换当前终端背景，支持高分辨率自然风光
@@ -576,7 +576,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
               {/* 3. 艺术渐变与质感壁纸备选 */}
               <div>
                 <h4 className="font-bold text-xs text-ink-secondary  mb-2 flex items-center gap-1.5">
-                  <span>🌌</span> 质感渐变微光备选
+                  <ImageIcon className="h-4 w-4" /> 质感渐变微光备选
                 </h4>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   {ARTISTIC_WALLPAPERS.map((art) => {

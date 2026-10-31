@@ -165,4 +165,16 @@ jobs:
           docker buildx imagetools create "${tags[@]}" \
             "$IMAGE@$(cat digests/amd64.txt)" "$IMAGE@$(cat digests/arm64.txt)"
           docker buildx imagetools inspect "$IMAGE:$VERSION"
+          python3 - <<'PY'
+          import json, os
+          image = os.environ['IMAGE']
+          version = os.environ['VERSION']
+          with open('image-reference.json', 'w') as output:
+              json.dump({'image': image, 'version': version, 'reference': image + ':' + version,
+                         'platforms': ['linux/amd64', 'linux/arm64']}, output)
+          PY
           echo "Published $IMAGE:$VERSION (amd64 and arm64)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: published-server-image
+          path: image-reference.json

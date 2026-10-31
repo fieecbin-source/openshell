@@ -28,10 +28,10 @@
 
 Many existing terminal clients (such as FinalShell, Xshell, MobaXterm, Termius) suffer from bloat, artificial bandwidth/speed limits behind paywalls, high memory consumption, or untrusted closed-source sync mechanisms. **OpenShell** is crafted specifically for DevOps engineers, backend developers, and systems administrators who demand speed, aesthetic simplicity, and uncompromising security:
 
-1. **⚡ Zero Speed Limits & Blazing Performance**: Powered by a Rust core + WebGL GPU accelerated rendering engine. Millisecond cold starts, fluid scrolling, and zero subscription speed throttling.
-2. **🎯 Clean, Minimalist & Focused**: Free of ads, intrusive telemetry, or commercial upsells. Focuses purely on terminal sessions, SFTP management, port tunneling, and real-time agentless metrics.
-3. **🔒 Zero-Knowledge End-to-End Encryption (E2EE)**: Host credentials and keys are encrypted locally using **Argon2id** and **AES-256-GCM**. Self-hosted sync servers only see opaque ciphertexts—even if the server database is compromised, your connection credentials remain unreadable.
-4. **🌐 True Cross-Platform Experience**: First-class packages for Windows, macOS (Universal: Apple Silicon & Intel), and Linux, including portable no-install zip releases.
+1. **Zero Speed Limits & Blazing Performance**: Powered by a Rust core + WebGL GPU accelerated rendering engine. Millisecond cold starts, fluid scrolling, and zero subscription speed throttling.
+2. **Clean, Minimalist & Focused**: Free of ads, intrusive telemetry, or commercial upsells. Focuses purely on terminal sessions, SFTP management, port tunneling, and real-time agentless metrics.
+3. **Zero-Knowledge End-to-End Encryption (E2EE)**: Host credentials and keys are encrypted locally using **Argon2id** and **AES-256-GCM**. Self-hosted sync servers only see opaque ciphertexts—even if the server database is compromised, your connection credentials remain unreadable.
+4. **True Cross-Platform Experience**: First-class packages for Windows, macOS (Universal: Apple Silicon & Intel), and Linux, including portable no-install zip releases.
 5. **🪶 Effortless Self-Hosted Cloud Sync**: A single standalone server binary supporting single-user automatic bootstrap mode without email requirements, ready for systemd or Docker deployment.
 
 ---
@@ -66,7 +66,7 @@ Many existing terminal clients (such as FinalShell, Xshell, MobaXterm, Termius) 
 
 ---
 
-## 📦 Download Packages
+## Download Packages
 
 Download the latest official releases from [GitHub Releases](https://github.com/fieecbin-source/openshell/releases):
 
@@ -84,7 +84,7 @@ Every release includes an official `SHA256SUMS.txt` checksum manifest.
 
 ---
 
-## 🚀 Quick Start: Self-Hosted Sync Server
+## Quick Start: Self-Hosted Sync Server
 
 Use a Linux x86_64 server binary, systemd and an existing HTTPS reverse proxy. Deployment transfers only server runtime files.
 
@@ -98,7 +98,11 @@ Use a Linux x86_64 server binary, systemd and an existing HTTPS reverse proxy. D
 # Leave deploy unchecked to build/test only; check it to install the server artifact.
 ```
 
-### Option 2: Docker Compose
+### Option 2: Docker Hub image (optional)
+
+Pull the server-only amd64 / arm64 image without a local compiler. See [Docker Hub deployment](docs/DOCKER.md).
+
+### Option 3: Build Docker Compose from source
 
 ```bash
 cd deploy
@@ -110,7 +114,7 @@ See the [personal server guide](docs/SYNC.md) for installation, domain/TLS setup
 
 ---
 
-## ⌨️ Useful Keyboard Shortcuts
+## ⌨Useful Keyboard Shortcuts
 
 | Shortcut | Description |
 | :--- | :--- |
@@ -125,7 +129,7 @@ See the [personal server guide](docs/SYNC.md) for installation, domain/TLS setup
 
 ---
 
-## 🛠️ Development & Contributing
+## 🛠Development & Contributing
 
 Please refer to our [CONTRIBUTING.md](CONTRIBUTING.md) guide for details on development setup, code standards, testing, and pull request procedures.
 

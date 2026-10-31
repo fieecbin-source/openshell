@@ -83,6 +83,8 @@ try:
     secret_before = docker("exec", run_id, "cat", "/data/.jwt_secret").stdout
     assert len(secret_before.strip()) >= 32
     docker("restart", run_id)
+    port = docker("port", run_id, "8080/tcp").stdout.decode().strip().rsplit(":", 1)[1]
+    base_url = "http://127.0.0.1:" + port
     ready()
     assert docker("exec", run_id, "cat", "/data/.jwt_secret").stdout == secret_before
     assert request("/v1/account", token=token)["account_id"] == account["account_id"]

@@ -7,6 +7,7 @@
 - CI/CD：[Deploy Server](../.github/workflows/deploy-server.yml) 只打包与传输服务端文件；普通 push 不写服务器，手动勾选 deploy 才安装。
 - 客户端使用 `https://自己的域名`、`SYNC_USERNAME`、`SYNC_PASSWORD` 登录，无需注册。
 - 当前桌面完整跨设备还原流程仍需接通，登录成功不能替代同步验收；具体限制见完整文档。
+- 可选：[Docker Hub 公共镜像](../docs/DOCKER.md)，只拉取运行，无需源码和编译环境。
 
 Docker 备选：
 

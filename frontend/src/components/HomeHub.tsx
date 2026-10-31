@@ -1,6 +1,6 @@
 import { GlassMaterial } from "./ui/GlassMaterial";
 import React, { useMemo, useState } from "react";
-import { FolderIcon, PlusIcon, ServerIcon, SearchIcon } from "./ui/icons";
+import { FolderIcon, KeyIcon, PlusIcon, ServerIcon, SearchIcon, ShieldIcon } from "./ui/icons";
 import { Button } from "./ui/Button";
 import { Field, Input } from "./ui/Field";
 import { Modal } from "./ui/Overlay";
@@ -331,13 +331,14 @@ export const HomeHub: React.FC<HomeHubProps> = ({
             {s.protocol === "serial" ? "SERIAL" : s.protocol.toUpperCase()}
           </span>
           <span
-            className={`rounded px-1.5 py-0.5 border ${
+            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 border ${
               isPublicKey
                 ? "bg-state-success/10 text-state-success border-state-success/30"
                 : "bg-line/5 text-ink-secondary border-line/15"
             }`}
           >
-            {isPublicKey ? "🛡️ 密钥" : "🔑 密码"}
+            {isPublicKey ? <ShieldIcon className="h-3 w-3" /> : <KeyIcon className="h-3 w-3" />}
+            {isPublicKey ? "密钥" : "密码"}
           </span>
           {group && (
             <span
@@ -665,12 +666,12 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                         </td>
                         <td className="py-2.5 px-4">
                           {isPublicKey ? (
-                            <span className="rounded bg-state-success/10 px-2 py-0.5 font-mono text-[10px] text-state-success">
-                              🛡️ 密钥
+                            <span className="inline-flex items-center gap-1 rounded bg-state-success/10 px-2 py-0.5 font-mono text-[10px] text-state-success">
+                              <ShieldIcon className="h-3 w-3" /> 密钥
                             </span>
                           ) : (
-                            <span className="rounded bg-line/5 px-2 py-0.5 font-mono text-[10px] text-ink-secondary">
-                              🔑 密码
+                            <span className="inline-flex items-center gap-1 rounded bg-line/5 px-2 py-0.5 font-mono text-[10px] text-ink-secondary">
+                              <KeyIcon className="h-3 w-3" /> 密码
                             </span>
                           )}
                         </td>

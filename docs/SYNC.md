@@ -2,6 +2,7 @@
 
 个人用户推荐使用 **Linux x86_64 + 单个 `openshell-server` 二进制 + systemd + 已有 HTTPS 反向代理**。
 服务端不需要桌面客户端、Node.js、前端页面、Tauri、GTK/WebKit 或外部数据库。
+Docker Hub 公共镜像是可选方式，拉取命令与持久化说明见 [Docker Hub 镜像部署](DOCKER.md)。
 
 ## 先区分部署、登录和真正同步
 

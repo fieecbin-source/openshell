@@ -28,10 +28,10 @@
 
 市面上的很多终端工具（如 FinalShell、Xshell、MobaXterm、Termius 等）存在功能臃肿、商业限速、按月收费、内存占用高或闭源同步安全隐患。**OpenShell** 专为追求极致性能与安全的数据中心运维、后端开发者与 DevOps 工程师打造：
 
-1. **⚡ 无限速与极致轻量**：基于 Rust + WebGL 硬件加速引擎，毫秒级冷启动，瞬时加载海量输出，绝无任何商业限速套路。
-2. **🎯 功能简约克制**：摒弃多余复杂杂乱的商业推广与过度包装，专注终端会话、SFTP 传输、端口转发与实时无侵入式监控。
-3. **🔒 零知识端到端加密 (E2EE)**：主机凭据与密钥本地使用 Argon2id + AES-256-GCM 硬件加密保护；自建服务端仅中继盲密文，哪怕数据库遭入侵也无法获知任何 IP 与密码。
-4. **🌐 跨平台开箱即用**：提供 Windows / macOS (Apple Silicon & Intel) / Linux 原生桌面端安装包与免安装便携版。
+1. **无限速与极致轻量**：基于 Rust + WebGL 硬件加速引擎，毫秒级冷启动，瞬时加载海量输出，绝无任何商业限速套路。
+2. **功能简约克制**：摒弃多余复杂杂乱的商业推广与过度包装，专注终端会话、SFTP 传输、端口转发与实时无侵入式监控。
+3. **零知识端到端加密 (E2EE)**：主机凭据与密钥本地使用 Argon2id + AES-256-GCM 硬件加密保护；自建服务端仅中继盲密文，哪怕数据库遭入侵也无法获知任何 IP 与密码。
+4. **跨平台开箱即用**：提供 Windows / macOS (Apple Silicon & Intel) / Linux 原生桌面端安装包与免安装便携版。
 5. **🪶 自建极简云同步**：单二进制服务端支持一键单用户初始化，免邮箱限制直接账号登录，配合 systemd 或 Docker 秒级部署。
 
 ---
@@ -66,7 +66,7 @@
 
 ---
 
-## 📦 客户端下载矩阵
+## 客户端下载矩阵
 
 前往 [GitHub Releases](https://github.com/fieecbin-source/openshell/releases) 获取最新正式版：
 
@@ -84,7 +84,7 @@
 
 ---
 
-## 🚀 自建同步服务端快速上手
+## 自建同步服务端快速上手
 
 个人用户推荐 Linux x86_64 二进制 + systemd + 已有 HTTPS 反向代理。部署仅传输服务端程序与配置，不上传前端或桌面客户端。
 
@@ -99,7 +99,12 @@
 # 客户端地址示例：https://sync.example.com，选择“登录”。
 ```
 
-### 方式 2：Docker Compose 容器化部署
+### 方式 2：Docker Hub 镜像（可选）
+
+提供仅含服务端的 amd64 / arm64 镜像，用户直接拉取运行，无需编译。
+镜像地址、运行命令、持久化与发布流程见 [Docker Hub 部署](docs/DOCKER.md)。
+
+### 方式 3：Docker Compose 源码构建
 
 ```bash
 cd deploy
@@ -111,7 +116,7 @@ docker compose up -d --build openshell-server
 
 ---
 
-## ⌨️ 常用快捷键速查
+## ⌨常用快捷键速查
 
 | 快捷键 | 功能操作 |
 | :--- | :--- |
@@ -126,7 +131,7 @@ docker compose up -d --build openshell-server
 
 ---
 
-## 🛠️ 本地开发与代码贡献
+## 🛠本地开发与代码贡献
 
 请参阅我们的 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细的开发环境准备、代码规范、测试验证与 PR 流程。
 

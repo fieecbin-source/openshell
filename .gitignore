@@ -77,6 +77,10 @@ docs/*
 !docs/RELEASING.md
 !docs/E2E_UPGRADE.md
 !docs/SYNC.md
+!docs/DOCKER.md
+!docs/assets/
+docs/assets/*
+!docs/assets/docker.svg
 # docs/ACCEPTANCE.md 含本机路径与演练记录，继续本地保留
 
 # Build artifacts & IDE assistant caches
