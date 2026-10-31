@@ -1,7 +1,8 @@
 //! 自研安装策略：退出应用 → 运行安装包。
 //!
 //! 各平台行为：
-//! * **Windows**：NSIS `.exe` 加 `/S` 静默安装（当前用户级，不触发 UAC）；
+//! * **Windows**：NSIS `.exe` 加 `/S` 安装，通过系统 `runas` 请求 UAC 授权，
+//!   以便写入 Program Files (x86)；取消授权时保留应用运行并返回错误。
 //!   `.msi` 走 `msiexec /i … /qn /norestart`（需要管理员权限，失败会提示手动安装）。
 //! * **macOS**：打开 `.dmg` 让用户把 App 拖进「应用程序」（未公证的包无法静默替换，
 //!   详见 docs/UPDATE.md「完整性保障与已知限制」），安装后由用户重新启动。
@@ -89,6 +90,10 @@ impl CommandRunner for SystemCommandRunner {
     }
 
     fn spawn_detached(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
+        #[cfg(windows)]
+        if extension_of(Path::new(&invocation.program)).as_deref() == Some("exe") {
+            return spawn_windows_installer(invocation);
+        }
         std::process::Command::new(&invocation.program)
             .args(&invocation.args)
             .spawn()
@@ -100,6 +105,45 @@ impl CommandRunner for SystemCommandRunner {
             })?;
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn spawn_windows_installer(invocation: &Invocation) -> Result<(), UpdaterError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let wide = |value: &std::ffi::OsStr| value.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let operation = wide(std::ffi::OsStr::new("runas"));
+    let program = wide(std::ffi::OsStr::new(&invocation.program));
+    // NSIS plans only contain the fixed /S switch, never shell commands or paths.
+    if invocation.args != ["/S"] {
+        return Err(UpdaterError::new(
+            UpdaterErrorKind::Install,
+            "unexpected Windows installer arguments",
+        ));
+    }
+    let parameters = wide(std::ffi::OsStr::new("/S"));
+    // All strings are NUL-terminated and live until ShellExecuteW returns. The
+    // installer filename is passed separately; it is never interpreted by a shell.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            program.as_ptr(),
+            parameters.as_ptr(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if result <= 32 {
+        return Err(UpdaterError::new(
+            UpdaterErrorKind::Install,
+            format!(
+                "Windows installer authorization was cancelled or launch failed (code {result})"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// 构造某平台的安装步骤（纯函数）。
@@ -420,6 +464,17 @@ mod tests {
             }
             other => panic!("unexpected step: {other:?}"),
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_elevation_rejects_unexpected_arguments_without_launching() {
+        let invocation =
+            Invocation::program_path(Path::new("C:/unused/setup.exe"), &["/unexpected"]);
+        let error = spawn_windows_installer(&invocation).expect_err("reject before requesting UAC");
+        assert!(error
+            .message
+            .contains("unexpected Windows installer arguments"));
     }
 
     #[test]

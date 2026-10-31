@@ -59,7 +59,8 @@ pnpm package:release --bundles nsis  # 指定格式
    连接信息（`<数据目录>/openshell.db` 里的主机地址、账号、SSH 公钥，以及本机用户名路径）
    当作黑名单，对 `frontend/dist` 和安装包二进制抽串比对，命中即失败。
 
-上传时只传 `artifacts/` 里的安装包与清单，不要传便携版 zip、不要传整个 `target/`：
+上传时只传 `artifacts/` 里的安装包与清单；便携包必须由 CI 从本次构建的可执行文件、
+便携标记和许可文件生成，不能压缩本机安装目录，也不能上传整个 `target/`：
 
 ```bash
 gh release upload v1.1.1 artifacts/* --clobber
@@ -68,6 +69,10 @@ gh release upload v1.1.1 artifacts/* --clobber
 > 用户数据只存在于 `<app_data_dir>`（Windows 为 `%APPDATA%\\dev.openshell.desktop`），
 > 由 `resolve_data_dir()` 强制与安装目录隔离，因此**任何安装包本身都不含连接信息**；
 > 在同一台机器上重装看到旧主机，属于读到了本机数据目录，不是被打进了包。
+
+发布前还必须通过 `node scripts/check-release-inputs.mjs`：拒绝本地环境文件和被跟踪的私有数据，
+并验证 Tauri 资源只包含明确允许的第三方许可文件。全新数据目录的主密码为未设置；
+覆盖安装保持用户已有密码与连接数据，不能在安装流程中重置或复制开发者的保险库。
 
 ---
 

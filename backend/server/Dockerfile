@@ -14,6 +14,7 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY backend/crates ./backend/crates
 COPY backend/server ./backend/server
 COPY backend/desktop ./backend/desktop
+COPY backend/xtask ./backend/xtask
 
 # Build server in release mode
 RUN cargo build --release -p openshell-server

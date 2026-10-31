@@ -440,7 +440,7 @@ pub async fn commit_v2(
             let mut current_head = head_seq as u64;
 
             for change in req.changes {
-                let existing: Option<(
+                type ExistingRecordRow = (
                     u64,
                     String,
                     u32,
@@ -451,7 +451,8 @@ pub async fn commit_v2(
                     Option<String>,
                     String,
                     String,
-                )> = tx
+                );
+                let existing: Option<ExistingRecordRow> = tx
                     .query_row(
                         "SELECT revision, record_type, schema_version, key_version, ciphertext, checksum, deleted, deleted_at, device_id, client_updated_at FROM record WHERE vault_id = ?1 AND record_id = ?2",
                         rusqlite::params![&vault_id, &change.record_id],
