@@ -1,0 +1,15 @@
+# Pull-only deployment. No source checkout or compiler is required.
+services:
+  openshell-server:
+    image: ${OPENSHELL_IMAGE:?Set OPENSHELL_IMAGE to the published Docker Hub image}
+    restart: unless-stopped
+    env_file:
+      - ./openshell.env
+    ports:
+      - "${SERVER_BIND_ADDRESS:-127.0.0.1}:${SERVER_PORT:-8085}:8080"
+    volumes:
+      - openshell-data:/data
+    stop_grace_period: 20s
+
+volumes:
+  openshell-data:

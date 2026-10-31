@@ -1,0 +1,168 @@
+name: Docker Hub Server Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/server/**'
+      - 'backend/crates/sync-protocol/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'deploy/docker-entrypoint.sh'
+      - 'scripts/smoke-server-image.py'
+      - '.dockerignore'
+      - '.github/workflows/publish-server-image.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Push the tested multi-platform image to Docker Hub'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+
+concurrency:
+  group: docker-hub-server-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      publish: ${{ steps.settings.outputs.publish }}
+      version: ${{ steps.settings.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: settings
+        name: Resolve version and publication settings
+        env:
+          WANT_PUBLISH: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$WANT_PUBLISH" >> "$GITHUB_OUTPUT"
+          if [ "$WANT_PUBLISH" = true ]; then
+            test -n "$DOCKERHUB_USERNAME" && test -n "$DOCKERHUB_TOKEN" || {
+              echo '::error::Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in Actions settings before publishing.'
+              exit 1
+            }
+            [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]+$ ]]
+          fi
+
+  image:
+    name: Build and test ${{ matrix.arch }} server image
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the server image for native runtime testing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: backend/server/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          tags: openshell-server:ci
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=docker-hub-server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-hub-server-${{ matrix.arch }}
+      - name: Test login, isolated contents and restart persistence
+        run: python3 scripts/smoke-server-image.py openshell-server:ci
+      - name: Save the tested image for review
+        if: needs.prepare.outputs.publish != 'true'
+        run: docker save openshell-server:ci | gzip > openshell-server-${{ matrix.arch }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: needs.prepare.outputs.publish != 'true'
+        with:
+          name: docker-server-${{ matrix.arch }}
+          path: openshell-server-${{ matrix.arch }}.tar.gz
+          retention-days: 7
+      - name: Log in to Docker Hub
+        if: needs.prepare.outputs.publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push the tested architecture
+        if: needs.prepare.outputs.publish == 'true'
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: backend/server/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: docker.io/${{ env.DOCKERHUB_USERNAME }}/openshell-server:sha-${{ github.sha }}-${{ matrix.arch }}
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=docker-hub-server-${{ matrix.arch }}
+          provenance: mode=min
+          sbom: true
+      - name: Record immutable image digest
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p digests
+          printf '%s' "$IMAGE_DIGEST" > digests/${{ matrix.arch }}.txt
+      - uses: actions/upload-artifact@v4
+        if: needs.prepare.outputs.publish == 'true'
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: digests/*.txt
+
+  publish:
+    name: Publish the multi-platform Docker Hub tags
+    needs: [prepare, image]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Combine the two tested architectures
+        env:
+          IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}/openshell-server
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo '::error::This version tag already exists; refusing to replace a published image. Bump the release version.'
+            exit 1
+          fi
+          tags=(-t "$IMAGE:$VERSION")
+          if [[ "$VERSION" != *-* ]]; then tags+=(-t "$IMAGE:latest"); fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$IMAGE@$(cat digests/amd64.txt)" "$IMAGE@$(cat digests/arm64.txt)"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          echo "Published $IMAGE:$VERSION (amd64 and arm64)" >> "$GITHUB_STEP_SUMMARY"
