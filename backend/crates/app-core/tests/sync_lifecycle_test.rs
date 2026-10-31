@@ -244,3 +244,48 @@ async fn personal_server_rejects_an_old_second_account() {
     assert_eq!(client.vault.status().unwrap().state, "uninitialized");
     task.abort();
 }
+
+#[tokio::test]
+async fn first_sync_preserves_an_existing_vault_with_a_different_local_password() {
+    let (url, _db, _dir, task) = server().await;
+    let a = AppServices::new_in_memory().unwrap();
+    a.vault
+        .init("original-local-password", false, None)
+        .unwrap();
+    let credential = a
+        .session
+        .create_credential(
+            "Existing credential".into(),
+            CredentialKind::Password,
+            Some("tester".into()),
+            "existing-connection-secret",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    a.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    let b = AppServices::new_in_memory().unwrap();
+    b.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    let credential = b.session.get_credential(&credential.id).await.unwrap();
+    let secret = SecretRepo::new(b.store.clone())
+        .get(&credential.secret_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        b.vault.manager().decrypt_secret(&secret).unwrap(),
+        b"existing-connection-secret"
+    );
+    a.vault.lock().unwrap();
+    a.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    a.vault.lock().unwrap();
+    a.vault
+        .unlock(Some("original-local-password"), false)
+        .unwrap();
+    assert_eq!(
+        a.vault.status().unwrap().state,
+        "unlocked",
+        "sync must not change the original local password"
+    );
+    task.abort();
+}
