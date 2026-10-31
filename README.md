@@ -86,24 +86,17 @@
 
 ## 🚀 自建同步服务端快速上手
 
-OpenShell 服务端极其轻量，支持在 1 核 512MB 内存的极小 VPS 上稳定运行：
+个人用户推荐 Linux x86_64 二进制 + systemd + 已有 HTTPS 反向代理。部署仅传输服务端程序与配置，不上传前端或桌面客户端。
+
+**当前状态：域名、账号、密码可用于登录；桌面端的跨设备解密与业务数据还原入口尚需接通，不能把登录成功当作完整同步完成。**
 
 ### 方式 1：Systemd 守护进程部署 (推荐)
 
 ```bash
-# 1. 下载解压服务端资产
-tar -xzvf openshell-server-*-linux-x86_64.tar.gz -C /opt/openshell-server
-cd /opt/openshell-server
-
-# 2. 配置环境变量
-cp deploy/.env.example deploy/.env
-vim deploy/.env
-# 设置 SYNC_USERNAME、SYNC_PASSWORD 与 PORT
-
-# 3. 注册并启动 systemd 服务
-sudo cp deploy/openshell-server.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now openshell-server
+# 先按完整指南创建 /opt/openshell/deploy/.env，设置自己的同步账号密码。
+# GitHub Actions → Deploy Server (Self-Hosted Sync) → Run workflow
+# 不勾选 deploy：只测试与构建；勾选 deploy：只上传并安装服务端产物。
+# 客户端地址示例：https://sync.example.com，选择“登录”。
 ```
 
 ### 方式 2：Docker Compose 容器化部署
@@ -111,10 +104,10 @@ sudo systemctl enable --now openshell-server
 ```bash
 cd deploy
 cp .env.example .env
-docker compose up -d
+docker compose up -d --build openshell-server
 ```
 
-完整自建指南、故障排查与端到端加密验证详见 [docs/SYNC.md](docs/SYNC.md)。
+完整的首次安装、域名 HTTPS、GitHub Secrets、CI/CD、Docker 迁移和同步限制详见 [个人服务端部署指南](docs/SYNC.md)。
 
 ---
 

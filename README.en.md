@@ -86,24 +86,16 @@ Every release includes an official `SHA256SUMS.txt` checksum manifest.
 
 ## 🚀 Quick Start: Self-Hosted Sync Server
 
-The sync server is lightweight and runs comfortably on a 512MB RAM VPS:
+Use a Linux x86_64 server binary, systemd and an existing HTTPS reverse proxy. Deployment transfers only server runtime files.
+
+**Current limitation:** domain, username and password support login; the desktop path still needs integration for cross-device vault import and applying decrypted business records. Successful login does not establish complete synchronization.
 
 ### Option 1: Systemd Service (Recommended)
 
 ```bash
-# 1. Download and extract server archive
-tar -xzvf openshell-server-*-linux-x86_64.tar.gz -C /opt/openshell-server
-cd /opt/openshell-server
-
-# 2. Configure environment
-cp deploy/.env.example deploy/.env
-vim deploy/.env
-# Configure SYNC_USERNAME, SYNC_PASSWORD, and PORT
-
-# 3. Enable and start systemd service
-sudo cp deploy/openshell-server.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now openshell-server
+# Prepare /opt/openshell/deploy/.env using the full guide.
+# Actions → Deploy Server (Self-Hosted Sync) → Run workflow.
+# Leave deploy unchecked to build/test only; check it to install the server artifact.
 ```
 
 ### Option 2: Docker Compose
@@ -111,10 +103,10 @@ sudo systemctl enable --now openshell-server
 ```bash
 cd deploy
 cp .env.example .env
-docker compose up -d
+docker compose up -d --build openshell-server
 ```
 
-For detailed sync server setup and zero-knowledge encryption verification, refer to [docs/SYNC.md](docs/SYNC.md).
+See the [personal server guide](docs/SYNC.md) for installation, domain/TLS setup, GitHub Secrets, CI/CD, Docker migration and current sync limitations.
 
 ---
 

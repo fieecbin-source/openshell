@@ -170,3 +170,6 @@ jobs:
           file: backend/server/Dockerfile
           push: false
           tags: openshell-server:ci-check
+
+      - name: Validate personal server Compose configuration
+        run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml config --quiet

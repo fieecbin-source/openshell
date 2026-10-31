@@ -8,8 +8,11 @@ services:
       - HOST=0.0.0.0
       - PORT=8080
       - DATABASE_URL=/data/openshell-server.db
+      - DATA_DIR=/data
       - ARTIFACTS_DIR=/data/artifacts
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-secure-random-string-at-least-32-chars-long}
+      - SYNC_USERNAME=${SYNC_USERNAME:?Set SYNC_USERNAME in deploy/.env}
+      - SYNC_PASSWORD=${SYNC_PASSWORD:?Set SYNC_PASSWORD in deploy/.env}
+      - JWT_SECRET=${JWT_SECRET:-}
       - BOOTSTRAP_TOKEN=${BOOTSTRAP_TOKEN:-}
       - ALLOW_MULTI_USER=${ALLOW_MULTI_USER:-false}
       - REQUIRE_INVITE=${REQUIRE_INVITE:-false}
@@ -17,10 +20,9 @@ services:
       - RELAY_ENABLED=${RELAY_ENABLED:-false}
       - RELAY_ALLOWED_NETS=${RELAY_ALLOWED_NETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32}
       - RUST_LOG=openshell_server=info,tower_http=info
-    # 直接对外暴露 API：宿主机高位端口 → 容器 8080。
-    # 默认 8085，可被 .env 的 SERVER_PORT 覆盖；不占用 80/443，避免与机器上已有站点冲突。
+    # 默认只绑定本机，交给已有的 HTTPS 反代；显式设置 SERVER_BIND_ADDRESS 才对外开放。
     ports:
-      - "${SERVER_PORT:-8085}:8080"
+      - "${SERVER_BIND_ADDRESS:-127.0.0.1}:${SERVER_PORT:-8085}:8080"
     healthcheck:
       # alpine 运行镜像自带 busybox wget，无需额外安装 curl
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]

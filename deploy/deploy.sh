@@ -138,7 +138,7 @@ fi
 
 # 4. Pull external images & build application container
 log_info "Pulling external base images..."
-${COMPOSE_CMD} pull caddy || true
+if [ "${ENABLE_TLS}" = "true" ]; then ${COMPOSE_CMD} pull caddy; fi
 
 log_info "Building openshell-server image..."
 ${COMPOSE_CMD} build --pull openshell-server
