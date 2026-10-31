@@ -85,7 +85,7 @@ jobs:
             platform: macos
             arch: universal
             args: '--target universal-apple-darwin'
-            bundles: 'dmg'
+            bundles: 'app,dmg'
             rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
             target: universal-apple-darwin
           - os: ubuntu-22.04
