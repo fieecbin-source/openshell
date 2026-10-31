@@ -39,7 +39,7 @@ jobs:
       publish: ${{ steps.settings.outputs.publish }}
       version: ${{ steps.settings.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Reject private deployment information in image source inputs
         env:
           OPENSHELL_PRIVATE_MARKERS: ${{ secrets.SYNC_PUBLIC_URL }}
@@ -76,7 +76,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - name: Build the server image for native runtime testing
         uses: docker/build-push-action@v7

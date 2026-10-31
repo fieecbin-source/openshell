@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-22.04
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate deployment helper
         run: python3 -m py_compile deploy/install-server-image.py
       - name: Verify the published image with isolated credentials and storage
