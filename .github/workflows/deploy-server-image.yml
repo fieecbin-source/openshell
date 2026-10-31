@@ -1,0 +1,74 @@
+name: Deploy Server (Docker Hub Image)
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Replace the old OpenShell runtime with the published Docker image'
+        type: boolean
+        default: false
+      image:
+        description: 'Published OpenShell server image (version tag or digest)'
+        required: true
+        default: 'docker.io/yilecbin/openshell-server:1.1.2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openshell-server-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Inspect or deploy the server image
+    runs-on: ubuntu-22.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment helper
+        run: python3 -m py_compile deploy/install-server-image.py
+      - name: Inspect or replace only the OpenShell runtime
+        env:
+          SERVER_HOST: ${{ secrets.DEPLOY_HOST || secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.DEPLOY_USER || secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.DEPLOY_PORT || secrets.SERVER_PORT || '22' }}
+          SERVER_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY || secrets.SERVER_SSH_KEY }}
+          SERVER_KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+          LEGACY_DIR: ${{ secrets.DEPLOY_PATH || secrets.DEPLOY_DIR || '/opt/openshell' }}
+          IMAGE: ${{ inputs.image }}
+          DEPLOY: ${{ inputs.deploy }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SERVER_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || { echo '::error::Invalid SSH username.'; exit 1; }
+          [[ "$SERVER_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo '::error::Invalid SSH hostname.'; exit 1; }
+          [[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || { echo '::error::Invalid SSH port.'; exit 1; }
+          [[ "$IMAGE" =~ ^(docker.io/)?yilecbin/openshell-server(:[a-zA-Z0-9_.-]+|@sha256:[a-f0-9]{64})$ ]] || { echo '::error::Use a published OpenShell server image.'; exit 1; }
+          test -n "$SERVER_SSH_KEY" || { echo '::error::Missing SSH key.'; exit 1; }
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/openshell_deploy_key
+          chmod 0600 ~/.ssh/openshell_deploy_key
+          if [ -n "$SERVER_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SERVER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SERVER_PORT" -H "$SERVER_HOST" > ~/.ssh/known_hosts
+          fi
+          chmod 0600 ~/.ssh/known_hosts
+          stage="/tmp/openshell-image-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh_args=(-p "$SERVER_PORT" -i ~/.ssh/openshell_deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
+          ssh "${ssh_args[@]}" "$SERVER_USER@$SERVER_HOST" "mkdir -m 0700 -p $stage"
+          scp -P "$SERVER_PORT" -i ~/.ssh/openshell_deploy_key -o StrictHostKeyChecking=yes \
+            deploy/install-server-image.py "$SERVER_USER@$SERVER_HOST:$stage/install-server-image.py"
+          legacy_b64=$(printf '%s' "$LEGACY_DIR" | base64 -w0)
+          ssh "${ssh_args[@]}" "$SERVER_USER@$SERVER_HOST" bash -s -- "$stage" "$legacy_b64" "$IMAGE" "$DEPLOY" <<'REMOTE'
+          set -euo pipefail
+          stage="$1"
+          args=("$stage/install-server-image.py" --legacy-dir-base64 "$2" --image "$3")
+          if [ "$4" = true ]; then args+=(--deploy); fi
+          if [ "$(id -u)" -eq 0 ]; then
+            python3 "${args[@]}"
+          else
+            sudo -n python3 "${args[@]}"
+          fi
+          REMOTE
