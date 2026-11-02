@@ -81,7 +81,7 @@ OpenShell-<version>-<platform>-<arch>.<ext>
 
 | 平台 | 行为 |
 | --- | --- |
-| Windows | NSIS `Setup.exe /S` 静默安装（当前用户级，无 UAC）；`.msi` 走 `msiexec /i … /qn /norestart`（需提权，失败提示手动） |
+| Windows | NSIS `Setup.exe /S` 静默安装；遇到系统错误 740 时通过 `ShellExecuteExW` 请求 UAC 授权，授权取消时保持应用运行并允许重试；`.msi` 走 `msiexec /i … /qn /norestart`（需提权，失败提示手动） |
 | macOS | 打开 `.dmg`，提示把 App 拖入「应用程序」（未公证的包无法静默替换） |
 | Linux | `.AppImage` 就地替换（先备份旧文件为 `.old` 再复制、补 755）后重启；`.deb` 用 `pkexec dpkg -i`，无 polkit 时提示手动 |
 

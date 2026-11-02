@@ -1,8 +1,7 @@
 //! 自研安装策略：退出应用 → 运行安装包。
 //!
 //! 各平台行为：
-//! * **Windows**：NSIS `.exe` 加 `/S` 安装，通过系统 `runas` 请求 UAC 授权，
-//!   以便写入 Program Files (x86)；取消授权时保留应用运行并返回错误。
+//! * **Windows**：NSIS `.exe` 加 `/S` 静默安装，需要提权时通过系统 UAC 确认；
 //!   `.msi` 走 `msiexec /i … /qn /norestart`（需要管理员权限，失败会提示手动安装）。
 //! * **macOS**：打开 `.dmg` 让用户把 App 拖进「应用程序」（未公证的包无法静默替换，
 //!   详见 docs/UPDATE.md「完整性保障与已知限制」），安装后由用户重新启动。
@@ -91,57 +90,65 @@ impl CommandRunner for SystemCommandRunner {
 
     fn spawn_detached(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
         #[cfg(windows)]
-        if extension_of(Path::new(&invocation.program)).as_deref() == Some("exe") {
-            return spawn_windows_installer(invocation);
+        if extension_of(Path::new(&invocation.program)).as_deref() == Some("exe")
+            && invocation.args != ["/S"]
+        {
+            return Err(UpdaterError::new(
+                UpdaterErrorKind::Install,
+                "unexpected Windows installer arguments",
+            ));
         }
-        std::process::Command::new(&invocation.program)
+        let result = std::process::Command::new(&invocation.program)
             .args(&invocation.args)
-            .spawn()
-            .map_err(|err| {
-                UpdaterError::new(
-                    UpdaterErrorKind::Install,
-                    format!("failed to launch installer: {err}"),
-                )
-            })?;
-        Ok(())
+            .spawn();
+        #[cfg(windows)]
+        if result
+            .as_ref()
+            .is_err_and(|err| err.raw_os_error() == Some(740))
+            && invocation.args == ["/S"]
+        {
+            return spawn_elevated_nsis(Path::new(&invocation.program));
+        }
+        result.map(|_| ()).map_err(installer_launch_error)
     }
 }
 
-#[cfg(windows)]
-fn spawn_windows_installer(invocation: &Invocation) -> Result<(), UpdaterError> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+fn installer_launch_error(err: std::io::Error) -> UpdaterError {
+    let hint = if cfg!(windows) && err.raw_os_error() == Some(1223) {
+        "已取消管理员授权，安装尚未开始。点击「重试」并允许系统授权后即可继续。"
+    } else {
+        "安装程序未能启动。请重试，或打开下载目录手动运行安装包。"
+    };
+    UpdaterError::new(
+        UpdaterErrorKind::Install,
+        format!("启动安装程序失败：{err}"),
+    )
+    .with_retryable(true)
+    .with_details(serde_json::json!({ "os_error": err.raw_os_error(), "hint": hint }))
+}
 
-    let wide = |value: &std::ffi::OsStr| value.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-    let operation = wide(std::ffi::OsStr::new("runas"));
-    let program = wide(std::ffi::OsStr::new(&invocation.program));
-    // NSIS plans only contain the fixed /S switch, never shell commands or paths.
-    if invocation.args != ["/S"] {
-        return Err(UpdaterError::new(
-            UpdaterErrorKind::Install,
-            "unexpected Windows installer arguments",
-        ));
-    }
-    let parameters = wide(std::ffi::OsStr::new("/S"));
-    // All strings are NUL-terminated and live until ShellExecuteW returns. The
-    // installer filename is passed separately; it is never interpreted by a shell.
-    let result = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            operation.as_ptr(),
-            program.as_ptr(),
-            parameters.as_ptr(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    } as isize;
-    if result <= 32 {
-        return Err(UpdaterError::new(
-            UpdaterErrorKind::Install,
-            format!(
-                "Windows installer authorization was cancelled or launch failed (code {result})"
-            ),
-        ));
+#[cfg(windows)]
+fn spawn_elevated_nsis(path: &Path) -> Result<(), UpdaterError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::core::w;
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+        lpVerb: w!("runas"),
+        lpFile: file.as_ptr(),
+        lpParameters: w!("/S"),
+        nShow: SW_SHOWNORMAL,
+        ..Default::default()
+    };
+    // 路径与固定参数独立传递；同步等待 UAC 结果，获准启动前不能让应用退出。
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(installer_launch_error(std::io::Error::last_os_error()));
     }
     Ok(())
 }
@@ -258,7 +265,9 @@ fn with_manual_fallback(err: UpdaterError, platform: Platform, asset_path: &Path
         _ => serde_json::Map::new(),
     };
     details.insert("manual_install".to_string(), serde_json::Value::Bool(true));
-    details.insert("hint".to_string(), serde_json::Value::String(hint));
+    details
+        .entry("hint")
+        .or_insert(serde_json::Value::String(hint));
     err.with_details(serde_json::Value::Object(details))
 }
 
@@ -367,7 +376,16 @@ impl InstallStrategy for SelfInstall {
                 PlanStep::Replace { from, to } => replace_file(&from, &to),
             };
             // 失败时补上「用户可以怎么办」，UI 据此显示「打开下载目录 / 手动安装」
-            result.map_err(|err| with_manual_fallback(err, platform, ctx.asset_path))?;
+            result.map_err(|err| {
+                crate::log::UpdateLog::new(ctx.log_dir).warn(
+                    "install_failed",
+                    &[
+                        ("version", ctx.version.to_string()),
+                        ("error", err.message.clone()),
+                    ],
+                );
+                with_manual_fallback(err, platform, ctx.asset_path)
+            })?;
         }
 
         let hint = manual_hint(platform, ctx.asset_path);
@@ -471,10 +489,74 @@ mod tests {
     fn windows_elevation_rejects_unexpected_arguments_without_launching() {
         let invocation =
             Invocation::program_path(Path::new("C:/unused/setup.exe"), &["/unexpected"]);
-        let error = spawn_windows_installer(&invocation).expect_err("reject before requesting UAC");
+        let error = SystemCommandRunner
+            .spawn_detached(&invocation)
+            .expect_err("reject before launch");
         assert!(error
             .message
             .contains("unexpected Windows installer arguments"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cancelled_elevation_is_retryable_and_survives_ipc_mapping() {
+        let error = installer_launch_error(std::io::Error::from_raw_os_error(1223));
+        let ipc: openshell_core_domain::DomainError = error.into();
+        assert!(ipc.retryable);
+        let details = ipc.details.expect("details");
+        assert_eq!(details["os_error"], 1223);
+        assert!(details["hint"]
+            .as_str()
+            .unwrap()
+            .contains("已取消管理员授权"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn elevated_launch_rejects_missing_installer_without_success() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let error = spawn_elevated_nsis(&dir.path().join("不存在的安装包.exe"))
+            .expect_err("missing installer must not report launch success");
+        assert_eq!(error.kind, UpdaterErrorKind::Install);
+        assert!(error.details.unwrap()["os_error"].is_number());
+    }
+
+    #[tokio::test]
+    async fn launch_failure_is_written_to_update_log() {
+        struct FailedRunner;
+        impl CommandRunner for FailedRunner {
+            fn run(&self, _: &Invocation) -> Result<(), UpdaterError> {
+                Err(installer_launch_error(std::io::Error::from_raw_os_error(
+                    740,
+                )))
+            }
+            fn spawn_detached(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
+                self.run(invocation)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let name = match Platform::current().unwrap() {
+            Platform::Windows => "OpenShell.exe",
+            Platform::Macos => "OpenShell.dmg",
+            Platform::Linux => "OpenShell.deb",
+        };
+        let prepare = prepare_ok();
+        let ctx = InstallContext {
+            asset_path: Path::new(name),
+            asset_name: name,
+            version: "1.1.4",
+            log_dir: dir.path(),
+            prepare: Some(&prepare),
+            portable: false,
+        };
+        let error = SelfInstall::new(Arc::new(FailedRunner), None)
+            .install(&ctx)
+            .await
+            .expect_err("launch failed");
+        assert_eq!(error.kind, UpdaterErrorKind::Install);
+        let log = std::fs::read_to_string(dir.path().join("updater.log")).unwrap();
+        assert!(log.contains("install_failed"));
+        assert!(log.contains("740"));
     }
 
     #[test]

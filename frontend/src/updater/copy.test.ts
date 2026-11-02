@@ -61,6 +61,15 @@ describe("updater copy", () => {
     );
   });
 
+  it("shows the specific Chinese installation hint from the backend", () => {
+    const hint = "已取消管理员授权，安装尚未开始。请重试。";
+    expect(describeUpdateError({
+      code: "UPDATE_INSTALL_FAILED",
+      message: "os error 1223",
+      details: { os_error: 1223, hint },
+    })).toBe(hint);
+  });
+
   it("formats sizes, speeds and remaining time", () => {
     expect(formatBytes(0)).toContain("0");
     expect(formatBytes(1024 * 1024 * 12)).toContain("12");

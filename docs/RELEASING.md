@@ -2,6 +2,8 @@
 
 面向维护者：从「准备发版」到「用户收到更新」的全部步骤。全程不需要 Tauri 升级签名密钥。
 
+每次发布必须递增版本号并新建 GitHub Release。保留旧版本、标签和全部资产，不覆盖同名文件；已发布版本需要修复时另发新版本。更新源分支通过追加提交维护，禁止强制推送。
+
 ---
 
 ## 0. 一次性准备
@@ -63,7 +65,7 @@ pnpm package:release --bundles nsis  # 指定格式
 便携标记和许可文件生成，不能压缩本机安装目录，也不能上传整个 `target/`：
 
 ```bash
-gh release upload v1.1.1 artifacts/* --clobber
+gh release create v1.1.5 artifacts/OpenShell-* artifacts/SHA256SUMS.txt artifacts/update-meta.json artifacts/latest.json --draft --notes-file artifacts/release-notes.md
 ```
 
 > 用户数据只存在于 `<app_data_dir>`（Windows 为 `%APPDATA%\\dev.openshell.desktop`），
@@ -90,12 +92,12 @@ git push origin main --tags
 1. **verify**：三处版本一致 + tag 与版本匹配 + CHANGELOG 有对应小节；
 2. **build**（三平台矩阵）：构建 → 把产物改名为
    `OpenShell-<version>-<platform>-<arch>.<ext>` → 上传 artifacts；
-3. **publish**：按 Conventional Commits 生成分类说明（新增 / 改进 / 修复 / 破坏性变更）→
+3. **publish**：从 `CHANGELOG.md` 当前版本小节生成中文发布说明 →
    合并生成 `SHA256SUMS.txt`、`update-meta.json`、`latest.json` →
    创建 **draft** Release 并上传资产。
 
-> 如果说明分类效果不理想，可在工作流日志里找到 `scripts/release.mjs notes` 的输出，
-> 本地用 `node scripts/release.mjs notes --from v1.0.1` 复现后手工修改草稿正文。
+> 发布前先整理当前版本的中文日志，再运行 `node scripts/release.mjs notes`。
+> `--from v1.0.1` 仅生成提交历史草稿，不用于正式发布；客户端优先显示发布页正文，正文为空时才回退到元数据说明。
 
 ---
 
@@ -194,7 +196,7 @@ push tag v1.1.0
 
 ### 6.4 `updater-meta` 分支与分支保护
 
-同步使用 `git push origin updater-meta --force`（该分支只承载一个文件，用孤儿提交保持瘦身）。
+同步在现有 `updater-meta` 分支上追加提交，并使用普通推送保留历史；不得重写该分支或覆盖旧版 Release。
 因此**必须**满足以下其一，否则同步会 422/失败：
 
 - 不把 `updater-meta` 纳入分支保护；或

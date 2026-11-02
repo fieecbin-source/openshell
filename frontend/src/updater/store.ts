@@ -211,7 +211,7 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
 
     install: async () => {
       const current = get().state;
-      if (current.kind !== "ready") return;
+      if (current.kind !== "ready" && current.kind !== "install_failed") return;
       const result: UpdateCheckResult = current.result;
       await api
         .installUpdate(current.path, result.asset!, result.latest_version)

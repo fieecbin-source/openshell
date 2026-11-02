@@ -127,6 +127,9 @@ jobs:
       - name: Updater Copy Centralization
         run: node scripts/check-updater-copy.mjs
 
+      - name: Release Notes Tests
+        run: node --test scripts/release.test.mjs
+
       - name: Frontend Lint
         run: pnpm lint
 

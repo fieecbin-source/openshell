@@ -173,7 +173,7 @@ impl UpdateService {
             ],
         );
 
-        let fetched = self.fetch_release(&cfg, http.clone(), &state).await;
+        let fetched = self.fetch_release(&cfg, http.clone(), &state, manual).await;
         let (release, etag) = match fetched {
             Ok(FetchResult::NotModified) => {
                 let Some(cached) = state.cached_result.clone() else {
@@ -292,11 +292,13 @@ impl UpdateService {
         cfg: &UpdateConfig,
         http: Arc<dyn HttpClient>,
         state: &UpdaterState,
+        manual: bool,
     ) -> Result<FetchResult, UpdaterError> {
         let chain = self.build_chain(cfg, http);
         let mut request = SourceRequest {
             channel: cfg.channel,
-            etag: state.etag.clone(),
+            // 手动检查也刷新附件说明，避免 304 一直复用修订前的缓存。
+            etag: if manual { None } else { state.etag.clone() },
         };
 
         let outcome = chain.fetch(&request).await?;
@@ -364,11 +366,17 @@ impl UpdateService {
             .and_then(|meta| meta.min_supported_version.clone())
             .or_else(|| release.meta.min_supported_version.clone());
 
-        let notes_markdown = declared
-            .as_ref()
-            .and_then(|meta| meta.notes.clone())
-            .or_else(|| release.meta.notes_markdown.clone())
-            .unwrap_or_else(|| release.notes_markdown.clone());
+        // 发布页可在发版后校订；静态附件中的旧说明不能覆盖人工修正。
+        let notes_markdown = if !release.notes_markdown.trim().is_empty() {
+            release.notes_markdown.clone()
+        } else {
+            declared
+                .as_ref()
+                .and_then(|meta| meta.notes.clone())
+                .filter(|notes| !notes.trim().is_empty())
+                .or_else(|| release.meta.notes_markdown.clone())
+                .unwrap_or_default()
+        };
 
         let has_update =
             version::is_update_available(&latest, &self.current_version, cfg.allow_downgrade);

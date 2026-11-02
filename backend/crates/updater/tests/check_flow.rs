@@ -41,6 +41,7 @@ const SUMS_URL: &str =
 struct RoutedClient {
     routes: Mutex<HashMap<String, Vec<HttpResponse>>>,
     calls: Mutex<Vec<String>>,
+    etags: Mutex<Vec<Option<String>>>,
 }
 
 impl RoutedClient {
@@ -48,6 +49,7 @@ impl RoutedClient {
         Self {
             routes: Mutex::new(HashMap::new()),
             calls: Mutex::new(Vec::new()),
+            etags: Mutex::new(Vec::new()),
         }
     }
 
@@ -82,6 +84,9 @@ impl RoutedClient {
 impl HttpClient for RoutedClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, UpdaterError> {
         self.calls.lock().unwrap().push(request.url.clone());
+        if request.url == API_URL {
+            self.etags.lock().unwrap().push(request.etag.clone());
+        }
         let mut routes = self.routes.lock().unwrap();
         match routes.get_mut(&request.url) {
             Some(queue) if !queue.is_empty() => {
@@ -223,6 +228,23 @@ async fn no_update_when_versions_equal() {
 }
 
 #[tokio::test]
+async fn empty_release_body_falls_back_to_metadata_notes() {
+    let h = harness();
+    h.client
+        .route(API_URL, response(200, &[], &release_body(true, "  ")));
+    h.client.route(
+        META_URL,
+        response(200, &[], r#"{"notes":"- 中文备用说明"}"#),
+    );
+    let outcome = h
+        .service
+        .check(&UpdateConfig::default(), true)
+        .await
+        .expect("check");
+    assert!(outcome.result.notes_html.contains("中文备用说明"));
+}
+
+#[tokio::test]
 async fn automatic_check_hits_cache_within_ttl() {
     let h = harness();
     happy_routes(&h.client);
@@ -254,6 +276,7 @@ async fn automatic_check_hits_cache_within_ttl() {
         .expect("third");
     assert!(!third.from_cache);
     assert_eq!(h.client.call_count(API_URL), 2);
+    assert_eq!(*h.client.etags.lock().unwrap(), vec![None, None]);
 }
 
 #[tokio::test]
@@ -265,15 +288,26 @@ async fn conditional_request_reuses_cached_result_on_304() {
         .await
         .expect("first check");
 
-    // 第二次强制请求，服务端返回 304（ETag 未变）
+    // 自动检查过期后发送 ETag，服务端返回 304。
+    let mut state = h.service.state();
+    state.last_check_at_ms = Some(0);
+    std::fs::write(
+        h.dir.path().join("state.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
     h.client
         .replace_route(API_URL, response(304, &[("etag", "\"v1\"")], ""));
     let outcome = h
         .service
-        .check(&UpdateConfig::default(), true)
+        .check(&UpdateConfig::default(), false)
         .await
         .expect("second check");
     assert!(outcome.from_cache);
+    assert_eq!(
+        *h.client.etags.lock().unwrap(),
+        vec![None, Some("\"v1\"".to_string())]
+    );
     assert_eq!(h.client.call_count(API_URL), 2);
     assert!(outcome.result.has_update);
     assert_eq!(outcome.result.latest_version, "1.1.0");
@@ -332,10 +366,10 @@ async fn mandatory_flag_and_minimum_version_from_meta() {
         outcome.result.min_supported_version.as_deref(),
         Some("1.0.5")
     );
-    // update-meta 的说明优先于 Release 正文
-    assert!(outcome.result.notes_html.contains("安全修复"));
-    assert!(!outcome.result.notes_html.contains("Release 正文"));
-    // 远端强制标记仍尊重用户的跳过选择。
+    // 人工校订的正文优先，强更策略仍来自元数据。
+    assert!(outcome.result.notes_html.contains("Release 正文"));
+    assert!(!outcome.result.notes_html.contains("安全修复"));
+    // 远端强制标记仍尊重用户的跳过选择
     h.service.skip_version("1.1.0").expect("skip");
     let again = h
         .service

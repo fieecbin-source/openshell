@@ -148,4 +148,4 @@ run(process.execPath, [
 ]);
 
 console.log(`\n\u2714 干净安装包已生成：${outDir}/（只包含安装包与清单，不含任何本机连接信息）`);
-console.log(`  上传命令示例：gh release upload v${version} ${outDir}/* --clobber`);
+console.log(`  请为 v${version} 新建 Release；保留旧版本，禁止使用 --clobber 覆盖发布资产。`);

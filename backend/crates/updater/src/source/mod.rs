@@ -31,7 +31,7 @@ pub struct SourceAsset {
 pub struct SourceMeta {
     pub mandatory: bool,
     pub min_supported_version: Option<String>,
-    /// 说明文本覆盖（`update-meta.json` 里可放更精炼的说明）。
+    /// 数据源正文为空时使用的备用说明。
     pub notes_markdown: Option<String>,
 }
 

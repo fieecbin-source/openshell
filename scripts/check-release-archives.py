@@ -14,7 +14,7 @@ for value in os.environ.get("OPENSHELL_PRIVATE_MARKERS", "").splitlines():
         if urlsplit(value.strip()).hostname:
             markers.add(urlsplit(value.strip()).hostname)
 patterns = [marker.encode(encoding).lower() for marker in markers for encoding in ("utf-8", "utf-16-le")]
-private_path = re.compile(r"(^|/)(?:\.env(?:\.[^/]*)?|[^/]+\.env|vault\.json|factory-state\.json|(?:profiles|backups|logs|userdata|indexeddb)(?:/|$))|\.(?:db(?:-wal|-shm)?|sqlite3?|osvault|pem|key|log)$", re.I)
+private_path = re.compile(r"(^|/)(?:\.env(?:\.[^/]*)?|[^/]+\.env|vault\.json|factory-state\.json|(?:profiles|backups|logs|userdata|indexeddb|cache|caches|\.cache|webview|ebwebview|local storage|session storage|user data)(?:/|$))|\.(?:db(?:-wal|-shm)?|sqlite3?|osvault|pem|key|log|har|pcap)$", re.I)
 problems = []
 scanned = 0
 
@@ -32,7 +32,7 @@ for arg in sys.argv[1:]:
         raise SystemExit("Missing client release audit input.")
     files = [target] if target.is_file() else [p for p in target.rglob("*") if p.is_file()]
     for path in files:
-        inspect(path.name, path.read_bytes())
+        inspect(path.name if target.is_file() else path.relative_to(target).as_posix(), path.read_bytes())
         if path.suffix.lower() == ".zip":
             with zipfile.ZipFile(path) as archive:
                 for item in archive.infolist():

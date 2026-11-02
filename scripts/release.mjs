@@ -8,7 +8,7 @@
  *   node scripts/release.mjs assets  --root target --version 1.2.3 --platform windows --arch x86_64 --out artifacts
  *   node scripts/release.mjs manifest --dir artifacts --version 1.2.3 --tag v1.2.3 [--mandatory] [--min 1.0.0]
  *
- * 所有子命令都不访问网络（`notes` 只读本地 git 历史），可在 CI 与本地复现。
+ * 所有子命令都不访问网络（`notes` 读取中文日志或显式请求的提交草稿），可在 CI 与本地复现。
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -123,6 +123,21 @@ function runNotes() {
   const from = arg("from");
   const fromFile = arg("from-file");
   const version = appVersion();
+
+  // 正式发布使用人工整理的中文日志；提交历史仅用于显式请求的草稿。
+  if (!from && !fromFile) {
+    const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+    const sections = changelog.split(/^##\s+/m).slice(1);
+    const section = sections.find((entry) => entry.startsWith(`[${version}]`));
+    if (!section) fail(`CHANGELOG.md 中没有 ${version} 的中文更新说明`);
+    const body = section.slice(section.indexOf("\n") + 1).trim();
+    if (!/[\u4e00-\u9fff]/.test(body)) fail("发布说明必须包含人工整理的中文内容");
+    const text = `## ${APP_NAME} ${version}\n\n${body}\n`;
+    const out = arg("out");
+    if (out) writeFileSync(resolve(root, String(out)), text, "utf8");
+    else process.stdout.write(text);
+    return;
+  }
 
   let commits;
   if (fromFile) {
@@ -266,6 +281,7 @@ function runManifest() {
     published_at: new Date().toISOString(),
     mandatory: meta.mandatory,
     min_supported_version: meta.min_supported_version,
+    notes: meta.notes,
     release_page: `https://github.com/fieecbin-source/openshell/releases`,
     assets: files.map((file) => {
       const fragment = fragments.find((f) => f.files.some((x) => x.name === file.name)) ?? {};

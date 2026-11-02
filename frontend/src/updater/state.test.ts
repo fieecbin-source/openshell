@@ -136,6 +136,9 @@ describe("update state machine", () => {
       retryable: false,
     });
     expect(installFailed.kind).toBe("install_failed");
+    expect(installFailed).toMatchObject({ path: "/tmp/x.exe" });
+    expect(reduce(installFailed, { type: "install_failed", error: "cancelled", retryable: true }))
+      .toMatchObject({ kind: "install_failed", path: "/tmp/x.exe" });
   });
 
   it("dismissing clears transient states but keeps a pending update", () => {

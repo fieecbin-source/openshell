@@ -177,13 +177,23 @@ impl From<UpdaterError> for DomainError {
             UpdaterErrorKind::Io => ErrorCode::Io,
             UpdaterErrorKind::NotConfigured | UpdaterErrorKind::Internal => ErrorCode::Unsupported,
         };
-        DomainError::new(code, err.message)
-            .with_retryable(err.retryable)
-            .with_details(serde_json::json!({
+        let mut details = match err.details {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        details.extend(
+            serde_json::json!({
                 "updater_kind": err.kind,
                 "status": err.status,
                 "retry_after_ms": err.retry_after_ms,
                 "reset_at_ms": err.reset_at_ms,
-            }))
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        DomainError::new(code, err.message)
+            .with_retryable(err.retryable)
+            .with_details(serde_json::Value::Object(details))
     }
 }

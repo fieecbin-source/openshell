@@ -31,7 +31,7 @@ export type UpdateState =
   | { kind: "ready"; result: UpdateCheckResult; path: string }
   | { kind: "download_failed"; result: UpdateCheckResult; error: unknown; retryable: boolean }
   | { kind: "verify_failed"; result: UpdateCheckResult; error: unknown }
-  | { kind: "install_failed"; result: UpdateCheckResult; error: unknown; retryable: boolean };
+  | { kind: "install_failed"; result: UpdateCheckResult; path: string; error: unknown; retryable: boolean };
 
 export type UpdateEvent =
   | { type: "check_started"; manual: boolean }
@@ -108,10 +108,10 @@ export function reduce(state: UpdateState, event: UpdateEvent): UpdateState {
 
     case "install_failed": {
       const result = currentResult(state);
-      if (!result) {
+      if (!result || (state.kind !== "ready" && state.kind !== "install_failed")) {
         return { kind: "check_failed", error: event.error, retryable: event.retryable };
       }
-      return { kind: "install_failed", result, error: event.error, retryable: event.retryable };
+      return { kind: "install_failed", result, path: state.path, error: event.error, retryable: event.retryable };
     }
 
     case "dismissed":

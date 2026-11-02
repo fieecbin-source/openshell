@@ -1,6 +1,6 @@
 # OpenShell {{version}}
 
-> 由 `node scripts/release.mjs notes --from <上一个 tag>` 生成初稿，**发布前请人工校对**：
+> 由 `node scripts/release.mjs notes` 从当前版本的中文 CHANGELOG 生成，**发布前请人工校对**：
 > 删除内部重构条目、补上用户可感知的细节，并检查「升级提示」是否仍然成立。
 
 ## 更新亮点

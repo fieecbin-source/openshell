@@ -26,7 +26,7 @@ export const UPDATE_COPY = {
     mandatoryTitle: "此版本必须升级",
     mandatoryBody: "升级前会自动备份您的连接数据，安装完成后重新打开即可继续使用。",
     releaseNotesFallback: "本次发布没有提供更新说明。",
-    manualDownloadHint: "该版本没有提供可自动安装的安装包，请前往 Release 页面手动下载。",
+    manualDownloadHint: "该版本没有提供可自动安装的安装包，请前往版本发布页手动下载。",
     unsupportedPlatformHint: "尚未发布适配当前系统的安装包。",
     skippedHint: "你已跳过此版本，手动检查才会再次提示。",
   },
@@ -41,7 +41,7 @@ export const UPDATE_COPY = {
     skip: "跳过此版本",
     installNow: "立即重启安装",
     downloadManually: "手动下载",
-    openRelease: "打开 Release 页面",
+    openRelease: "打开版本发布页",
     openLogs: "打开日志目录",
     backupNow: "立即备份数据",
     openBackups: "打开备份目录",
@@ -135,11 +135,11 @@ export const UPDATE_COPY = {
 /** 更新相关的错误码 → 面向用户的说明（补充 `lib/errors.ts` 的通用映射）。 */
 export const UPDATE_ERROR_COPY: Record<string, string> = {
   UPDATE_CHECK_FAILED: "暂时连不上更新服务器，请检查网络或代理设置后重试。",
-  UPDATE_ASSET_NOT_FOUND: "这个版本还没有发布适配当前系统的安装包，可打开 Release 页面手动下载。",
+  UPDATE_ASSET_NOT_FOUND: "这个版本还没有发布适配当前系统的安装包，可打开版本发布页手动下载。",
   UPDATE_CHECKSUM_MISMATCH: "安装包内容校验未通过，可能下载损坏或被篡改，已删除临时文件。",
   UPDATE_CHECKSUM_MISSING: "该版本没有提供可用的安装包校验值，为保证安全已禁用自动安装，请手动下载。",
   UPDATE_INSUFFICIENT_DISK: "磁盘剩余空间不足，请清理后重试（下载与解压约需安装包体积的 1.2 倍）。",
-  UPDATE_INSTALL_FAILED: "安装程序没能启动，可以重试；若仍失败，请在「打开 Release 页面」里手动安装。",
+  UPDATE_INSTALL_FAILED: "安装程序未能启动，请重试并允许系统授权；若仍失败，可打开下载目录手动运行安装包。",
   UPDATE_DOWNLOAD: "安装包下载失败，请检查网络后重试（已下载的部分会保留续传）。",
   UPDATE_SIGNATURE: "安装包签名校验未通过，已阻止安装，请从官方渠道重新下载。",
   SCHEMA_NEWER_THAN_APP: "本地数据由更高版本的 OpenShell 写入，当前版本不会覆盖它，请升级客户端。",
@@ -154,7 +154,11 @@ export const UPDATE_ERROR_COPY: Record<string, string> = {
  * 两者都没有可用信息时用更新场景的兜底文案（比「客户端出现未知问题」更贴合语境）。
  */
 export function describeUpdateError(error: unknown, fallback?: string): string {
-  const { code, message } = parseIpcError(error);
+  const { code, message, details } = parseIpcError(error);
+  if (code === "UPDATE_INSTALL_FAILED" && details && typeof details === "object") {
+    const hint = (details as { hint?: unknown }).hint;
+    if (typeof hint === "string" && hint.trim()) return hint;
+  }
   if (code && UPDATE_ERROR_COPY[code]) {
     return UPDATE_ERROR_COPY[code];
   }

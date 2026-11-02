@@ -22,7 +22,7 @@ pub struct ReleaseMetaFile {
     pub mandatory: bool,
     #[serde(default)]
     pub min_supported_version: Option<String>,
-    /// 覆盖 Release 正文的精简说明（Markdown）。
+    /// Release 正文为空时使用的说明（Markdown）。
     #[serde(default)]
     pub notes: Option<String>,
     #[serde(default)]
