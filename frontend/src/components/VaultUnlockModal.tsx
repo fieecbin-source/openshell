@@ -34,6 +34,8 @@ export const VaultUnlockModal: React.FC = () => {
     }
   };
 
+  // overlayZClassName 用 z-[70]：必须盖在会话弹窗（z-50）之上，
+  // 否则「请先解锁」的提示下面根本没有解锁入口
   return (
     <Modal
       open
@@ -41,6 +43,7 @@ export const VaultUnlockModal: React.FC = () => {
       title="解锁 OpenShell 保险库"
       description="请输入你为本机设置的主密码。"
       widthClassName="w-full max-w-[420px]"
+      overlayZClassName="z-[70]"
       footer={
         <Button variant="primary" type="submit" form="vault-unlock-form" loading={isLoading}>
           {isLoading ? "处理中..." : "解锁保险库"}

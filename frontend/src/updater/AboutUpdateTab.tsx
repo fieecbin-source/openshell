@@ -116,6 +116,21 @@ export const AboutUpdateTab: React.FC = () => {
         </div>
       )}
 
+      {/*
+        上次自动升级的失败原因（Windows 上「先卸载再安装」在应用退出后由脚本完成，
+        结果只能落盘，下次启动读出来展示，否则用户不知道要不要手动装一次）
+      */}
+      {runtime?.last_error && (
+        <div className="rounded-xl border border-[#ff9f0a]/30 bg-[#ff9f0a]/[0.08] px-3 py-2.5">
+          <p className="text-[11px] font-semibold text-[#1d1d1f]">
+            {UPDATE_COPY.about.lastErrorPrefix}
+          </p>
+          <p className="mt-0.5 break-all text-[10px] leading-relaxed text-[#5c3d00]">
+            {runtime.last_error}
+          </p>
+        </div>
+      )}
+
       {/* 2. 检查更新条 */}
       <Card className="flex items-center justify-between gap-3">
         <div className="min-w-0">

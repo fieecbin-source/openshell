@@ -14,6 +14,8 @@ export interface ModalProps {
   description?: ReactNode;
   footer?: ReactNode;
   widthClassName?: string;
+  /** 覆盖层层级，默认 `z-50`；解锁保险库这类「必须盖住其他弹窗」的场景传更高值 */
+  overlayZClassName?: string;
   children?: ReactNode;
 }
 
@@ -24,6 +26,7 @@ export function Modal({
   description,
   footer,
   widthClassName = "w-full max-w-[520px]",
+  overlayZClassName = "z-50",
   children,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -32,7 +35,10 @@ export function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 p-6 backdrop-blur-[2px]"
+      className={cn(
+        "fixed inset-0 flex items-center justify-center bg-scrim/65 p-6 backdrop-blur-[2px]",
+        overlayZClassName,
+      )}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

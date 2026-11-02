@@ -91,6 +91,7 @@ export const UPDATE_COPY = {
     lastCheckPrefix: "上次检查：",
     latestLabel: "已是最新",
     failedLabel: "上次检查失败",
+    lastErrorPrefix: "最近一次更新未完成，原因：",
     updateAvailableLabel: "发现新版本",
     autoCheck: "自动检查更新",
     autoCheckHint: "开启后会在启动 30 秒后自动检查，并按下面的间隔重复。",

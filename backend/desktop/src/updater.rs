@@ -11,7 +11,9 @@ use openshell_updater::download::{
 };
 use openshell_updater::http::HostPolicy;
 use openshell_updater::install::plugin_updater::PluginUpdater;
-use openshell_updater::install::self_install::{SelfInstall, SystemCommandRunner};
+use openshell_updater::install::self_install::{
+    SelfInstall, SystemCommandRunner, INSTALL_FAILURE_FILE,
+};
 use openshell_updater::install::{InstallContext, InstallManager, InstallOutcome, StrategyKind};
 use openshell_updater::model::{UpdateAsset, UpdateCheckResult, UpdateConfig};
 use openshell_updater::policy::NotifyDecision;
@@ -122,6 +124,9 @@ pub async fn updater_get_state(
 ) -> Result<UpdaterStateView, IpcError> {
     let state = updater.service().state();
     let migration = &app.migration;
+    // Windows「先卸载再安装」是在应用退出后由脚本完成的，失败原因只能落盘；
+    // 下次启动读出来展示，用户才知道要手动跑一次安装包。
+    let install_failure = read_install_failure(&updater.updater_dir);
     Ok(UpdaterStateView {
         current_version: updater.service().current_version().to_string(),
         target: updater.service().platform().as_str().to_string(),
@@ -133,7 +138,7 @@ pub async fn updater_get_state(
         skipped_versions: state.skipped_versions,
         last_check_at_ms: state.last_check_at_ms,
         remind_after_ms: state.remind_after_ms,
-        last_error: state.last_error,
+        last_error: install_failure.or(state.last_error),
         pending_install_path: state.pending_install_path,
         recovery: migration.recovered_from.as_ref().map(|info| RecoveryView {
             backup_path: info.path.clone(),
@@ -297,6 +302,9 @@ pub async fn updater_install(
         // 便携版不能运行安装器，只能提示用户手动替换（数据目录不会被覆盖）
         portable: crate::commands::is_portable(),
     };
+    // 清掉上一次失败留下的标记：这次如果又失败，脚本会重新写入
+    let _ = std::fs::remove_file(updater.updater_dir.join(INSTALL_FAILURE_FILE));
+
     let outcome = strategy.install(&ctx).await?;
     let _ = updater.service().set_pending_install(None);
 
@@ -314,6 +322,17 @@ pub async fn updater_install(
     }
 
     Ok(to_install_view(outcome))
+}
+
+/// 读取上次自动升级的失败标记（没有就返回 `None`）。
+fn read_install_failure(updater_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(updater_dir.join(INSTALL_FAILURE_FILE)).ok()?;
+    let text = raw.trim_start_matches('\u{feff}').trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
 }
 
 fn to_install_view(outcome: InstallOutcome) -> InstallView {

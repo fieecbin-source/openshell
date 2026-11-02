@@ -1,6 +1,7 @@
 //! 安装策略抽象。
 //!
-//! 当前只启用 [`self_install::SelfInstall`]（应用内下载 → 校验 → 退出 → 运行安装包）。
+//! 当前只启用 [`self_install::SelfInstall`]（应用内下载 → 校验 → 退出 → 运行升级脚本；
+//! Windows 上脚本会先跑旧版本 `uninstall.exe` 并校验卸载结果，再安装新版本）。
 //! [`plugin_updater::PluginUpdater`] 是**未启用**的预留位：不引入 `tauri-plugin-updater`
 //! 依赖、不要求 Tauri 升级签名密钥，只保留接口，方便将来切换。
 //!

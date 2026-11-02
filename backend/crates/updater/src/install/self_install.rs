@@ -1,8 +1,9 @@
 //! 自研安装策略：退出应用 → 运行安装包。
 //!
 //! 各平台行为：
-//! * **Windows**：NSIS `.exe` 加 `/S` 静默安装，需要提权时通过系统 UAC 确认；
-//!   `.msi` 走 `msiexec /i … /qn /norestart`（需要管理员权限，失败会提示手动安装）。
+//! * **Windows**：先运行旧版本的 `uninstall.exe /S` 并校验卸载结果，再静默安装新版本
+//!   （需要提权时通过系统 UAC 确认）；`.msi` 走 `msiexec /i … /qn /norestart`
+//!   （需要管理员权限，失败会提示手动安装）。
 //! * **macOS**：打开 `.dmg` 让用户把 App 拖进「应用程序」（未公证的包无法静默替换，
 //!   详见 docs/UPDATE.md「完整性保障与已知限制」），安装后由用户重新启动。
 //! * **Linux**：`.AppImage` 直接替换当前可执行文件并重启；`.deb` 用
@@ -56,12 +57,58 @@ pub enum PlanStep {
     Spawn(Invocation),
     /// 用新文件就地替换（AppImage 自更新的唯一可行做法）。
     Replace { from: PathBuf, to: PathBuf },
+    /// Windows：拉起升级脚本，等应用退出后**先卸载旧版本并校验**，再安装新版本。
+    WindowsUpgrade(WindowsUpgradePlan),
+}
+
+/// 更新工作目录下的升级脚本文件名（放数据目录，卸载旧版本时不会被一起删掉）。
+pub const INSTALL_SCRIPT_FILE: &str = "openshell-update.ps1";
+/// 升级脚本的日志文件（与脚本同目录）。
+pub const INSTALL_LOG_FILE: &str = "openshell-update.log";
+/// 升级失败标记：卸载未完成 / 安装器失败时写入，下次启动由 UI 读出来提示用户。
+pub const INSTALL_FAILURE_FILE: &str = "update-install-failed.txt";
+
+/// Windows 升级脚本计划。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUpgradePlan {
+    /// 脚本落盘路径。
+    pub script_path: PathBuf,
+    /// 脚本文本（UTF-8，落盘时补 BOM）。
+    pub script: String,
+}
+
+impl WindowsUpgradePlan {
+    /// PowerShell 调用（静默、不加载用户 profile）。
+    fn invocation(&self) -> Invocation {
+        let mut invocation = Invocation::new(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ],
+        );
+        invocation
+            .args
+            .push(self.script_path.to_string_lossy().to_string());
+        invocation
+    }
 }
 
 /// 命令执行抽象（测试注入假实现，绝不执行真实安装）。
 pub trait CommandRunner: Send + Sync {
     fn run(&self, invocation: &Invocation) -> Result<(), UpdaterError>;
     fn spawn_detached(&self, invocation: &Invocation) -> Result<(), UpdaterError>;
+
+    /// 拉起升级脚本（Windows 专用）。
+    ///
+    /// 与 [`Self::spawn_detached`] 分开，是因为后者对 Windows `.exe` 只放行固定参数
+    /// `/S`（防止任意参数启动可执行文件），而脚本需要 `-File <path>`。
+    fn spawn_script(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
+        self.spawn_detached(invocation)
+    }
 }
 
 /// 生产实现：`std::process::Command`。
@@ -111,6 +158,20 @@ impl CommandRunner for SystemCommandRunner {
         }
         result.map(|_| ()).map_err(installer_launch_error)
     }
+
+    /// 升级脚本是控制台程序：无窗口启动，且不做安装包那套 `/S` 参数约束。
+    fn spawn_script(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
+        let mut command = std::process::Command::new(&invocation.program);
+        command.args(&invocation.args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW：不要为升级脚本弹出黑色控制台窗口
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        command.spawn().map(|_| ()).map_err(installer_launch_error)
+    }
 }
 
 fn installer_launch_error(err: std::io::Error) -> UpdaterError {
@@ -154,10 +215,14 @@ fn spawn_elevated_nsis(path: &Path) -> Result<(), UpdaterError> {
 }
 
 /// 构造某平台的安装步骤（纯函数）。
+///
+/// `log_dir` 用来放 Windows 升级脚本与日志；`pid` 是当前进程号，脚本要先等它退出。
 pub fn plan_install(
     platform: Platform,
     asset_path: &Path,
     exe_path: Option<&Path>,
+    log_dir: &Path,
+    pid: u32,
 ) -> Result<Vec<PlanStep>, UpdaterError> {
     let ext = extension_of(asset_path);
     let unsupported = || {
@@ -173,10 +238,20 @@ pub fn plan_install(
     };
 
     match (platform, ext.as_deref()) {
-        (Platform::Windows, Some("exe")) => Ok(vec![PlanStep::Spawn(Invocation::program_path(
-            asset_path,
-            &["/S"],
-        ))]),
+        // 升级必须「先卸载、再安装」：只有知道当前安装目录才能定位旧版 uninstall.exe
+        (Platform::Windows, Some("exe")) => {
+            let Some(exe) = exe_path else {
+                return Err(UpdaterError::new(
+                    UpdaterErrorKind::Install,
+                    "cannot locate the running executable path, so the previous version cannot be uninstalled before updating",
+                )
+                .with_retryable(false));
+            };
+            Ok(vec![PlanStep::WindowsUpgrade(WindowsUpgradePlan {
+                script_path: log_dir.join(INSTALL_SCRIPT_FILE),
+                script: windows_upgrade_script(exe, asset_path, log_dir, pid),
+            })])
+        }
         (Platform::Windows, Some("msi")) => {
             let mut invocation = Invocation::new("msiexec", &["/i"]);
             invocation
@@ -218,6 +293,168 @@ pub fn plan_install(
     }
 }
 
+/// PowerShell 单引号字面量（内部的 `'` 需要写成 `''`）。
+fn ps_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// 生成 Windows 升级脚本。
+///
+/// 顺序是硬约束：**等旧进程退出 → 运行旧版 `uninstall.exe /S` → 校验卸载结果 → 安装新版本**。
+/// 卸载没成功时脚本直接退出（不安装），并写 [`INSTALL_FAILURE_FILE`] 供下次启动提示，
+/// 避免出现「新旧文件混在一起」的覆盖式安装。
+pub fn windows_upgrade_script(
+    exe_path: &Path,
+    asset_path: &Path,
+    log_dir: &Path,
+    pid: u32,
+) -> String {
+    let exe = exe_path.to_string_lossy().to_string();
+    let asset = asset_path.to_string_lossy().to_string();
+    let log = log_dir.join(INSTALL_LOG_FILE).to_string_lossy().to_string();
+    let marker = log_dir
+        .join(INSTALL_FAILURE_FILE)
+        .to_string_lossy()
+        .to_string();
+
+    let lines: Vec<String> = vec![
+        "# OpenShell 自动升级脚本（由客户端生成，请勿修改）".to_string(),
+        "$ErrorActionPreference = 'Stop'".to_string(),
+        format!("$appExe = {}", ps_str(&exe)),
+        format!("$appPid = {pid}"),
+        format!("$installer = {}", ps_str(&asset)),
+        format!("$logFile = {}", ps_str(&log)),
+        format!("$markerFile = {}", ps_str(&marker)),
+        format!(
+            "$uninstaller = Join-Path -Path (Split-Path -Parent $appExe) -ChildPath {}",
+            ps_str("uninstall.exe")
+        ),
+        String::new(),
+        "function Write-Log([string]$message) {".to_string(),
+        "  try {".to_string(),
+        "    $line = '[' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '] ' + $message".to_string(),
+        "    Add-Content -Path $logFile -Value $line -Encoding UTF8".to_string(),
+        "  } catch { }".to_string(),
+        "}".to_string(),
+        String::new(),
+        "function Write-Failure([string]$reason, [int]$code) {".to_string(),
+        "  Write-Log $reason".to_string(),
+        "  try { Set-Content -Path $markerFile -Value $reason -Encoding UTF8 } catch { }".to_string(),
+        "  exit $code".to_string(),
+        "}".to_string(),
+        String::new(),
+        "function Wait-Gone([string]$path, [int]$seconds) {".to_string(),
+        "  $deadline = (Get-Date).AddSeconds($seconds)".to_string(),
+        "  while ((Get-Date) -lt $deadline) {".to_string(),
+        "    if (-not (Test-Path -Path $path)) { return $true }".to_string(),
+        "    Start-Sleep -Milliseconds 500".to_string(),
+        "  }".to_string(),
+        "  return (-not (Test-Path -Path $path))".to_string(),
+        "}".to_string(),
+        String::new(),
+        "Write-Log '=== 开始自动更新 ==='".to_string(),
+        "Write-Log ('新版本安装包: ' + $installer)".to_string(),
+        String::new(),
+        "# 1) 等旧进程退出：卸载器无法删除正在运行的程序文件".to_string(),
+        "try { Wait-Process -Id $appPid -Timeout 120 -ErrorAction Stop } catch { }".to_string(),
+        "Start-Sleep -Milliseconds 800".to_string(),
+        String::new(),
+        "# 2) 先运行旧版本自带的 uninstall.exe（静默），并确认真的卸载干净".to_string(),
+        "if (Test-Path -Path $uninstaller) {".to_string(),
+        "  Write-Log ('运行卸载程序: ' + $uninstaller + ' /S')".to_string(),
+        "  try {".to_string(),
+        "    $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -ErrorAction Stop".to_string(),
+        "    if ($uninstallProc.WaitForExit(180000)) {".to_string(),
+        "      Write-Log ('卸载程序退出码: ' + $uninstallProc.ExitCode)".to_string(),
+        "    } else {".to_string(),
+        "      Write-Log '卸载程序 180 秒内未退出，改为按文件是否消失判断'".to_string(),
+        "    }".to_string(),
+        "  } catch {".to_string(),
+        "    Write-Log ('普通权限启动卸载程序失败: ' + $_.Exception.Message)".to_string(),
+        "  }".to_string(),
+        String::new(),
+        "  # NSIS 卸载器会把自身复制到 %TEMP% 后立即返回，所以以「程序文件消失」作为完成判据".to_string(),
+        "  $uninstallOk = (Wait-Gone $appExe 180) -and (Wait-Gone $uninstaller 60)".to_string(),
+        String::new(),
+        "  # 系统级安装（Program Files）需要管理员权限：普通权限没删干净就申请授权重试一次".to_string(),
+        "  if (-not $uninstallOk) {".to_string(),
+        "    Write-Log '普通权限卸载未完成，申请管理员权限重试'".to_string(),
+        "    try {".to_string(),
+        "      Start-Process -FilePath $uninstaller -ArgumentList '/S' -Verb RunAs -ErrorAction Stop | Out-Null".to_string(),
+        "    } catch {".to_string(),
+        "      Write-Log ('申请管理员权限失败: ' + $_.Exception.Message)".to_string(),
+        "    }".to_string(),
+        "    $uninstallOk = (Wait-Gone $appExe 180) -and (Wait-Gone $uninstaller 60)".to_string(),
+        "  }".to_string(),
+        String::new(),
+        "  if (-not $uninstallOk) {".to_string(),
+        "    $left = @()".to_string(),
+        "    if (Test-Path -Path $appExe) { $left += $appExe }".to_string(),
+        "    if (Test-Path -Path $uninstaller) { $left += $uninstaller }".to_string(),
+        "    Write-Failure ('旧版本卸载未完成，已中止安装以避免覆盖式残留。仍存在的文件: ' + ($left -join '; ')) 2".to_string(),
+        "  }".to_string(),
+        "  Write-Log '旧版本已卸载完成'".to_string(),
+        "} else {".to_string(),
+        "  Write-Log '未找到旧版本的 uninstall.exe（便携版或开发环境），跳过卸载步骤'".to_string(),
+        "}".to_string(),
+        String::new(),
+        "# 3) 确认卸载完成后才安装新版本".to_string(),
+        "Write-Log ('开始安装新版本: ' + $installer + ' /S')".to_string(),
+        "$installed = $false".to_string(),
+        "try {".to_string(),
+        "  $installProc = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -ErrorAction Stop".to_string(),
+        "  if ($installProc.WaitForExit(600000)) {".to_string(),
+        "    Write-Log ('安装器退出码: ' + $installProc.ExitCode)".to_string(),
+        "    $installed = ($installProc.ExitCode -eq 0)".to_string(),
+        "  } else {".to_string(),
+        "    Write-Log '安装器 10 分钟内未结束'".to_string(),
+        "  }".to_string(),
+        "} catch {".to_string(),
+        "  Write-Log ('普通权限启动安装器失败: ' + $_.Exception.Message)".to_string(),
+        "}".to_string(),
+        String::new(),
+        "if (-not $installed) {".to_string(),
+        "  Write-Log '申请管理员权限重新安装'".to_string(),
+        "  try {".to_string(),
+        "    $installProc = Start-Process -FilePath $installer -ArgumentList '/S' -Verb RunAs -PassThru -Wait -ErrorAction Stop".to_string(),
+        "    if ($installProc) { Write-Log ('管理员安装退出码: ' + $installProc.ExitCode) }".to_string(),
+        "    $installed = (Test-Path -Path $appExe)".to_string(),
+        "  } catch {".to_string(),
+        "    Write-Log ('申请管理员权限安装失败: ' + $_.Exception.Message)".to_string(),
+        "  }".to_string(),
+        "}".to_string(),
+        String::new(),
+        "if (-not $installed) {".to_string(),
+        "  Write-Failure '新版本安装未完成，请手动运行下载目录中的安装包完成升级。' 3".to_string(),
+        "}".to_string(),
+        String::new(),
+        "if (Test-Path -Path $markerFile) { Remove-Item -Path $markerFile -Force -ErrorAction SilentlyContinue }".to_string(),
+        "Write-Log '=== 自动更新完成 ==='".to_string(),
+        "exit 0".to_string(),
+        String::new(),
+    ];
+    lines.join("\r\n")
+}
+
+/// 写出脚本（UTF-8 BOM）并拉起：脚本自己等待应用退出、卸载旧版、校验、再安装新版。
+fn launch_windows_upgrade(
+    plan: &WindowsUpgradePlan,
+    runner: &dyn CommandRunner,
+) -> Result<(), UpdaterError> {
+    if let Some(dir) = plan.script_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut content = String::from("\u{feff}");
+    content.push_str(&plan.script);
+    std::fs::write(&plan.script_path, content.as_bytes()).map_err(|err| {
+        UpdaterError::new(
+            UpdaterErrorKind::Install,
+            format!("failed to write the update script: {err}"),
+        )
+    })?;
+    runner.spawn_script(&plan.invocation())
+}
+
 /// macOS 需要用户手动完成最后一步（拖入「应用程序」）。
 ///
 /// 有提示语意味着「安装最后一步要靠用户」，此时绝不能退出应用，
@@ -249,6 +486,11 @@ pub fn fallback_hint(platform: Platform, asset_path: &Path) -> Option<String> {
         ),
         (Platform::Windows, Some("msi")) => Some(
             "MSI 安装需要管理员权限。可右键「以管理员身份运行」该安装包，或改用手动安装。"
+                .to_string(),
+        ),
+        // 自动升级要先卸载旧版本；脚本没跑起来时让用户手动「先卸载再安装」
+        (Platform::Windows, Some("exe")) => Some(
+            "自动升级没能启动。请先在「设置 → 应用」里卸载 OpenShell（连接数据会保留），再运行下载目录中的安装包。"
                 .to_string(),
         ),
         _ => None,
@@ -359,7 +601,13 @@ impl InstallStrategy for SelfInstall {
                 "unsupported platform for installation",
             )
         })?;
-        let steps = plan_install(platform, ctx.asset_path, self.exe_path.as_deref())?;
+        let steps = plan_install(
+            platform,
+            ctx.asset_path,
+            self.exe_path.as_deref(),
+            ctx.log_dir,
+            std::process::id(),
+        )?;
 
         tracing::info!(
             version = ctx.version,
@@ -373,6 +621,9 @@ impl InstallStrategy for SelfInstall {
             let result = match step {
                 PlanStep::Run(invocation) => self.runner.run(&invocation),
                 PlanStep::Spawn(invocation) => self.runner.spawn_detached(&invocation),
+                PlanStep::WindowsUpgrade(plan) => {
+                    launch_windows_upgrade(&plan, self.runner.as_ref())
+                }
                 PlanStep::Replace { from, to } => replace_file(&from, &to),
             };
             // 失败时补上「用户可以怎么办」，UI 据此显示「打开下载目录 / 手动安装」
@@ -437,6 +688,7 @@ mod tests {
     struct FakeRunner {
         ran: Mutex<Vec<Invocation>>,
         spawned: Mutex<Vec<Invocation>>,
+        scripts: Mutex<Vec<Invocation>>,
     }
 
     impl FakeRunner {
@@ -444,6 +696,7 @@ mod tests {
             Arc::new(Self {
                 ran: Mutex::new(Vec::new()),
                 spawned: Mutex::new(Vec::new()),
+                scripts: Mutex::new(Vec::new()),
             })
         }
     }
@@ -458,6 +711,11 @@ mod tests {
             self.spawned.lock().unwrap().push(invocation.clone());
             Ok(())
         }
+
+        fn spawn_script(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
+            self.scripts.lock().unwrap().push(invocation.clone());
+            Ok(())
+        }
     }
 
     fn prepare_ok() -> impl Fn() -> Result<String, UpdaterError> + Send + Sync {
@@ -465,23 +723,63 @@ mod tests {
     }
 
     #[test]
-    fn windows_exe_runs_silent_setup() {
+    fn windows_upgrade_uninstalls_before_installing() {
         let steps = plan_install(
             Platform::Windows,
             Path::new("C:/tmp/OpenShell-1.1.0-windows-x86_64.exe"),
-            None,
+            Some(Path::new(
+                "C:/Users/u/AppData/Local/OpenShell/OpenShell.exe",
+            )),
+            Path::new("C:/Users/u/AppData/Roaming/OpenShell/updater"),
+            4242,
         )
         .expect("plan");
         assert_eq!(steps.len(), 1);
-        match &steps[0] {
-            PlanStep::Spawn(invocation) => {
-                assert!(invocation
-                    .program
-                    .ends_with("OpenShell-1.1.0-windows-x86_64.exe"));
-                assert_eq!(invocation.args, vec!["/S".to_string()]);
-            }
-            other => panic!("unexpected step: {other:?}"),
-        }
+        let PlanStep::WindowsUpgrade(plan) = &steps[0] else {
+            panic!("unexpected step: {steps:?}");
+        };
+        assert!(plan.script_path.ends_with(INSTALL_SCRIPT_FILE));
+        assert_eq!(
+            plan.script_path.parent().and_then(|p| p.file_name()),
+            Some(std::ffi::OsStr::new("updater"))
+        );
+
+        let script = &plan.script;
+        // 硬约束：先卸载，再安装
+        let uninstall_at = script.find("uninstall.exe").expect("uninstall step");
+        let install_at = script.find("开始安装新版本").expect("install step");
+        assert!(
+            uninstall_at < install_at,
+            "卸载步骤必须排在安装步骤之前\n{script}"
+        );
+        assert!(script.contains("-ArgumentList '/S'"), "{script}");
+        assert!(script.contains("$appPid = 4242"), "{script}");
+        // 卸载没成功时必须中止安装，而不是覆盖安装
+        assert!(script.contains("旧版本卸载未完成"), "{script}");
+        assert!(script.contains(INSTALL_FAILURE_FILE), "{script}");
+
+        let invocation = plan.invocation();
+        assert_eq!(invocation.program, "powershell");
+        assert_eq!(
+            invocation.args.last().cloned(),
+            Some(plan.script_path.to_string_lossy().to_string())
+        );
+    }
+
+    /// 不知道当前安装目录就定位不到旧版 uninstall.exe：宁可直接报错让用户手动处理，
+    /// 也不能退化成「直接覆盖安装」。
+    #[test]
+    fn windows_exe_without_exe_path_is_rejected() {
+        let err = plan_install(
+            Platform::Windows,
+            Path::new("C:/tmp/OpenShell-1.1.0-windows-x86_64.exe"),
+            None,
+            Path::new("C:/tmp"),
+            4242,
+        )
+        .expect_err("no exe path");
+        assert_eq!(err.kind, UpdaterErrorKind::Install);
+        assert!(!err.retryable);
     }
 
     #[cfg(windows)]
@@ -549,7 +847,9 @@ mod tests {
             prepare: Some(&prepare),
             portable: false,
         };
-        let error = SelfInstall::new(Arc::new(FailedRunner), None)
+        // Windows 上必须给出当前可执行文件路径，才能定位旧版本 uninstall.exe
+        let exe = dir.path().join("OpenShell.exe");
+        let error = SelfInstall::new(Arc::new(FailedRunner), Some(exe))
             .install(&ctx)
             .await
             .expect_err("launch failed");
@@ -561,8 +861,14 @@ mod tests {
 
     #[test]
     fn windows_msi_uses_msiexec_quiet() {
-        let steps =
-            plan_install(Platform::Windows, Path::new("C:/tmp/OpenShell.msi"), None).expect("plan");
+        let steps = plan_install(
+            Platform::Windows,
+            Path::new("C:/tmp/OpenShell.msi"),
+            None,
+            Path::new("C:/tmp"),
+            4242,
+        )
+        .expect("plan");
         match &steps[0] {
             PlanStep::Spawn(invocation) => {
                 assert_eq!(invocation.program, "msiexec");
@@ -575,8 +881,14 @@ mod tests {
 
     #[test]
     fn macos_dmg_opens_image_and_hints_manual_step() {
-        let steps =
-            plan_install(Platform::Macos, Path::new("/tmp/OpenShell.dmg"), None).expect("plan");
+        let steps = plan_install(
+            Platform::Macos,
+            Path::new("/tmp/OpenShell.dmg"),
+            None,
+            Path::new("/tmp"),
+            4242,
+        )
+        .expect("plan");
         match &steps[0] {
             PlanStep::Spawn(invocation) => assert_eq!(invocation.program, "open"),
             other => panic!("unexpected step: {other:?}"),
@@ -594,6 +906,8 @@ mod tests {
             Platform::Linux,
             Path::new("/home/u/Downloads/OpenShell.AppImage"),
             Some(Path::new("/home/u/Applications/OpenShell.AppImage")),
+            Path::new("/home/u/.local/share/openshell/updater"),
+            4242,
         )
         .expect("plan");
         assert_eq!(steps.len(), 2);
@@ -607,6 +921,8 @@ mod tests {
             Platform::Linux,
             Path::new("/home/u/Downloads/OpenShell.AppImage"),
             None,
+            Path::new("/tmp"),
+            4242,
         )
         .expect_err("no target");
         assert_eq!(err.kind, UpdaterErrorKind::Install);
@@ -614,8 +930,14 @@ mod tests {
 
     #[test]
     fn linux_deb_uses_pkexec() {
-        let steps =
-            plan_install(Platform::Linux, Path::new("/tmp/openshell.deb"), None).expect("plan");
+        let steps = plan_install(
+            Platform::Linux,
+            Path::new("/tmp/openshell.deb"),
+            None,
+            Path::new("/tmp"),
+            4242,
+        )
+        .expect("plan");
         match &steps[0] {
             PlanStep::Run(invocation) => {
                 assert_eq!(invocation.program, "pkexec");
@@ -627,8 +949,14 @@ mod tests {
 
     #[test]
     fn unsupported_extension_is_rejected() {
-        let err = plan_install(Platform::Windows, Path::new("C:/tmp/OpenShell.zip"), None)
-            .expect_err("unsupported");
+        let err = plan_install(
+            Platform::Windows,
+            Path::new("C:/tmp/OpenShell.zip"),
+            Some(Path::new("C:/tmp/OpenShell.exe")),
+            Path::new("C:/tmp"),
+            4242,
+        )
+        .expect_err("unsupported");
         assert_eq!(err.kind, UpdaterErrorKind::Install);
         assert!(!err.retryable);
     }
@@ -651,19 +979,21 @@ mod tests {
         assert!(runner.spawned.lock().unwrap().is_empty());
     }
 
-    /// 仅 Windows 可断言「真的拉起了安装器」：其他平台的资产后缀不匹配。
+    /// 仅 Windows 可断言「真的拉起了升级脚本」：其他平台的资产后缀不匹配。
     #[cfg(windows)]
     #[tokio::test]
-    async fn install_backs_up_first_then_launches_installer() {
+    async fn install_backs_up_first_then_launches_upgrade_script() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let runner = FakeRunner::new();
-        let strategy = SelfInstall::new(runner.clone(), None);
+        let exe = dir.path().join("OpenShell.exe");
+        let strategy = SelfInstall::new(runner.clone(), Some(exe.clone()));
         let prepare = prepare_ok();
         let asset = "OpenShell-1.1.0-windows-x86_64.exe";
         let ctx = InstallContext {
             asset_path: Path::new(asset),
             asset_name: asset,
             version: "1.1.0",
-            log_dir: Path::new("."),
+            log_dir: dir.path(),
             prepare: Some(&prepare),
             portable: false,
         };
@@ -671,7 +1001,25 @@ mod tests {
         assert!(outcome.launched);
         assert_eq!(outcome.strategy, StrategyKind::SelfInstall);
         assert!(outcome.backup_path.expect("backup").contains("pre-install"));
-        assert_eq!(runner.spawned.lock().unwrap().len(), 1);
+
+        // 安装器本身不再被直接拉起，拉起的是「先卸载再安装」的脚本
+        assert!(runner.spawned.lock().unwrap().is_empty());
+        let scripts = runner.scripts.lock().unwrap();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].program, "powershell");
+
+        let script_path = dir.path().join(INSTALL_SCRIPT_FILE);
+        let script = std::fs::read_to_string(&script_path).expect("script written");
+        assert!(script.starts_with('\u{feff}'), "PowerShell 需要 UTF-8 BOM");
+        assert!(script.contains("uninstall.exe"), "{script}");
+        assert!(
+            script.find("uninstall.exe").unwrap() < script.find("开始安装新版本").unwrap(),
+            "{script}"
+        );
+        assert!(
+            script.contains(&exe.to_string_lossy().to_string()),
+            "{script}"
+        );
     }
 
     /// 便携版：必须完成快照、必须不运行任何安装器、必须给出「手动替换」提示。

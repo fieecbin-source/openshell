@@ -81,13 +81,28 @@ OpenShell-<version>-<platform>-<arch>.<ext>
 
 | 平台 | 行为 |
 | --- | --- |
-| Windows | NSIS `Setup.exe /S` 静默安装；遇到系统错误 740 时通过 `ShellExecuteExW` 请求 UAC 授权，授权取消时保持应用运行并允许重试；`.msi` 走 `msiexec /i … /qn /norestart`（需提权，失败提示手动） |
+| Windows | 生成 `<数据目录>/updater/openshell-update.ps1` 并拉起：**等旧进程退出 → 运行旧版 `uninstall.exe /S` → 校验卸载结果 → 再静默安装新版本**（权限不足时脚本申请 UAC 授权重试）；`.msi` 走 `msiexec /i … /qn /norestart`（需提权，失败提示手动） |
 | macOS | 打开 `.dmg`，提示把 App 拖入「应用程序」（未公证的包无法静默替换） |
 | Linux | `.AppImage` 就地替换（先备份旧文件为 `.old` 再复制、补 755）后重启；`.deb` 用 `pkexec dpkg -i`，无 polkit 时提示手动 |
 
 拿不到数据快照时**拒绝安装**（`InstallStrategy::install` 的硬约束）。
 `PluginUpdater`（`tauri-plugin-updater`）保留为空实现位：`is_enabled() == false`，
 永远不会被选中，也不引入任何签名密钥依赖。
+
+### Windows：先卸载、再安装
+
+Windows 上**不允许直接覆盖安装**，顺序由升级脚本保证（日志 `updater/openshell-update.log`）：
+
+1. `Wait-Process` 等旧进程退出（卸载器无法删除正在运行的程序文件）；
+2. 运行安装目录里的 `uninstall.exe /S`。NSIS 卸载器会把自身复制到 `%TEMP%` 后立即返回，
+   因此以「程序文件与 `uninstall.exe` 都消失」作为卸载完成判据（最多等 180 秒）；
+3. 系统级安装（Program Files）普通权限删不干净时，脚本用 `-Verb RunAs` 再试一次；
+4. **卸载未完成就中止**，写入 `updater/update-install-failed.txt` 并退出，绝不继续安装，
+   避免新旧文件混杂；下次启动时「关于与更新」会展示这条失败原因；
+5. 卸载确认完成后才运行新安装包 `/S`（必要时同样申请 UAC），成功后删除失败标记。
+
+便携版（`openshell.portable` 标记存在）不会运行任何安装器；只有在安装目录里**确实找不到**
+`uninstall.exe`（便携/开发环境）时才跳过卸载步骤，仍按原来的 `/S` 方式安装。
 
 ---
 
