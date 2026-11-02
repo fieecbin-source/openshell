@@ -9,16 +9,13 @@
       <stop offset="0%" stop-color="#38bdf8" />
       <stop offset="100%" stop-color="#2563eb" />
     </linearGradient>
-    <linearGradient id="cursor-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#10b981" />
-      <stop offset="100%" stop-color="#06b6d4" />
-    </linearGradient>
     <linearGradient id="border-grad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35" />
       <stop offset="50%" stop-color="#ffffff" stop-opacity="0.08" />
       <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.2" />
     </linearGradient>
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+    <!-- filterUnits 必须为 userSpaceOnUse：objectBoundingBox 对水平/垂直细线的 bbox 高度为 0，会把图形整个裁掉 -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="512" color-interpolation-filters="sRGB">
       <feGaussianBlur stdDeviation="12" result="blur" />
       <feComposite in="SourceGraphic" in2="blur" operator="over" />
     </filter>
@@ -33,7 +30,6 @@
   <!-- Command Prompt Chevron '>' -->
   <path d="M 148 160 L 256 256 L 148 352" fill="none" stroke="url(#prompt-grad)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)" />
 
-  <!-- Terminal Cursor '_' -->
-  <path d="M 288 352 L 368 352" fill="none" stroke="url(#cursor-grad)" stroke-width="36" stroke-linecap="round" filter="url(#glow)" />
+  <!-- Terminal Cursor '_' : 单一纯白加粗线，与 chevron 同粗（38）、同基线（y=352），不加模糊以保证小尺寸仍然清晰 -->
+  <path d="M 288 352 L 368 352" fill="none" stroke="#ffffff" stroke-width="38" stroke-linecap="round" />
 </svg>
-
