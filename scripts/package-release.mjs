@@ -95,8 +95,8 @@ function defaultBundles() {
 }
 
 function platformInfo() {
-  if (process.platform === "win32") return { platform: "windows", arch: "x86_64" };
-  if (process.platform === "darwin") return { platform: "macos", arch: "universal" };
+  if (process.platform === "win32") return { platform: "windows", arch: process.arch === "arm64" ? "aarch64" : "x86_64" };
+  if (process.platform === "darwin") return { platform: "macos", arch: process.arch === "arm64" ? "aarch64" : "x86_64" };
   return { platform: "linux", arch: process.arch === "arm64" ? "aarch64" : "x86_64" };
 }
 

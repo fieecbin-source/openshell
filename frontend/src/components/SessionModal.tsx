@@ -208,15 +208,16 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     setImportingKey(true);
     setKeyMsg(null);
     try {
-      const imported = await importSshKey(name, pem);
+      const imported = await importSshKey(name, pem, keyPassphrase || undefined);
       await loadKeys(imported.id);
       setPendingKeyImport(null);
+      setKeyPassphrase("");
       setKeyMsg(`已配置私钥「${imported.name}」`);
     } catch (err: any) {
       // 选文件期间保险库可能被自动锁定（15 分钟无操作）：不要只显示一行报错，
       // 记下内容并给出就地解锁入口，解锁后自动补做导入。
+      setPendingKeyImport({ name, pem });
       if (parseIpcError(err).code === "VAULT_LOCKED") {
-        setPendingKeyImport({ name, pem });
         await refreshVaultStatus();
         return;
       }
@@ -368,6 +369,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setCustomBaud(false);
       }
       setError(null);
+      setKeyPassphrase("");
+      setKeyPassphraseMsg(null);
+      setPendingKeyImport(null);
       setVaultUnlockError(null);
       setShowPassword(false);
     }
@@ -863,6 +867,37 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       </button>
                     </div>
 
+                    <div className="space-y-1.5">
+                      <label htmlFor="session-key-passphrase" className="block text-xs font-medium text-ink-secondary">
+                        私钥口令 (Passphrase)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="session-key-passphrase"
+                          type="password"
+                          value={keyPassphrase}
+                          onChange={(e) => setKeyPassphrase(e.target.value)}
+                          autoComplete="off"
+                          placeholder="加密私钥请填写，未加密时留空"
+                          className="min-w-0 flex-1 rounded-lg border border-line/15 bg-surface px-2.5 py-2 text-xs text-ink focus:border-accent focus:outline-none"
+                        />
+                        {(pendingKeyImport || selectedKeyId) && (
+                          <button
+                            type="button"
+                            onClick={() => pendingKeyImport
+                              ? runKeyImport(pendingKeyImport.name, pendingKeyImport.pem)
+                              : handleSaveKeyPassphrase()}
+                            disabled={importingKey || savingKeyPassphrase || !!isVaultLocked || !keyPassphrase}
+                            className="shrink-0 rounded-lg bg-action px-2.5 py-2 text-[11px] font-semibold text-white disabled:opacity-50"
+                          >
+                            {importingKey || savingKeyPassphrase ? "处理中..." : pendingKeyImport ? "重试导入" : "保存口令"}
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-ink-tertiary">选择私钥文件前填写；口令错误时可修改后重试导入。</p>
+                      {keyPassphraseMsg && <div role="status" className="text-[11px] text-ink-secondary">{keyPassphraseMsg}</div>}
+                    </div>
+
                     {sshKeys.length === 0 ? (
                       <button
                         type="button"
@@ -881,6 +916,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                               onClick={() => {
                                 setSelectedKeyId(k.id);
                                 setKeyMsg(null);
+                                setKeyPassphrase("");
+                                setKeyPassphraseMsg(null);
+                                setPendingKeyImport(null);
                               }}
                               className={`flex cursor-pointer items-center justify-between gap-2 px-3 py-2 transition ${
                                 active ? "bg-action/[0.06]" : "hover:bg-surface-muted"
@@ -958,42 +996,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
                     {keyMsg && <div className="text-[11px] text-ink-secondary">{keyMsg}</div>}
 
-                    {/* 私钥口令：仅在选中的私钥带口令时出现 */}
-                    {(() => {
-                      const currentKey = sshKeys.find((k) => k.id === selectedKeyId);
-                      if (!currentKey || !currentKey.has_passphrase) return null;
-                      return (
-                        <div className="rounded-lg border border-line/15 bg-surface p-2.5 space-y-1.5">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="password"
-                              value={keyPassphrase}
-                              onChange={(e) => setKeyPassphrase(e.target.value)}
-                              className="flex-1 rounded-lg border border-line/15 bg-surface-muted px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none transition"
-                            />
-                            <button
-                              type="button"
-                              onClick={handleSaveKeyPassphrase}
-                              disabled={savingKeyPassphrase}
-                              className="shrink-0 rounded-lg bg-action px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-apple-sm transition hover:bg-action disabled:opacity-50"
-                            >
-                              {savingKeyPassphrase ? "校验中..." : "保存口令"}
-                            </button>
-                          </div>
-                          {keyPassphraseMsg && (
-                            <div
-                              className={`text-[11px] ${
-                                keyPassphraseMsg.includes("已加密保存")
-                                  ? "text-state-success"
-                                  : "text-state-danger"
-                              }`}
-                            >
-                              {keyPassphraseMsg}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
                   </div>
                 )}
               </div>

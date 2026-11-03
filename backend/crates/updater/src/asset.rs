@@ -166,7 +166,8 @@ fn detect_platform(stem: &str) -> Option<Platform> {
 
 /// 识别文件名里显式声明的架构。
 fn detect_arch(stem: &str) -> Option<Arch> {
-    let tokens: Vec<&str> = stem.split(['-', '_', '.']).collect();
+    let normalized = stem.replace("x86_64", "x64");
+    let tokens: Vec<&str> = normalized.split(['-', '_', '.']).collect();
     // 先看 universal，再具体架构：`universal` 包可能同时带 `x86_64` 字样
     if tokens
         .iter()
@@ -190,6 +191,35 @@ mod tests {
             .iter()
             .map(|name| AssetCandidate::new(*name, format!("https://example.test/{name}"), 1024))
             .collect()
+    }
+
+    #[test]
+    fn native_architecture_is_selected_when_all_platforms_are_published() {
+        let list = candidates(&[
+            "OpenShell-1.1.7-windows-x86_64.exe",
+            "OpenShell-1.1.7-windows-aarch64.exe",
+            "OpenShell-1.1.7-macos-x86_64.dmg",
+            "OpenShell-1.1.7-macos-aarch64.dmg",
+            "OpenShell-1.1.7-linux-x86_64.AppImage",
+            "OpenShell-1.1.7-linux-aarch64.AppImage",
+        ]);
+        for platform in [Platform::Windows, Platform::Macos, Platform::Linux] {
+            for arch in [Arch::X86_64, Arch::Aarch64] {
+                let picked = pick(&list, platform, arch, &v("1.1.7")).unwrap();
+                assert!(picked.name.eq_ignore_ascii_case(&expected_file_name(
+                    &v("1.1.7"),
+                    platform,
+                    arch
+                )));
+            }
+        }
+        assert!(pick(
+            &candidates(&["OpenShell-1.1.7-linux-x86_64.deb"]),
+            Platform::Linux,
+            Arch::Aarch64,
+            &v("1.1.7")
+        )
+        .is_err());
     }
 
     #[test]

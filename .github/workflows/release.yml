@@ -1,6 +1,6 @@
 name: Release (Multi-platform Desktop)
 
-# 打 v* tag → 三平台构建 → 规整资产名 → 生成 sha256/元数据 → 草稿 Release（人工编辑后发布）
+# 打 v* tag → 三平台六架构构建 → 规整资产名 → 生成 sha256/元数据 → 草稿 Release（校验后发布）
 # 发布后 → 把 latest.json 同步到 updater-meta 分支，供 jsDelivr 备用源使用。
 on:
   push:
@@ -13,7 +13,7 @@ on:
       tag_name:
         description: 'Release tag (must match frontend/package.json version)'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.1.7'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -98,24 +98,42 @@ jobs:
             arch: x86_64
             args: '--target x86_64-pc-windows-msvc'
             bundles: 'nsis'
-            rust_targets: ''
             target: x86_64-pc-windows-msvc
-          - os: macos-latest
-            label: macos-universal
+          - os: windows-11-arm
+            label: windows-aarch64
+            platform: windows
+            arch: aarch64
+            args: '--target aarch64-pc-windows-msvc'
+            bundles: 'nsis'
+            target: aarch64-pc-windows-msvc
+          - os: macos-15-intel
+            label: macos-x86_64
             platform: macos
-            arch: universal
-            args: '--target universal-apple-darwin'
+            arch: x86_64
+            args: '--target x86_64-apple-darwin'
             bundles: 'app,dmg'
-            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-            target: universal-apple-darwin
+            target: x86_64-apple-darwin
+          - os: macos-15
+            label: macos-aarch64
+            platform: macos
+            arch: aarch64
+            args: '--target aarch64-apple-darwin'
+            bundles: 'app,dmg'
+            target: aarch64-apple-darwin
           - os: ubuntu-22.04
             label: linux-x86_64
             platform: linux
             arch: x86_64
             args: '--target x86_64-unknown-linux-gnu'
             bundles: 'appimage,deb'
-            rust_targets: ''
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            label: linux-aarch64
+            platform: linux
+            arch: aarch64
+            args: '--target aarch64-unknown-linux-gnu'
+            bundles: 'appimage,deb'
+            target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -130,7 +148,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust_targets }}
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -162,6 +180,9 @@ jobs:
       - name: Build desktop bundles
         run: pnpm tauri build ${{ matrix.args }} --bundles ${{ matrix.bundles }}
 
+      - name: Updater regressions on the native architecture
+        run: cargo test -p openshell-updater --target ${{ matrix.target }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -170,11 +191,11 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.platform }}" = windows ]; then
-            executable=target/x86_64-pc-windows-msvc/release/OpenShell.exe
+            executable=target/${{ matrix.target }}/release/OpenShell.exe
           elif [ "${{ matrix.platform }}" = macos ]; then
-            executable=target/universal-apple-darwin/release/bundle/macos/OpenShell.app/Contents/MacOS/OpenShell
+            executable=target/${{ matrix.target }}/release/bundle/macos/OpenShell.app/Contents/MacOS/OpenShell
           else
-            executable=target/x86_64-unknown-linux-gnu/release/OpenShell
+            executable=target/${{ matrix.target }}/release/OpenShell
           fi
           python scripts/check-factory-profile.py "$executable"
 
@@ -183,7 +204,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/portable target/portable-archives
-          cp target/x86_64-pc-windows-msvc/release/OpenShell.exe target/portable/OpenShell.exe
+          cp target/${{ matrix.target }}/release/OpenShell.exe target/portable/OpenShell.exe
           touch target/portable/openshell.portable
           cp THIRD_PARTY_NOTICES.md target/portable/
           powershell -Command "Compress-Archive -Path target/portable/OpenShell.exe,target/portable/openshell.portable,target/portable/THIRD_PARTY_NOTICES.md -DestinationPath target/portable-archives/OpenShell-portable.zip -Force"
@@ -193,7 +214,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/portable-archives
-          (cd target/universal-apple-darwin/release/bundle/macos && zip -r -y "$GITHUB_WORKSPACE/target/portable-archives/OpenShell-portable.zip" OpenShell.app)
+          (cd target/${{ matrix.target }}/release/bundle/macos && zip -r -y "$GITHUB_WORKSPACE/target/portable-archives/OpenShell-portable.zip" OpenShell.app)
 
       - name: Normalize asset names
         shell: bash
@@ -223,22 +244,22 @@ jobs:
           AUDIT="$RUNNER_TEMP/openshell-installer-audit"
           mkdir -p "$AUDIT"
           if [ "${{ matrix.platform }}" = windows ]; then
-            "C:/Program Files/7-Zip/7z.exe" x "artifacts/OpenShell-$VERSION-windows-x86_64.exe" "-o$AUDIT" -y >/dev/null
+            7z x "artifacts/OpenShell-$VERSION-windows-${{ matrix.arch }}.exe" "-o$AUDIT" -y >/dev/null
             python scripts/check-release-archives.py "$AUDIT"
             executable=$(find "$AUDIT" -name OpenShell.exe -print -quit)
             test -n "$executable"
             python scripts/check-factory-profile.py "$executable"
           elif [ "${{ matrix.platform }}" = macos ]; then
-            hdiutil attach "artifacts/OpenShell-$VERSION-macos-universal.dmg" -readonly -nobrowse -mountpoint "$AUDIT"
+            hdiutil attach "artifacts/OpenShell-$VERSION-macos-${{ matrix.arch }}.dmg" -readonly -nobrowse -mountpoint "$AUDIT"
             trap 'hdiutil detach "$AUDIT"' EXIT
             python scripts/check-release-archives.py "$AUDIT/OpenShell.app"
             python scripts/check-factory-profile.py "$AUDIT/OpenShell.app/Contents/MacOS/OpenShell"
           else
-            dpkg-deb -x "artifacts/OpenShell-$VERSION-linux-x86_64.deb" "$AUDIT/deb"
+            dpkg-deb -x "artifacts/OpenShell-$VERSION-linux-${{ matrix.arch }}.deb" "$AUDIT/deb"
             python scripts/check-release-archives.py "$AUDIT/deb"
             mkdir -p "$AUDIT/appimage"
-            chmod +x "artifacts/OpenShell-$VERSION-linux-x86_64.AppImage"
-            (cd "$AUDIT/appimage" && "$GITHUB_WORKSPACE/artifacts/OpenShell-$VERSION-linux-x86_64.AppImage" --appimage-extract >/dev/null)
+            chmod +x "artifacts/OpenShell-$VERSION-linux-${{ matrix.arch }}.AppImage"
+            (cd "$AUDIT/appimage" && "$GITHUB_WORKSPACE/artifacts/OpenShell-$VERSION-linux-${{ matrix.arch }}.AppImage" --appimage-extract >/dev/null)
             python scripts/check-release-archives.py "$AUDIT/appimage"
             executable=$(find "$AUDIT/deb" -name OpenShell -type f -print -quit)
             test -n "$executable"
@@ -296,7 +317,15 @@ jobs:
       - name: Generate checksums & manifests
         shell: bash
         run: |
+          set -euo pipefail
           VERSION=$(node scripts/version.mjs --print)
+          for ARCH in x86_64 aarch64; do
+            for ASSET in "windows-$ARCH.exe" "windows-$ARCH-portable.zip" \
+              "macos-$ARCH.dmg" "macos-$ARCH-portable.zip" \
+              "linux-$ARCH.AppImage" "linux-$ARCH.deb"; do
+              test -s "artifacts/OpenShell-$VERSION-$ASSET"
+            done
+          done
           node scripts/release.mjs manifest \
             --dir artifacts \
             --version "$VERSION" \
@@ -306,6 +335,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           name: OpenShell ${{ github.event.inputs.tag_name || github.ref_name }}
           body_path: artifacts/release-notes.md
           draft: true

@@ -226,16 +226,33 @@ impl Downloader {
             {
                 Ok(meta) => meta,
                 Err(err) => {
-                    // 取消/网络错误都保留 .part，便于续传
+                    tokio::io::AsyncWriteExt::flush(&mut file).await?;
+                    drop(file);
+                    if attempt < 3 && offset > 0 && err.status == Some(416) {
+                        tokio::fs::remove_file(&part).await?;
+                        resumed_from = 0;
+                        self.precheck_space(request, 0)?;
+                        continue;
+                    }
+                    if attempt < 3 && err.retryable && !self.cancel.load(Ordering::SeqCst) {
+                        resumed_from = tokio::fs::metadata(&part).await?.len();
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            400 * u64::from(attempt),
+                        ))
+                        .await;
+                        continue;
+                    }
+                    // 取消/网络错误保留 .part，供下次续传。
                     return Err(err);
                 }
             };
             drop(file);
 
-            if meta.status == 200 && offset > 0 && attempt == 1 {
+            if meta.status == 200 && offset > 0 {
                 // 服务端忽略了 Range：已写入的字节是「追加」的，必须清空重下
-                let _ = tokio::fs::remove_file(&part).await;
+                tokio::fs::remove_file(&part).await?;
                 resumed_from = 0;
+                self.precheck_space(request, 0)?;
                 continue;
             }
 
@@ -304,7 +321,7 @@ impl Downloader {
 
 /// 生产实现：reqwest 流式下载（不缓冲整个安装包，内存占用固定）。
 ///
-/// 与检测用的 `ReqwestClient` 分开构造，因为下载需要「只限制连接超时、不限制总时长」。
+/// 与检测用的 `ReqwestClient` 分开构造：限制连接和读取停顿，不限制下载总时长。
 pub struct ReqwestFetcher {
     client: reqwest::Client,
     policy: crate::http::HostPolicy,
@@ -322,6 +339,7 @@ impl ReqwestFetcher {
                 env!("CARGO_PKG_VERSION")
             ))
             .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                 if attempt.previous().len() >= 5 {
                     return attempt.error("too many redirects");
@@ -334,7 +352,19 @@ impl ReqwestFetcher {
         builder = match proxy {
             crate::proxy::ProxyMode::Off => builder.no_proxy(),
             crate::proxy::ProxyMode::System => builder,
-            crate::proxy::ProxyMode::Env => builder,
+            crate::proxy::ProxyMode::Env => match crate::http::env_proxy_url() {
+                Some(url) => {
+                    builder
+                        .no_proxy()
+                        .proxy(reqwest::Proxy::all(&url).map_err(|err| {
+                            UpdaterError::new(
+                                UpdaterErrorKind::Http,
+                                format!("invalid env proxy: {err}"),
+                            )
+                        })?)
+                }
+                None => builder.no_proxy(),
+            },
             crate::proxy::ProxyMode::Custom { url } if url.trim().is_empty() => builder.no_proxy(),
             crate::proxy::ProxyMode::Custom { url } => {
                 builder.proxy(reqwest::Proxy::all(url.trim()).map_err(|err| {
@@ -403,10 +433,14 @@ impl RangeFetcher for ReqwestFetcher {
                 UpdaterErrorKind::Http,
                 format!("download returned {status}"),
             )
-            .with_status(status));
+            .with_status(status)
+            .with_retryable(status >= 500));
         }
 
         let total_len = parse_total_len(&response, offset);
+        if status == 200 && offset > 0 {
+            return Ok(RangeMeta { status, total_len });
+        }
         let mut written = 0u64;
         while let Some(chunk) = response
             .chunk()
@@ -557,6 +591,86 @@ mod tests {
         );
         assert_eq!(fetcher.calls(), vec![0]);
         assert!(!dir.path().join("OpenShell.exe.part").exists());
+    }
+
+    #[tokio::test]
+    async fn retries_interrupted_download_from_bytes_already_written() {
+        struct InterruptedFetcher(Mutex<Vec<u64>>);
+        #[async_trait]
+        impl RangeFetcher for InterruptedFetcher {
+            async fn fetch_to(
+                &self,
+                _: &str,
+                offset: u64,
+                dest: &mut tokio::fs::File,
+                on_bytes: &(dyn Fn(u64) -> Result<(), UpdaterError> + Send + Sync),
+                _: &AtomicBool,
+            ) -> Result<RangeMeta, UpdaterError> {
+                use tokio::io::AsyncWriteExt;
+                self.0.lock().unwrap().push(offset);
+                if offset == 0 {
+                    dest.write_all(b"hello ").await?;
+                    dest.flush().await?;
+                    return Err(UpdaterError::network("connection interrupted"));
+                }
+                dest.write_all(&HELLO[offset as usize..]).await?;
+                dest.flush().await?;
+                on_bytes(HELLO.len() as u64 - offset)?;
+                Ok(RangeMeta {
+                    status: 206,
+                    total_len: Some(HELLO.len() as u64),
+                })
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = Arc::new(InterruptedFetcher(Mutex::new(Vec::new())));
+        let downloader = Downloader::new(
+            fetcher.clone(),
+            Arc::new(FixedSpace(u64::MAX)),
+            Arc::new(Sha256Verifier),
+        );
+        let outcome = downloader
+            .download(&request(dir.path(), HELLO_SHA))
+            .await
+            .expect("retry succeeds");
+        assert_eq!(*fetcher.0.lock().unwrap(), vec![0, 6]);
+        assert_eq!(std::fs::read(outcome.path).unwrap(), HELLO);
+    }
+
+    #[tokio::test]
+    async fn restarts_after_rejected_resume_range() {
+        struct RejectedRange;
+        #[async_trait]
+        impl RangeFetcher for RejectedRange {
+            async fn fetch_to(
+                &self,
+                url: &str,
+                offset: u64,
+                dest: &mut tokio::fs::File,
+                on_bytes: &(dyn Fn(u64) -> Result<(), UpdaterError> + Send + Sync),
+                cancel: &AtomicBool,
+            ) -> Result<RangeMeta, UpdaterError> {
+                if offset > 0 {
+                    return Err(UpdaterError::new(UpdaterErrorKind::Http, "range rejected")
+                        .with_status(416));
+                }
+                MockFetcher::new(HELLO)
+                    .fetch_to(url, offset, dest, on_bytes, cancel)
+                    .await
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("OpenShell.exe.part"), HELLO).unwrap();
+        let downloader = Downloader::new(
+            Arc::new(RejectedRange),
+            Arc::new(FixedSpace(u64::MAX)),
+            Arc::new(Sha256Verifier),
+        );
+        let outcome = downloader
+            .download(&request(dir.path(), HELLO_SHA))
+            .await
+            .expect("restart succeeds");
+        assert_eq!(std::fs::read(outcome.path).unwrap(), HELLO);
     }
 
     #[tokio::test]

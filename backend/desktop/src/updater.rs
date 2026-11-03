@@ -229,7 +229,7 @@ pub async fn updater_download(
         .with_cancel(flight.clone());
 
     let request = DownloadRequest {
-        url: asset.url.clone(),
+        url: config.download_url(&asset.url),
         file_name: asset.name.clone(),
         expected_size: asset.size,
         sha256,

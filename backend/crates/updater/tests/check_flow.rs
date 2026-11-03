@@ -17,11 +17,19 @@ const API_URL: &str = "https://api.github.com/repos/fieecbin-source/openshell/re
 /// 会匹配不到资产（`asset == None`）。这里跟随宿主机，保证三个平台都成立。
 fn exe_name() -> &'static str {
     if cfg!(windows) {
-        "OpenShell-1.1.0-windows-x86_64.exe"
+        if cfg!(target_arch = "aarch64") {
+            "OpenShell-1.1.0-windows-aarch64.exe"
+        } else {
+            "OpenShell-1.1.0-windows-x86_64.exe"
+        }
     } else if cfg!(target_os = "macos") {
         "OpenShell-1.1.0-macos-universal.dmg"
     } else {
-        "OpenShell-1.1.0-linux-x86_64.AppImage"
+        if cfg!(target_arch = "aarch64") {
+            "OpenShell-1.1.0-linux-aarch64.AppImage"
+        } else {
+            "OpenShell-1.1.0-linux-x86_64.AppImage"
+        }
     }
 }
 

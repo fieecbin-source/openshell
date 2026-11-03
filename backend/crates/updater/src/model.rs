@@ -185,6 +185,19 @@ impl Default for UpdateConfig {
 }
 
 impl UpdateConfig {
+    /// 下载镜像按前缀拼接 GitHub 资产地址；自建源的地址保持原样。
+    pub fn download_url(&self, url: &str) -> String {
+        match self
+            .mirror_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|prefix| !prefix.is_empty())
+        {
+            Some(prefix) if url.starts_with("https://github.com/") => format!("{prefix}{url}"),
+            _ => url.to_string(),
+        }
+    }
+
     /// 归一化并校验配置：非法值回落到默认值，而不是让检查直接失败。
     ///
     /// 返回 `Err` 仅当 owner/repo 完全不可用时（此时无法构造 GitHub URL）。
@@ -322,6 +335,20 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.normalized().is_err());
+    }
+
+    #[test]
+    fn download_mirror_only_prefixes_github_assets() {
+        let url = "https://github.com/a/b/releases/download/v1/app.exe";
+        let mut cfg = UpdateConfig::default();
+        assert_eq!(cfg.download_url(url), url);
+        cfg.mirror_prefix = Some(" https://mirror.example.com/ ".into());
+        assert_eq!(
+            cfg.download_url(url),
+            format!("https://mirror.example.com/{url}")
+        );
+        let own_source = "https://downloads.example.com/app.exe";
+        assert_eq!(cfg.download_url(own_source), own_source);
     }
 
     #[test]

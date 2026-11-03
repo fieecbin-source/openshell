@@ -323,6 +323,7 @@ pub fn windows_upgrade_script(
         format!("$appExe = {}", ps_str(&exe)),
         format!("$appPid = {pid}"),
         format!("$installer = {}", ps_str(&asset)),
+        "$installArgs = '/S /R /D=' + (Split-Path -Parent $appExe)".to_string(),
         format!("$logFile = {}", ps_str(&log)),
         format!("$markerFile = {}", ps_str(&marker)),
         format!(
@@ -363,7 +364,7 @@ pub fn windows_upgrade_script(
         "if (Test-Path -Path $uninstaller) {".to_string(),
         "  Write-Log ('运行卸载程序: ' + $uninstaller + ' /S')".to_string(),
         "  try {".to_string(),
-        "    $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -ErrorAction Stop".to_string(),
+        "    $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -PassThru -ErrorAction Stop".to_string(),
         "    if ($uninstallProc.WaitForExit(180000)) {".to_string(),
         "      Write-Log ('卸载程序退出码: ' + $uninstallProc.ExitCode)".to_string(),
         "    } else {".to_string(),
@@ -380,7 +381,7 @@ pub fn windows_upgrade_script(
         "  if (-not $uninstallOk) {".to_string(),
         "    Write-Log '普通权限卸载未完成，申请管理员权限重试'".to_string(),
         "    try {".to_string(),
-        "      Start-Process -FilePath $uninstaller -ArgumentList '/S' -Verb RunAs -ErrorAction Stop | Out-Null".to_string(),
+        "      Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -Verb RunAs -ErrorAction Stop | Out-Null".to_string(),
         "    } catch {".to_string(),
         "      Write-Log ('申请管理员权限失败: ' + $_.Exception.Message)".to_string(),
         "    }".to_string(),
@@ -402,10 +403,10 @@ pub fn windows_upgrade_script(
         "Write-Log ('开始安装新版本: ' + $installer + ' /S')".to_string(),
         "$installed = $false".to_string(),
         "try {".to_string(),
-        "  $installProc = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -ErrorAction Stop".to_string(),
+        "  $installProc = Start-Process -FilePath $installer -ArgumentList $installArgs -WindowStyle Hidden -PassThru -ErrorAction Stop".to_string(),
         "  if ($installProc.WaitForExit(600000)) {".to_string(),
         "    Write-Log ('安装器退出码: ' + $installProc.ExitCode)".to_string(),
-        "    $installed = ($installProc.ExitCode -eq 0)".to_string(),
+        "    $installed = ($installProc.ExitCode -eq 0) -and (Test-Path -LiteralPath $appExe)".to_string(),
         "  } else {".to_string(),
         "    Write-Log '安装器 10 分钟内未结束'".to_string(),
         "  }".to_string(),
@@ -416,9 +417,9 @@ pub fn windows_upgrade_script(
         "if (-not $installed) {".to_string(),
         "  Write-Log '申请管理员权限重新安装'".to_string(),
         "  try {".to_string(),
-        "    $installProc = Start-Process -FilePath $installer -ArgumentList '/S' -Verb RunAs -PassThru -Wait -ErrorAction Stop".to_string(),
+        "    $installProc = Start-Process -FilePath $installer -ArgumentList $installArgs -WindowStyle Hidden -Verb RunAs -PassThru -Wait -ErrorAction Stop".to_string(),
         "    if ($installProc) { Write-Log ('管理员安装退出码: ' + $installProc.ExitCode) }".to_string(),
-        "    $installed = (Test-Path -Path $appExe)".to_string(),
+        "    $installed = $installProc -and ($installProc.ExitCode -eq 0) -and (Test-Path -LiteralPath $appExe)".to_string(),
         "  } catch {".to_string(),
         "    Write-Log ('申请管理员权限安装失败: ' + $_.Exception.Message)".to_string(),
         "  }".to_string(),
@@ -752,7 +753,8 @@ mod tests {
             uninstall_at < install_at,
             "卸载步骤必须排在安装步骤之前\n{script}"
         );
-        assert!(script.contains("-ArgumentList '/S'"), "{script}");
+        assert!(script.contains("$installArgs = '/S /R /D='"), "{script}");
+        assert_eq!(script.matches("-ArgumentList $installArgs").count(), 2);
         assert!(script.contains("$appPid = 4242"), "{script}");
         // 卸载没成功时必须中止安装，而不是覆盖安装
         assert!(script.contains("旧版本卸载未完成"), "{script}");

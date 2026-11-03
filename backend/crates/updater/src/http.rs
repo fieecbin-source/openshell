@@ -312,9 +312,16 @@ impl ReqwestClient {
             // reqwest 默认即「跟随系统代理 + 环境变量」
             ProxyMode::System => builder,
             ProxyMode::Env => match env_proxy_url() {
-                Some(url) => builder.proxy(reqwest::Proxy::all(&url).map_err(|err| {
-                    UpdaterError::new(UpdaterErrorKind::Http, format!("invalid env proxy: {err}"))
-                })?),
+                Some(url) => {
+                    builder
+                        .no_proxy()
+                        .proxy(reqwest::Proxy::all(&url).map_err(|err| {
+                            UpdaterError::new(
+                                UpdaterErrorKind::Http,
+                                format!("invalid env proxy: {err}"),
+                            )
+                        })?)
+                }
                 None => builder.no_proxy(),
             },
             ProxyMode::Custom { url } => {
@@ -403,7 +410,7 @@ pub fn map_reqwest_error(err: reqwest::Error) -> UpdaterError {
     }
 }
 
-fn env_proxy_url() -> Option<String> {
+pub(crate) fn env_proxy_url() -> Option<String> {
     for key in [
         "HTTPS_PROXY",
         "https_proxy",
