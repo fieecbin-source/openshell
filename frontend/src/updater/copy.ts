@@ -12,6 +12,14 @@ export const UPDATE_COPY = {
     ariaLabel: "检查更新",
     newVersion: "有新版本可用",
     mandatory: "需要立即更新",
+    update: "更新",
+    downloading: "下载中",
+    verifying: "校验中",
+    ready: "下载成功，点击更新以确认安装",
+    failed: "更新未完成，点击查看详情并重试",
+  },
+  notification: {
+    downloaded: "下载成功，点击「更新」安装新版本",
   },
   modal: {
     title: "软件更新",

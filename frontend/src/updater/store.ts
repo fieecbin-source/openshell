@@ -9,6 +9,8 @@
 import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getAppInfo, settingsGet, settingsSet } from "../lib/ipc";
+import { useToastStore } from "../stores/toastStore";
+import { UPDATE_COPY, describeUpdateError } from "./copy";
 import type { AppInfo } from "../types/ipc";
 import * as api from "./ipc";
 import { currentResult, isBusy, reduce, type UpdateEvent, type UpdateState } from "./state";
@@ -186,6 +188,7 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
     },
 
     download: async () => {
+      if (isBusy(get().state)) return;
       const result = currentResult(get().state);
       if (!result?.asset) return;
       dispatch({ type: "download_started" });
@@ -194,12 +197,24 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
           dispatch({ type: "download_progress", progress });
         })
         .then((outcome) => {
+          if (!isBusy(get().state)) return;
           dispatch({ type: "download_succeeded", path: outcome.path });
+          useToastStore.getState().push({
+            level: "success",
+            title: UPDATE_COPY.notification.downloaded,
+            position: "top-center",
+          });
           return get().refreshRuntime();
         })
         .catch((err) => {
+          if (!isBusy(get().state)) return;
           console.error("download installer failed", err);
           dispatch({ type: "download_failed", error: err, retryable: true });
+          useToastStore.getState().push({
+            level: "error",
+            title: describeUpdateError(err),
+            position: "top-center",
+          });
           return get().refreshRuntime();
         });
     },

@@ -1,66 +1,79 @@
 import React from "react";
 import { UPDATE_COPY } from "./copy";
-import { isMandatory, shouldShowBadge } from "./state";
+import { isBusy, progressPercent, shouldShowBadge } from "./state";
 import { useUpdaterStore } from "./store";
 
-/**
- * 顶栏更新入口：位于设置齿轮左侧，与其它图标按钮同尺寸。
- *
- * * 默认灰色环形箭头图标；
- * * 有新版本时右上角出现 8px 红点（2s 呼吸），强制更新时变成红底白字 `!`；
- * * 点击直接打开更新弹窗（不做二次跳转）。
- */
+/** 顶栏更新胶囊：点击下载，进度中可打开详情，就绪后确认安装。 */
 export const UpdateBadge: React.FC = () => {
   const state = useUpdaterStore((s) => s.state);
   const setModalOpen = useUpdaterStore((s) => s.setModalOpen);
 
-  const hasUpdate = shouldShowBadge(state);
-  const mandatory = isMandatory(state);
-  const busy = state.kind === "downloading" || state.kind === "verifying";
+  const download = useUpdaterStore((s) => s.download);
+  const busy = isBusy(state);
 
-  // 更新下载按钮不再常驻：只有检测到新版本或正在下载时才显示
-  if (!hasUpdate && !busy) {
-    return null;
-  }
+  if (!shouldShowBadge(state) && !busy) return null;
 
-  const title = mandatory
-    ? UPDATE_COPY.badge.mandatory
-    : hasUpdate
-      ? UPDATE_COPY.badge.newVersion
-      : UPDATE_COPY.badge.title;
+  const ready = state.kind === "ready";
+  const failed = state.kind === "download_failed" || state.kind === "verify_failed" || state.kind === "install_failed";
+  const percent = Math.round(progressPercent(state));
+  const knownProgress = state.kind === "downloading" && Boolean(state.progress.total);
+  const label = state.kind === "verifying"
+    ? UPDATE_COPY.badge.verifying
+    : busy
+      ? knownProgress ? `${percent}%` : UPDATE_COPY.badge.downloading
+      : UPDATE_COPY.badge.update;
+  const title = busy
+    ? `${state.kind === "verifying" ? UPDATE_COPY.phase.verifying : UPDATE_COPY.phase.downloading} · ${label}`
+    : ready ? UPDATE_COPY.badge.ready
+      : failed ? UPDATE_COPY.badge.failed : UPDATE_COPY.badge.newVersion;
 
   return (
     <button
-      onClick={() => setModalOpen(true)}
+      type="button"
+      onClick={() => {
+        if (state.kind === "available" && state.result.asset) void download();
+        else setModalOpen(true);
+      }}
       title={title}
-      aria-label={UPDATE_COPY.badge.ariaLabel}
-      className={`relative p-1.5 rounded-xl border transition shadow-apple-sm active:scale-[0.98] ${
-        hasUpdate
-          ? "border-[#0071e3]/30 bg-[#0071e3]/[0.06] text-accent hover:bg-[#0071e3]/[0.10]"
-          : "border-line/15 bg-surface text-ink-secondary hover:bg-surface-muted hover:text-ink"
+      aria-label={busy ? title : ready ? UPDATE_COPY.badge.ready : UPDATE_COPY.actions.updateNow}
+      aria-busy={busy}
+      className={`inline-flex h-7 min-w-[76px] shrink-0 items-center justify-center gap-2 rounded-full px-3 text-[12px] font-semibold leading-none text-white shadow-apple-sm transition-[background-color,box-shadow,transform] duration-200 focus-visible:!rounded-full ${
+        busy || ready
+          ? "bg-[#3478f6] hover:bg-[#2868df]"
+          : failed
+            ? "bg-state-danger hover:brightness-110"
+            : "bg-ink hover:bg-ink/85"
       }`}
     >
-      <svg
-        className={`w-4 h-4 ${busy ? "animate-pulse" : ""}`}
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-        />
-      </svg>
-
-      {mandatory ? (
-        <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[#ff3b30] text-[8px] font-bold leading-none text-white ring-2 ring-white">
-          !
+      {(busy || ready || failed) && (
+        <span
+          role={busy ? "progressbar" : undefined}
+          aria-label={busy ? title : undefined}
+          aria-valuemin={busy ? 0 : undefined}
+          aria-valuemax={busy ? 100 : undefined}
+          aria-valuenow={knownProgress ? percent : undefined}
+          aria-valuetext={busy ? label : undefined}
+          className="flex h-5 w-5 shrink-0 items-center justify-center"
+        >
+          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+            {busy ? (
+              <>
+                <circle cx="12" cy="12" r="10" opacity="0.3" />
+                <circle
+                  cx="12" cy="12" r="10"
+                  strokeLinecap="round" strokeDasharray="62.83"
+                  strokeDashoffset={knownProgress ? 62.83 * (1 - percent / 100) : 44}
+                  className={knownProgress ? "-rotate-90 origin-center transition-[stroke-dashoffset] duration-200" : "origin-center animate-spin motion-reduce:animate-none"}
+                />
+                <path d="M12 7v10m-4-4 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+              </>
+            ) : (
+              <path d={failed ? "M12 5v9m0 4h.01" : "m6 12 4 4 8-8"} strokeLinecap="round" strokeLinejoin="round" />
+            )}
+          </svg>
         </span>
-      ) : hasUpdate ? (
-        <span className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-pulse-dot rounded-full bg-[#ff3b30] ring-2 ring-white" />
-      ) : null}
+      )}
+      <span className="tabular-nums">{label}</span>
     </button>
   );
 };

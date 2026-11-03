@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useToastStore, type ToastLevel } from "../stores/toastStore";
+import { InlineNotice } from "./ui/Notice";
 
 const LEVEL_STYLE: Record<
   ToastLevel,
@@ -49,8 +50,20 @@ export const ToastHost: React.FC = () => {
   if (toasts.length === 0) return null;
 
   return (
+    <>
+    <div className="pointer-events-none fixed inset-x-4 top-4 z-[90] flex flex-col items-center gap-2">
+      {toasts.filter((t) => t.position === "top-center").map((t) => (
+        <InlineNotice
+          key={t.id}
+          tone={t.level === "error" ? "danger" : t.level === "warning" ? "warning" : t.level === "success" ? "success" : "neutral"}
+          title={t.title}
+          onDismiss={() => dismiss(t.id)}
+          className="pointer-events-auto max-w-full !rounded-2xl !border-line/10 !bg-surface/95 !px-4 !py-3 shadow-apple-lg backdrop-blur-xl animate-fade-in [&_p]:break-words"
+        />
+      ))}
+    </div>
     <div className="pointer-events-none fixed bottom-4 right-4 z-[90] flex w-[400px] max-w-[calc(100vw-2rem)] flex-col gap-2">
-      {toasts.map((t) => {
+      {toasts.filter((t) => t.position !== "top-center").map((t) => {
         const style = LEVEL_STYLE[t.level];
         const isError = t.level === "error";
         // 错误默认展开：里面是「发生了什么 + 怎么办」，用户不需要多点一次
@@ -115,5 +128,6 @@ export const ToastHost: React.FC = () => {
         );
       })}
     </div>
+    </>
   );
 };

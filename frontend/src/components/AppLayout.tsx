@@ -351,7 +351,7 @@ export const AppLayout: React.FC = () => {
             {/* 顶部常驻同步小组件 (Apple Header Capsule) */}
             <SyncStatusWidget variant="header" />
 
-            {/* 更新入口：有新版本时右上角出现红点 */}
+            {/* 更新入口：下载时显示进度胶囊 */}
             <UpdateBadge />
 
             {/* 设置下拉入口 */}

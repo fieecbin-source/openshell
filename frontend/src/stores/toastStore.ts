@@ -6,6 +6,7 @@ export interface ToastItem {
   id: string;
   level: ToastLevel;
   title: string;
+  position?: "top-center";
   /** 详细信息（错误堆栈、后端 correlation_id 等），可展开与复制 */
   detail?: string;
 }
