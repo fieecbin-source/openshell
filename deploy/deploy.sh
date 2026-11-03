@@ -99,6 +99,17 @@ env_value() {
 SERVER_PORT="$(env_value SERVER_PORT 8085)"
 ENABLE_TLS="$(env_value ENABLE_TLS false)"
 DOMAIN_VALUE="$(env_value DOMAIN sync.example.com)"
+SERVER_BIND_ADDRESS="$(env_value SERVER_BIND_ADDRESS 127.0.0.1)"
+ALLOW_INSECURE_PUBLIC_BIND="$(env_value ALLOW_INSECURE_PUBLIC_BIND false)"
+
+if [ "${ENABLE_TLS}" != "true" ] \
+    && [ "${SERVER_BIND_ADDRESS}" != "127.0.0.1" ] \
+    && [ "${SERVER_BIND_ADDRESS}" != "::1" ] \
+    && [ "${ALLOW_INSECURE_PUBLIC_BIND}" != "true" ]; then
+    log_error "拒绝在未启用 TLS 时将 API 绑定到 ${SERVER_BIND_ADDRESS}。"
+    log_error "请改用 ENABLE_TLS=true、绑定 127.0.0.1 并通过 HTTPS 反代，或显式设置 ALLOW_INSECURE_PUBLIC_BIND=true 承担明文传输风险。"
+    exit 1
+fi
 
 PROFILE_ARGS=""
 if [ "${ENABLE_TLS}" = "true" ]; then
@@ -247,9 +258,12 @@ echo ""
 if [ "${ENABLE_TLS}" = "true" ]; then
     log_success "客户端服务端地址填写：https://${DOMAIN_VALUE}"
 else
-    log_success "客户端服务端地址填写：http://<你的域名>:${SERVER_PORT}"
-    log_info "（也可用公网 IP：http://<公网IP>:${SERVER_PORT}；请确保防火墙/安全组放行 ${SERVER_PORT}）"
-    log_warn "8085 为明文 HTTP：业务数据仍是 E2EE 密文，但登录令牌会明文传输；有 80/443 时可改用 ENABLE_TLS=true。"
+    log_success "客户端服务端地址填写：http://127.0.0.1:${SERVER_PORT}（仅本机）或通过 HTTPS 反向代理暴露的域名"
+    log_warn "未启用 TLS：业务数据仍是 E2EE 密文，但登录令牌与密码会明文传输。"
+    log_warn "公网访问请启用 ENABLE_TLS=true，或将绑定保持为 127.0.0.1 并由 HTTPS 反代对外提供服务。"
+    if [ "${ALLOW_INSECURE_PUBLIC_BIND}" = "true" ]; then
+        log_warn "已显式允许未加密的公网绑定：同链路攻击者可截获访问令牌。"
+    fi
 fi
 if [ -f .env ] && [ "$(grep -c '^BOOTSTRAP_TOKEN=.\+' .env 2>/dev/null || true)" -gt 0 ]; then
     log_info "首次注册所需的 BOOTSTRAP_TOKEN 在 .env 中查看：grep BOOTSTRAP_TOKEN .env"

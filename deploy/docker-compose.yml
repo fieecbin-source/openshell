@@ -18,7 +18,9 @@ services:
       - REQUIRE_INVITE=${REQUIRE_INVITE:-false}
       - INVITE_CODE=${INVITE_CODE:-}
       - RELAY_ENABLED=${RELAY_ENABLED:-false}
-      - RELAY_ALLOWED_NETS=${RELAY_ALLOWED_NETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32}
+      - RELAY_ALLOWED_NETS=${RELAY_ALLOWED_NETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-tauri://localhost,https://tauri.localhost,http://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420}
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
       - RUST_LOG=openshell_server=info,tower_http=info
     # 默认只绑定本机，交给已有的 HTTPS 反代；显式设置 SERVER_BIND_ADDRESS 才对外开放。
     ports:
