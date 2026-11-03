@@ -252,6 +252,10 @@ impl SessionService {
         passphrase: Option<String>,
         comment: Option<String>,
     ) -> DomainResult<SshKey> {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(DomainError::validation("请输入自定义私钥名称。"));
+        }
         if !self.vault_manager.is_unlocked() {
             return Err(DomainError::new(
                 ErrorCode::VaultLocked,
@@ -301,7 +305,7 @@ impl SessionService {
                         )
                     } else if !unreadable && encrypted {
                         DomainError::validation(
-                            "该私钥已加密，请在下方填写私钥口令 (Passphrase) 后再导入。",
+                            "该私钥已加密，请填写私钥口令 (Passphrase) 后再保存。",
                         )
                     } else {
                         DomainError::validation(
@@ -441,8 +445,8 @@ impl SessionService {
                 .restore_if_deleted(&key.secret_id)?
                 .ok_or_else(|| {
                     DomainError::not_found(
-                    "该私钥的加密内容缺失，无法设置口令。请在「私钥管理」中重新导入该私钥文件。",
-                )
+                        "该私钥的加密内容缺失，无法设置口令。请重新导入该私钥文件。",
+                    )
                 })?,
         };
         let pem_bytes = self.vault_manager.decrypt_secret(&secret)?;

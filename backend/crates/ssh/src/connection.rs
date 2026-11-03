@@ -65,7 +65,11 @@ impl SshConnection {
             opts.port,
         ));
 
-        let config = Arc::new(russh::client::Config::default());
+        // 交互式终端立即发送小包，避免 Nagle 合并按键数据带来的等待。
+        let config = Arc::new(russh::client::Config {
+            nodelay: true,
+            ..Default::default()
+        });
         let addr = format!("{}:{}", host_clean, opts.port);
         let handler = OpenShellClientHandler::new(verifier);
         // 主机密钥校验发生在握手阶段，russh 只返回通用错误；通过共享槽位把具体原因取回来。
@@ -254,18 +258,18 @@ impl SshConnection {
                         if has_passphrase {
                             DomainError::new(
                                 ErrorCode::AuthFailed,
-                                "私钥口令不正确，无法解密该私钥。请在「私钥管理」中重新设置正确的口令后重试。",
+                                "私钥口令不正确，无法解密该私钥。请重新导入该私钥并填写正确口令后重试。",
                             )
                         } else {
                             DomainError::new(
                                 ErrorCode::AuthFailed,
-                                "该私钥已加密，需要正确的私钥口令 (Passphrase)。请在「私钥管理」中为该私钥设置口令后重试。",
+                                "该私钥已加密，需要正确的私钥口令 (Passphrase)。请重新导入该私钥并填写口令后重试。",
                             )
                         }
                     } else {
                         DomainError::new(
                             ErrorCode::AuthFailed,
-                            "无法读取该私钥，请在「私钥管理」中重新导入正确的私钥文件（OpenSSH 或 PEM 格式）。",
+                            "无法读取该私钥，请重新导入正确的私钥文件（OpenSSH 或 PEM 格式）。",
                         )
                     }
                 })?;

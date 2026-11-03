@@ -3,6 +3,7 @@
 mod commands;
 mod error;
 mod profile;
+mod ssh_keys;
 mod updater;
 
 use commands::*;
@@ -165,6 +166,7 @@ pub fn run() {
             credential_delete,
             ssh_key_list,
             ssh_key_import,
+            ssh_keys::ssh_key_pick_file,
             ssh_key_delete,
             ssh_key_set_passphrase,
             connect_session,

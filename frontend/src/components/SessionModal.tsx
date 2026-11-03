@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import type {
   AuthMethod,
   HostKeyPolicy,
@@ -17,11 +17,13 @@ import { useVaultStore } from "../stores/vaultStore";
 import {
   createCredential,
   deleteSshKey,
-  importSshKey,
   listSshKeys,
-  setSshKeyPassphrase,
 } from "../lib/ipc";
 import { formatFriendlyError, parseIpcError } from "../lib/errors";
+import { SshKeyImportModal } from "./SshKeyImportModal";
+import { Button, IconButton } from "./ui/Button";
+import { Select } from "./ui/Field";
+import { KeyRound, Trash2 } from "lucide-react";
 
 interface SessionModalProps {
   isOpen: boolean;
@@ -71,6 +73,7 @@ const VaultInlineUnlock: React.FC<VaultInlineUnlockProps> = ({
     <div className="flex gap-2">
       <input
         type="password"
+        aria-label="保险库主密码"
         value={password}
         onChange={(e) => onPasswordChange(e.target.value)}
         className="flex-1 rounded-lg border border-state-warning/30 bg-surface px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:border-state-warning/30"
@@ -123,21 +126,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [keepaliveSec, setKeepaliveSec] = useState<number>(30);
   const [jumpHostSessionId, setJumpHostSessionId] = useState<string>("");
 
-  // SSH Key management（就地列表：只展示名称，支持删除与浏览导入，不再套一层私钥管理弹窗）
+  // 已保存的私钥仅按名称选择；导入在独立弹窗中完成。
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
   const [selectedKeyId, setSelectedKeyId] = useState<string>("");
   const [connectAfterSave, setConnectAfterSave] = useState(false);
-  const [importingKey, setImportingKey] = useState(false);
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
-  // 保险库锁定时先暂存待导入的私钥，解锁成功后自动继续导入，用户不用再选一次文件
-  const [pendingKeyImport, setPendingKeyImport] = useState<{ name: string; pem: string } | null>(
-    null
-  );
-  const keyFileInputRef = useRef<HTMLInputElement>(null);
-  // 私钥口令（选中私钥后在其下方录入并加密保存）
-  const [keyPassphrase, setKeyPassphrase] = useState("");
-  const [keyPassphraseMsg, setKeyPassphraseMsg] = useState<string | null>(null);
-  const [savingKeyPassphrase, setSavingKeyPassphrase] = useState(false);
+  const [keyImportOpen, setKeyImportOpen] = useState(false);
 
   // Serial Fields
   const [serialPort, setSerialPort] = useState("COM1");
@@ -178,83 +172,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     }
   };
 
-  const handleSaveKeyPassphrase = async () => {
-    const key = sshKeys.find((k) => k.id === selectedKeyId);
-    if (!key) return;
-    if (!keyPassphrase) {
-      setKeyPassphraseMsg("请输入私钥口令 (Passphrase)");
-      return;
-    }
-    setSavingKeyPassphrase(true);
-    setKeyPassphraseMsg(null);
-    try {
-      const updated = await setSshKeyPassphrase(key.id, keyPassphrase);
-      await loadKeys(updated.id);
-      setKeyPassphrase("");
-      setKeyPassphraseMsg("口令已加密保存，连接该服务器时会自动使用。");
-    } catch (err: any) {
-      setKeyPassphraseMsg(formatFriendlyError(err));
-      // 保险库已锁定（含自动锁定）：同步一次状态，让上面的解锁卡片显出来
-      if (parseIpcError(err).code === "VAULT_LOCKED") {
-        await refreshVaultStatus();
-      }
-    } finally {
-      setSavingKeyPassphrase(false);
-    }
-  };
-
-  /** 真正执行导入：私钥必须写入加密保险库，所以先确认保险库状态。 */
-  const runKeyImport = async (name: string, pem: string) => {
-    setImportingKey(true);
-    setKeyMsg(null);
-    try {
-      const imported = await importSshKey(name, pem, keyPassphrase || undefined);
-      await loadKeys(imported.id);
-      setPendingKeyImport(null);
-      setKeyPassphrase("");
-      setKeyMsg(`已配置私钥「${imported.name}」`);
-    } catch (err: any) {
-      // 选文件期间保险库可能被自动锁定（15 分钟无操作）：不要只显示一行报错，
-      // 记下内容并给出就地解锁入口，解锁后自动补做导入。
-      setPendingKeyImport({ name, pem });
-      if (parseIpcError(err).code === "VAULT_LOCKED") {
-        await refreshVaultStatus();
-        return;
-      }
-      setKeyMsg(formatFriendlyError(err));
-    } finally {
-      setImportingKey(false);
-    }
-  };
-
-  /**
-   * 浏览本地私钥文件 → 直接配置为可选条目。
-   * 只保存到保险库并回显「名称」，不渲染任何私钥内容。
-   */
-  const handleImportKeyFile = async (file: File) => {
-    setImportingKey(true);
-    setKeyMsg(null);
-    try {
-      const pem = (await file.text()).trim();
-      if (!/PRIVATE KEY-----/.test(pem)) {
-        throw new Error("所选文件不是 PEM/OpenSSH 私钥（缺少 PRIVATE KEY 标记）");
-      }
-      const name = file.name.replace(/\.(pem|key|ppk|txt)$/i, "").trim() || `key-${Date.now()}`;
-
-      // 前端状态可能已经过期，导入前向后端确认一次真实的保险库状态
-      await refreshVaultStatus();
-      if (useVaultStore.getState().status?.state !== "unlocked") {
-        setPendingKeyImport({ name, pem });
-        return;
-      }
-      await runKeyImport(name, pem);
-    } catch (err: any) {
-      setKeyMsg(formatFriendlyError(err));
-    } finally {
-      setImportingKey(false);
-    }
-  };
-
   /** 删除即清理：移除配置记录并解除当前会话绑定（不动磁盘文件） */
   const handleDeleteKey = async (key: SshKey) => {
     if (
@@ -268,7 +185,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       await deleteSshKey(key.id);
       if (selectedKeyId === key.id) {
         setSelectedKeyId("");
-        setKeyPassphrase("");
       }
       await loadKeys();
       setKeyMsg(`已移除私钥配置「${key.name}」`);
@@ -369,9 +285,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setCustomBaud(false);
       }
       setError(null);
-      setKeyPassphrase("");
-      setKeyPassphraseMsg(null);
-      setPendingKeyImport(null);
+      setKeyImportOpen(false);
       setVaultUnlockError(null);
       setShowPassword(false);
     }
@@ -394,12 +308,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         await unlockVault(vaultPassword);
       }
       setVaultPassword("");
-      // 解锁后自动补做刚才被拦下的私钥导入
-      const pending = pendingKeyImport;
-      if (pending) {
-        setPendingKeyImport(null);
-        await runKeyImport(pending.name, pending.pem);
-      }
     } catch (err: any) {
       setVaultUnlockError(formatFriendlyError(err));
     } finally {
@@ -586,6 +494,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   };
 
   // 过滤可选跳板机会话（排除自身）
+  const selectedKey = sshKeys.find((key) => key.id === selectedKeyId);
   const candidateJumpHosts = sessions.filter(
     (s) => s.protocol === "ssh" && (!editingSession || s.id !== editingSession.id)
   );
@@ -791,7 +700,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
-                      <span>🛡️ SSH 密钥</span>
+                      <span>🛡️ 公钥连接</span>
                     </div>
                   </button>
 
@@ -848,154 +757,36 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   </div>
                 )}
 
-                {/*
-                  私钥凭据：就地列表（不再套一层「私钥管理器」弹窗）。
-                  只显示名称、支持点选与删除；未配置时给出「浏览配置」入口。
-                  私钥内容永远不回显。
-                */}
                 {isPublicKeyAuth(authMethod) && (
-                  <div className="rounded-xl border border-line/15 bg-surface-muted/50 p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-ink">私钥凭据</label>
-                      <button
-                        type="button"
-                        onClick={() => keyFileInputRef.current?.click()}
-                        disabled={importingKey}
-                        className="text-[11px] font-semibold text-accent hover:text-accent transition disabled:opacity-50"
-                      >
-                        {importingKey ? "读取中..." : "选择私钥文件"}
-                      </button>
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <Select
+                          aria-label="已保存的私钥"
+                          value={selectedKeyId}
+                          onChange={(e) => { setSelectedKeyId(e.target.value); setKeyMsg(null); }}
+                        >
+                          <option value="">{sshKeys.length ? "请选择私钥" : "暂无已保存的私钥"}</option>
+                          {sshKeys.map((key) => <option key={key.id} value={key.id}>{key.name}</option>)}
+                        </Select>
+                      </div>
+                      <Button onClick={() => setKeyImportOpen(true)}>导入私钥</Button>
+                      {selectedKeyId && (
+                        <IconButton label="移除选中的私钥配置" onClick={() => {
+                          const key = sshKeys.find((item) => item.id === selectedKeyId);
+                          if (key) handleDeleteKey(key);
+                        }}><Trash2 className="h-4 w-4" /></IconButton>
+                      )}
                     </div>
-
-                    <div className="space-y-1.5">
-                      <label htmlFor="session-key-passphrase" className="block text-xs font-medium text-ink-secondary">
-                        私钥口令 (Passphrase)
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          id="session-key-passphrase"
-                          type="password"
-                          value={keyPassphrase}
-                          onChange={(e) => setKeyPassphrase(e.target.value)}
-                          autoComplete="off"
-                          placeholder="加密私钥请填写，未加密时留空"
-                          className="min-w-0 flex-1 rounded-lg border border-line/15 bg-surface px-2.5 py-2 text-xs text-ink focus:border-accent focus:outline-none"
-                        />
-                        {(pendingKeyImport || selectedKeyId) && (
-                          <button
-                            type="button"
-                            onClick={() => pendingKeyImport
-                              ? runKeyImport(pendingKeyImport.name, pendingKeyImport.pem)
-                              : handleSaveKeyPassphrase()}
-                            disabled={importingKey || savingKeyPassphrase || !!isVaultLocked || !keyPassphrase}
-                            className="shrink-0 rounded-lg bg-action px-2.5 py-2 text-[11px] font-semibold text-white disabled:opacity-50"
-                          >
-                            {importingKey || savingKeyPassphrase ? "处理中..." : pendingKeyImport ? "重试导入" : "保存口令"}
-                          </button>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-ink-tertiary">选择私钥文件前填写；口令错误时可修改后重试导入。</p>
-                      {keyPassphraseMsg && <div role="status" className="text-[11px] text-ink-secondary">{keyPassphraseMsg}</div>}
-                    </div>
-
-                    {sshKeys.length === 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => keyFileInputRef.current?.click()}
-                        className="w-full rounded-xl border border-dashed border-line/25 bg-surface py-3 text-xs font-semibold text-ink-secondary hover:border-accent/50 hover:text-accent transition"
-                      >
-                        选择本地私钥文件
-                      </button>
-                    ) : (
-                      <div className="max-h-40 overflow-y-auto rounded-xl border border-line/15 bg-surface divide-y divide-line/15">
-                        {sshKeys.map((k) => {
-                          const active = selectedKeyId === k.id;
-                          return (
-                            <div
-                              key={k.id}
-                              onClick={() => {
-                                setSelectedKeyId(k.id);
-                                setKeyMsg(null);
-                                setKeyPassphrase("");
-                                setKeyPassphraseMsg(null);
-                                setPendingKeyImport(null);
-                              }}
-                              className={`flex cursor-pointer items-center justify-between gap-2 px-3 py-2 transition ${
-                                active ? "bg-action/[0.06]" : "hover:bg-surface-muted"
-                              }`}
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span
-                                  className={`h-3.5 w-3.5 shrink-0 rounded-full border ${
-                                    active
-                                      ? "border-accent bg-action"
-                                      : "border-line/25 bg-surface"
-                                  }`}
-                                />
-                                <span
-                                  className={`truncate text-xs ${
-                                    active ? "font-bold text-accent" : "text-ink-secondary"
-                                  }`}
-                                  title={k.name}
-                                >
-                                  {k.name}
-                                </span>
-                                {k.has_passphrase && (
-                                  <span className="shrink-0 text-[10px] text-state-warning">🔒</span>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteKey(k);
-                                }}
-                                className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-ink-tertiary hover:bg-state-danger/10 hover:text-state-danger transition"
-                                title="删除该私钥配置（不改动磁盘上的私钥文件）"
-                              >
-                                🗑
-                              </button>
-                            </div>
-                          );
-                        })}
+                    {selectedKey && (
+                      <div role="status" aria-label="当前私钥" className="flex min-w-0 items-center gap-2.5 rounded-xl bg-action/5 px-4 py-3 text-accent">
+                        <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className="truncate text-sm font-semibold" title={selectedKey.name}>
+                          {selectedKey.name}
+                        </span>
                       </div>
                     )}
-
-                    <input
-                      ref={keyFileInputRef}
-                      type="file"
-                      className="hidden"
-                      accept=".pem,.key,.ppk,id_rsa,id_ed25519,id_ecdsa,*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleImportKeyFile(file);
-                        e.target.value = "";
-                      }}
-                    />
-
-                    {pendingKeyImport && isVaultLocked && (
-                      <div className="text-[11px] text-state-warning">
-                        私钥「{pendingKeyImport.name}」已读取，解锁成功后会自动完成导入，无需重新选择文件。
-                      </div>
-                    )}
-
-                    {/* 保险库锁定时就地解锁：导入私钥同样要写入加密保险库 */}
-                    {isVaultLocked && (
-                      <VaultInlineUnlock
-                        reason={
-                          pendingKeyImport ? `导入私钥「${pendingKeyImport.name}」` : "导入 SSH 私钥"
-                        }
-                        uninitialized={!!isVaultUninitialized}
-                        password={vaultPassword}
-                        onPasswordChange={setVaultPassword}
-                        busy={unlockingVault}
-                        error={vaultUnlockError}
-                        onSubmit={handleInlineVaultUnlock}
-                      />
-                    )}
-
-                    {keyMsg && <div className="text-[11px] text-ink-secondary">{keyMsg}</div>}
-
+                    {keyMsg && <p role="status" className="text-xs text-ink-secondary">{keyMsg}</p>}
                   </div>
                 )}
               </div>
@@ -1267,13 +1058,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         <div className="mt-3 flex shrink-0 items-center justify-between gap-3 border-t border-line/15 pt-3">
           <div className="min-w-0 text-[11px] text-ink-tertiary">
             {isPublicKeyAuth(authMethod) && protocol === "ssh" ? (
-              sshKeys.find((k) => k.id === selectedKeyId) ? (
-                <span className="truncate">
-                  🔑 私钥：
-                  <span className="font-semibold text-ink-secondary">
-                    {sshKeys.find((k) => k.id === selectedKeyId)?.name}
-                  </span>
-                </span>
+              selectedKey ? (
+                <span>公钥连接</span>
               ) : (
                 <span className="text-state-warning">⚠️ 尚未选择私钥，可能无法免密登录</span>
               )
@@ -1313,6 +1099,30 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           </div>
         </div>
       </div>
+      {keyImportOpen && (
+        <SshKeyImportModal
+          onClose={() => { setKeyImportOpen(false); setVaultPassword(""); setVaultUnlockError(null); }}
+          onSaved={(key) => {
+            setSshKeys((keys) => keys.some((item) => item.id === key.id)
+              ? keys.map((item) => item.id === key.id ? key : item)
+              : [...keys, key]);
+            setSelectedKeyId(key.id);
+            setKeyMsg(null);
+            setKeyImportOpen(false);
+          }}
+          vaultUnlock={isVaultLocked ? (
+            <VaultInlineUnlock
+              reason="导入 SSH 私钥"
+              uninitialized={!!isVaultUninitialized}
+              password={vaultPassword}
+              onPasswordChange={setVaultPassword}
+              busy={unlockingVault}
+              error={vaultUnlockError}
+              onSubmit={handleInlineVaultUnlock}
+            />
+          ) : null}
+        />
+      )}
     </div>
   );
 };

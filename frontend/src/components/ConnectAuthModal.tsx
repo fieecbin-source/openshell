@@ -131,7 +131,7 @@ export const ConnectAuthModal: React.FC<ConnectAuthModalProps> = ({ tab, onClose
               <Field
                 label="私钥口令"
                 htmlFor="connect-auth-passphrase"
-                hint="若私钥已加密，请输入口令；也可以到「私钥管理」中为已选私钥永久保存口令。"
+                hint="若私钥已加密，请输入口令；也可以在会话的「公钥连接」中重新导入并保存。"
               >
                 <Input
                   id="connect-auth-passphrase"

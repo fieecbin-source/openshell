@@ -169,6 +169,15 @@ export async function listSshKeys(): Promise<SshKey[]> {
   return await invoke<SshKey[]>("ssh_key_list");
 }
 
+export interface SelectedPrivateKey {
+  file_name: string;
+  pem: string;
+}
+
+export async function pickSshKeyFile(): Promise<SelectedPrivateKey | null> {
+  return await invoke<SelectedPrivateKey | null>("ssh_key_pick_file");
+}
+
 export async function importSshKey(
   name: string,
   pem: string,
