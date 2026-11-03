@@ -54,8 +54,23 @@ pub async fn readyz(State(state): State<AppState>) -> Response {
     }
 }
 
-pub async fn metrics(State(state): State<AppState>) -> Response {
+pub async fn metrics(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
+    if let Some(expected) = &state.config.metrics_token {
+        let provided = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        if provided != Some(expected.as_str()) {
+            return make_error(
+                ApiErrorCode::Unauthenticated,
+                "Invalid or missing metrics token",
+            )
+            .into_response();
+        }
+    }
+
     let uptime = state.start_time.elapsed().as_secs();
+    let login_failures = state.login_limiter.total_failures();
     let (accounts, devices, records, snapshots) = state.db.with_conn(|conn| {
         let a: i64 = conn
             .query_row("SELECT COUNT(*) FROM account", [], |r| r.get(0))
@@ -87,8 +102,11 @@ pub async fn metrics(State(state): State<AppState>) -> Response {
          openshell_records_total {}\n\
          # HELP openshell_snapshots_total Total snapshots stored\n\
          # TYPE openshell_snapshots_total gauge\n\
-         openshell_snapshots_total {}\n",
-        uptime, accounts, devices, records, snapshots
+         openshell_snapshots_total {}\n\
+         # HELP openshell_auth_login_failures_total Failed login attempts since process start\n\
+         # TYPE openshell_auth_login_failures_total counter\n\
+         openshell_auth_login_failures_total {}\n",
+        uptime, accounts, devices, records, snapshots, login_failures
     );
 
     (
@@ -115,17 +133,23 @@ pub async fn get_audit_events(
     let limit = query.limit.unwrap_or(50).min(200);
 
     let events = state.db.with_conn(|conn| -> Result<Vec<AuditEventDto>, crate::middleware::ApiError> {
-        let mut sql = "SELECT id, type, device_id, at, ip_hash, metadata_json FROM audit_event WHERE account_id = ?1".to_string();
+        // 只拼接固定的 SQL 片段，所有用户值一律通过参数绑定传入。
+        let mut sql = "SELECT id, type, device_id, at, ip_hash, metadata_json FROM audit_event WHERE account_id = ?".to_string();
+        let mut params: Vec<rusqlite::types::Value> =
+            vec![rusqlite::types::Value::Text(user.account_id.clone())];
         if let Some(before) = &query.before {
-            sql.push_str(&format!(" AND at < '{before}'"));
+            sql.push_str(" AND at < ?");
+            params.push(rusqlite::types::Value::Text(before.clone()));
         }
         if let Some(t) = &query.event_type {
-            sql.push_str(&format!(" AND type = '{t}'"));
+            sql.push_str(" AND type = ?");
+            params.push(rusqlite::types::Value::Text(t.clone()));
         }
-        sql.push_str(" ORDER BY at DESC LIMIT ?2");
+        sql.push_str(" ORDER BY at DESC LIMIT ?");
+        params.push(rusqlite::types::Value::Integer(limit as i64));
 
         let mut stmt = conn.prepare(&sql).map_err(|e| make_error(ApiErrorCode::Internal, e.to_string()))?;
-        let rows = stmt.query_map([&user.account_id, &limit.to_string()], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let meta_str: Option<String> = row.get(5)?;
             let metadata = meta_str.and_then(|s| serde_json::from_str(&s).ok());
             Ok(AuditEventDto {

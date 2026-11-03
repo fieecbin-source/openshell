@@ -3,7 +3,7 @@ use crate::auth::{
 };
 use crate::middleware::{make_error, AuthUser};
 use crate::state::AppState;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -12,22 +12,24 @@ use openshell_sync_protocol::{
     LoginRequest, LogoutRequest, QuotaDto, RefreshRequest, RegisterRequest, ServerFeaturesDto,
     TokenResponse,
 };
+use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const ACCESS_TOKEN_TTL_SEC: u64 = 900; // 15 mins
 const REFRESH_TOKEN_TTL_SEC: u64 = 30 * 86400; // 30 days
 const MAX_DEVICES_PER_ACCOUNT: u64 = 10;
+const MIN_PASSWORD_LEN: usize = 8;
 
 pub async fn register(
     State(state): State<AppState>,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Response, crate::middleware::ApiError> {
-    // Validate password: 只要非空即可，不再强制 10 位下限
-    if req.password.is_empty() || req.password.len() > 128 {
+    if !is_password_acceptable(&req.password) {
         return Err(make_error(
             ApiErrorCode::ValidationFailed,
-            "Password must be non-empty and at most 128 characters",
+            format!("Password must be {MIN_PASSWORD_LEN} to 128 characters long"),
         ));
     }
 
@@ -54,18 +56,30 @@ pub async fn register(
                 .query_row("SELECT COUNT(*) FROM account", [], |r| r.get(0))
                 .unwrap_or(0);
 
-            if !state.config.allow_multi_user && account_count > 0 {
-                // Check bootstrap token if provided
-                let can_bootstrap = match (&state.config.bootstrap_token, &req.invite_code) {
-                    (Some(expected), Some(provided)) => expected == provided,
-                    _ => false,
-                };
-                if !can_bootstrap {
-                    return Err(make_error(
-                        ApiErrorCode::RegistrationClosed,
-                        "Registration is closed on single-user deployment",
-                    ));
-                }
+            if account_count == 0
+                && !first_registration_allowed(
+                    client_addr.ip().is_loopback(),
+                    req.invite_code.as_deref(),
+                    state.config.bootstrap_token.as_deref(),
+                )
+            {
+                return Err(make_error(
+                    ApiErrorCode::Forbidden,
+                    "First account registration requires BOOTSTRAP_TOKEN or loopback access",
+                ));
+            }
+
+            if !state.config.allow_multi_user
+                && account_count > 0
+                && !token_matches(
+                    state.config.bootstrap_token.as_deref(),
+                    req.invite_code.as_deref(),
+                )
+            {
+                return Err(make_error(
+                    ApiErrorCode::RegistrationClosed,
+                    "Registration is closed on single-user deployment",
+                ));
             }
 
             if state.config.require_invite {
@@ -195,8 +209,21 @@ pub async fn register(
 
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, crate::middleware::ApiError> {
+    let limiter_key = format!("{}|{}", req.email.trim().to_lowercase(), client_addr.ip());
+    let ip_hash = hash_token(&client_addr.ip().to_string());
+    if let Some(remaining) = state.login_limiter.lock_remaining(&limiter_key) {
+        return Err(make_error(
+            ApiErrorCode::RateLimited,
+            format!(
+                "Too many failed login attempts; retry in {} seconds",
+                remaining.as_secs().max(1)
+            ),
+        ));
+    }
+
     if !state.config.allow_multi_user
         && state
             .config
@@ -204,6 +231,7 @@ pub async fn login(
             .as_deref()
             .is_some_and(|username| username.trim() != req.email)
     {
+        state.login_limiter.record_failure(&limiter_key);
         return Err(make_error(
             ApiErrorCode::Unauthenticated,
             "Invalid credentials",
@@ -213,7 +241,7 @@ pub async fn login(
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();
 
-    let (account_id, token_epoch, masked_email) = state.db.with_conn(|conn| -> Result<(String, u64, String), crate::middleware::ApiError> {
+    let credentials = state.db.with_conn(|conn| -> Result<(String, u64, String), crate::middleware::ApiError> {
         let mut stmt = conn
             .prepare("SELECT id, password_hash, token_epoch, disabled_at FROM account WHERE email = ?1")
             .map_err(|e| make_error(ApiErrorCode::Internal, e.to_string()))?;
@@ -227,16 +255,43 @@ pub async fn login(
             _ => return Err(make_error(ApiErrorCode::Unauthenticated, "Invalid credentials")),
         };
 
+        let record_failure = |conn: &rusqlite::Connection, account_id: &str| {
+            let audit_id = Ulid::new().to_string();
+            let _ = conn.execute(
+                "INSERT INTO audit_event (id, account_id, device_id, type, ip_hash, at) VALUES (?1, ?2, ?3, 'auth.login.failed', ?4, ?5)",
+                rusqlite::params![
+                    &audit_id,
+                    account_id,
+                    req.device.id.as_deref(),
+                    &ip_hash,
+                    &now
+                ],
+            );
+        };
+
         if disabled_at.is_some() {
+            record_failure(conn, &acc_id);
             return Err(make_error(ApiErrorCode::Forbidden, "Account is disabled"));
         }
 
         if !verify_password(&req.password, &pass_hash) {
+            record_failure(conn, &acc_id);
             return Err(make_error(ApiErrorCode::Unauthenticated, "Invalid credentials"));
         }
 
         Ok((acc_id, epoch as u64, mask_email(&req.email)))
-    })?;
+    });
+
+    let (account_id, token_epoch, masked_email) = match credentials {
+        Ok(values) => {
+            state.login_limiter.clear(&limiter_key);
+            values
+        }
+        Err(err) => {
+            state.login_limiter.record_failure(&limiter_key);
+            return Err(err);
+        }
+    };
 
     // Determine or register device
     let device_id = state.db.with_conn(|conn| -> Result<String, crate::middleware::ApiError> {
@@ -475,10 +530,10 @@ pub async fn change_password(
     State(state): State<AppState>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, crate::middleware::ApiError> {
-    if req.new_password.is_empty() || req.new_password.len() > 128 {
+    if !is_password_acceptable(&req.new_password) {
         return Err(make_error(
             ApiErrorCode::ValidationFailed,
-            "New password must be non-empty and at most 128 characters",
+            format!("New password must be {MIN_PASSWORD_LEN} to 128 characters long"),
         ));
     }
 
@@ -585,16 +640,94 @@ pub async fn get_account(
     Ok(Json(resp))
 }
 
+fn is_password_acceptable(password: &str) -> bool {
+    let len = password.chars().count();
+    (MIN_PASSWORD_LEN..=128).contains(&len)
+}
+
+fn token_matches(expected: Option<&str>, provided: Option<&str>) -> bool {
+    match (expected, provided) {
+        (Some(expected), Some(provided)) if !expected.is_empty() => expected == provided,
+        _ => false,
+    }
+}
+
+fn first_registration_allowed(
+    is_loopback: bool,
+    provided: Option<&str>,
+    expected: Option<&str>,
+) -> bool {
+    // 配置了 BOOTSTRAP_TOKEN 时必须出示令牌；未配置时才允许本机初始化。
+    // 这样即使 HTTPS 反代把远端请求表现为 loopback，也无法绕过已配置的令牌。
+    match expected {
+        Some(expected) if !expected.is_empty() => token_matches(Some(expected), provided),
+        _ => is_loopback,
+    }
+}
+
 fn mask_email(email: &str) -> String {
     let parts: Vec<&str> = email.split('@').collect();
     if parts.len() != 2 {
-        return email.to_string();
+        return "***".to_string();
     }
     let name = parts[0];
     let domain = parts[1];
-    if name.len() <= 2 {
-        format!("{}*@{}", &name[0..1], domain)
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return format!("***@{domain}");
+    };
+    if name.chars().count() <= 2 {
+        format!("{first}*@{domain}")
     } else {
-        format!("{}{}*@{}", &name[0..1], &name[1..2], domain)
+        let second = chars.next().unwrap_or(first);
+        format!("{first}{second}*@{domain}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_length_is_enforced() {
+        assert!(!is_password_acceptable("short"));
+        assert!(is_password_acceptable("12345678"));
+        assert!(is_password_acceptable(&"a".repeat(128)));
+        assert!(!is_password_acceptable(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn first_registration_requires_token_or_loopback() {
+        // 未配置令牌：仅 loopback 可初始化。
+        assert!(first_registration_allowed(true, None, None));
+        assert!(!first_registration_allowed(false, Some("anything"), None));
+
+        // 配置令牌后，即使来自 loopback 也必须出示正确令牌。
+        assert!(first_registration_allowed(
+            false,
+            Some("expected"),
+            Some("expected")
+        ));
+        assert!(first_registration_allowed(
+            true,
+            Some("expected"),
+            Some("expected")
+        ));
+        assert!(!first_registration_allowed(true, None, Some("expected")));
+        assert!(!first_registration_allowed(
+            true,
+            Some("wrong"),
+            Some("expected")
+        ));
+        assert!(!token_matches(Some(""), Some("")));
+    }
+
+    #[test]
+    fn mask_email_handles_empty_and_wide_characters() {
+        assert_eq!(mask_email("@example.com"), "***@example.com");
+        assert_eq!(mask_email("张三@example.com"), "张*@example.com");
+        assert_eq!(mask_email("ab@example.com"), "a*@example.com");
+        assert_eq!(mask_email("abc@example.com"), "ab*@example.com");
+        assert_eq!(mask_email("not-an-email"), "***");
     }
 }

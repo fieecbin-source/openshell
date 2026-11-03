@@ -8,12 +8,42 @@ pub mod updates;
 pub mod vault;
 
 use crate::state::AppState;
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 pub fn create_router(state: AppState) -> Router {
+    // 显式来源白名单：默认只允许 Tauri 桌面客户端与本地开发端口；空配置表示拒绝所有跨域。
+    let allowed_origins: Vec<HeaderValue> = state
+        .config
+        .cors_allowed_origins
+        .split(',')
+        .filter_map(|origin| origin.trim().parse::<HeaderValue>().ok())
+        .collect();
+    let cors = if allowed_origins.is_empty() {
+        CorsLayer::new()
+    } else {
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(allowed_origins))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+            ])
+            .allow_headers([
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                header::RANGE,
+                HeaderName::from_static("x-api-version"),
+                HeaderName::from_static("x-device-id"),
+                HeaderName::from_static("x-openshell-channel"),
+            ])
+    };
+
     Router::new()
         // Ops & metrics
         .route("/healthz", get(ops::healthz))
@@ -80,6 +110,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/relay/stream", get(relay::relay_stream))
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state)
 }

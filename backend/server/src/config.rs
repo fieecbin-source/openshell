@@ -46,12 +46,22 @@ pub struct Config {
     #[arg(
         long,
         env = "RELAY_ALLOWED_NETS",
-        default_value = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32"
+        default_value = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128"
     )]
     pub relay_allowed_nets: String,
 
     #[arg(long, env = "ARTIFACTS_DIR", default_value = "./artifacts")]
     pub artifacts_dir: PathBuf,
+
+    #[arg(
+        long,
+        env = "CORS_ALLOWED_ORIGINS",
+        default_value = "tauri://localhost,https://tauri.localhost,http://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420"
+    )]
+    pub cors_allowed_origins: String,
+
+    #[arg(long, env = "METRICS_TOKEN")]
+    pub metrics_token: Option<String>,
 }
 
 impl Config {
@@ -59,6 +69,12 @@ impl Config {
         // 单用户参数必须成对配置
         if self.sync_username.is_some() ^ self.sync_password.is_some() {
             return Err("Both SYNC_USERNAME and SYNC_PASSWORD must be configured together for single-user mode".to_string());
+        }
+
+        if let Some(password) = &self.sync_password {
+            if password.chars().count() < 8 {
+                return Err("SYNC_PASSWORD must be at least 8 characters long".to_string());
+            }
         }
 
         // 确保 DATA_DIR 存在
@@ -119,10 +135,13 @@ impl Default for Config {
             allow_multi_user: false,
             require_invite: false,
             invite_code: None,
-            jwt_secret: "openshell-secret-key-change-in-production-min-32-chars-long".to_string(),
+            jwt_secret: String::new(),
             relay_enabled: false,
-            relay_allowed_nets: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32".to_string(),
+            relay_allowed_nets: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128"
+                .to_string(),
             artifacts_dir: PathBuf::from("./artifacts"),
+            cors_allowed_origins: "tauri://localhost,https://tauri.localhost,http://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420".to_string(),
+            metrics_token: None,
         }
     }
 }

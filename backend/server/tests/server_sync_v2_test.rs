@@ -20,6 +20,7 @@ async fn start_server() -> (String, tempfile::TempDir) {
     let database = temp_dir.path().join("sync-v2.db");
     let config = Config {
         database_url: database.to_string_lossy().into_owned(),
+        jwt_secret: "test-only-jwt-secret-for-v2-regressions".to_string(),
         artifacts_dir: temp_dir.path().join("artifacts"),
         ..Config::default()
     };

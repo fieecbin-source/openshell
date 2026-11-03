@@ -27,6 +27,7 @@ async fn start_test_server() -> (String, DbPool, AppState) {
 
     let config = Config {
         database_url: db_path.to_str().unwrap().to_string(),
+        jwt_secret: "test-only-jwt-secret-for-e2e-regressions".to_string(),
         relay_enabled: true,
         artifacts_dir: temp_dir.path().join("artifacts"),
         ..Config::default()

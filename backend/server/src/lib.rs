@@ -12,7 +12,7 @@ pub use state::AppState;
 
 pub fn bootstrap_single_user(db: &DbPool, config: &Config) -> Result<(), String> {
     let (username, password) = match (&config.sync_username, &config.sync_password) {
-        (Some(u), Some(p)) if !u.trim().is_empty() && !p.is_empty() => (u.trim(), p),
+        (Some(u), Some(p)) if !u.trim().is_empty() && p.chars().count() >= 8 => (u.trim(), p),
         _ => return Ok(()),
     };
 
