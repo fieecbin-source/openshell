@@ -1,57 +1,105 @@
 {
-  "version": "1.1.6",
-  "tag": "v1.1.6",
-  "name": "OpenShell 1.1.6",
-  "published_at": "2026-11-02T09:42:04.326Z",
+  "version": "1.1.7",
+  "tag": "v1.1.7",
+  "name": "OpenShell 1.1.7",
+  "published_at": "2026-11-03T02:22:53.790Z",
   "mandatory": false,
-  "notes": "## OpenShell 1.1.6\n\n### 修复\n\n- 新建 SSH 会话时导入私钥不再只提示「主保险库已锁定」：锁定状态下弹窗内直接给出解锁入口，解锁后自动继续导入刚才选中的私钥，无需重新选文件。\n- 保险库解锁弹窗层级提升到所有会话弹窗之上，自动锁定后不会出现「提示要解锁却找不到解锁入口」的情况。\n- Windows 自动更新改为**先卸载旧版本、再安装新版本**：先运行旧版 `uninstall.exe /S`，确认程序文件与卸载程序都已移除后才启动新安装包；卸载未完成会中止安装并记录原因，避免新旧文件混杂。\n\n### 改进\n\n- 升级过程写入 `updater/openshell-update.log`，失败原因在「关于与更新」页展示，方便用户手动补装。\n- 新建 SSH 会话弹窗去掉预填的默认文本与说明性占位文案（用户名、端口、示例地址、认证说明等），界面更干净；端口/用户名留空时仍按 22 / root 处理。\n",
+  "notes": "## OpenShell 1.1.7\n\n### 修复\n\n- 更新检测与下载恢复 Windows/macOS 系统代理支持；下载读取超时后有限重试并从已下载字节继续，失效的续传范围会自动重新下载。\n- 下载镜像前缀实际应用到 GitHub 安装包地址，保持 HTTPS、域名白名单和 SHA-256 校验。\n- Windows 更新安装传入自动启动参数，并保留原安装目录；安装完成后重新打开 OpenShell。\n- 私钥口令输入框固定显示在「私钥凭据」区域的文件列表上方，导入时使用填写的口令；口令错误时可修改并重试，无需重新选择文件。\n- 修复 x86_64 安装包架构识别，防止 ARM64 客户端误选 x64 包。\n\n### 平台与下载\n\n- Windows：x64（amd64）与 ARM64，分别提供安装程序和便携 ZIP。\n- macOS：Intel x64 与 Apple Silicon（M 系列）ARM64，分别提供 DMG 和应用 ZIP。\n- Linux：x64（amd64）与 ARM64，分别提供 AppImage 和 DEB。\n- 每个架构均在原生 GitHub runner 构建、运行更新器回归测试并检查实际发布程序的空白配置。\n\n### 升级提示\n\n- 旧版本更新器的网络和重启逻辑无法由新安装包修复；若旧客户端仍下载失败，请从本版本 Release 下载对应架构安装包，手动升级一次。\n- 升级前自动备份本地数据；macOS DMG 仍需拖入「应用程序」并手动启动。便携版仍按提示手动替换。\n",
   "release_page": "https://github.com/fieecbin-source/openshell/releases",
   "assets": [
     {
-      "name": "OpenShell-1.1.6-linux-x86_64.AppImage",
-      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.6/OpenShell-1.1.6-linux-x86_64.AppImage",
-      "size": 85268984,
-      "sha256": "b52863635150eeb709de4e6517b89ae8123bab68861f30770562f269bb16b563",
+      "name": "OpenShell-1.1.7-linux-aarch64.AppImage",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-linux-aarch64.AppImage",
+      "size": 83171848,
+      "sha256": "8dc261e8f561c1ca5f2a65c532038c12e614da3c9e2e208fd17a3cd56faab560",
+      "platform": "linux",
+      "arch": "aarch64"
+    },
+    {
+      "name": "OpenShell-1.1.7-linux-aarch64.deb",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-linux-aarch64.deb",
+      "size": 7076352,
+      "sha256": "31e828d8058f8bf59fd94db95a211e84059b92d2878713f6983a0abb91fad680",
+      "platform": "linux",
+      "arch": "aarch64"
+    },
+    {
+      "name": "OpenShell-1.1.7-linux-x86_64.AppImage",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-linux-x86_64.AppImage",
+      "size": 85297656,
+      "sha256": "b35c82a8d12f92cc555a36f0b11fe8d7fc92cc9b53a4d10c7426186f24a11015",
       "platform": "linux",
       "arch": "x86_64"
     },
     {
-      "name": "OpenShell-1.1.6-linux-x86_64.deb",
-      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.6/OpenShell-1.1.6-linux-x86_64.deb",
-      "size": 7320316,
-      "sha256": "19ca80600680eeb7070f30ec41767fbbf95f8bb6855626704c4be318ef7f0de3",
+      "name": "OpenShell-1.1.7-linux-x86_64.deb",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-linux-x86_64.deb",
+      "size": 7342746,
+      "sha256": "056c0499f6309692c359b355153dc04453243087b7c36253dfcc0262814f1bed",
       "platform": "linux",
       "arch": "x86_64"
     },
     {
-      "name": "OpenShell-1.1.6-macos-universal.dmg",
-      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.6/OpenShell-1.1.6-macos-universal.dmg",
-      "size": 13427536,
-      "sha256": "3de473f723fe60b036dae14c9f97b1c4c620e869ae8a446ef2e1b54c405bd95e",
+      "name": "OpenShell-1.1.7-macos-aarch64.dmg",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-macos-aarch64.dmg",
+      "size": 7041558,
+      "sha256": "de51e3f240e2a5916f6bc34fb71925ea193f01486661d6d320a4e9139fefde1f",
       "platform": "macos",
-      "arch": "universal"
+      "arch": "aarch64"
     },
     {
-      "name": "OpenShell-1.1.6-macos-universal-portable.zip",
-      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.6/OpenShell-1.1.6-macos-universal-portable.zip",
-      "size": 13361299,
-      "sha256": "aa750ca889c629574cfbda0b28b77612a5d7bc12d119ee9dbe86b1d57560e3a2",
+      "name": "OpenShell-1.1.7-macos-aarch64-portable.zip",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-macos-aarch64-portable.zip",
+      "size": 6750276,
+      "sha256": "8abc0de6f2c274d267c9066706c5d60ee6c54bf44b32a2f1ee6c3163a5134b82",
       "platform": "macos",
-      "arch": "universal"
+      "arch": "aarch64"
     },
     {
-      "name": "OpenShell-1.1.6-windows-x86_64.exe",
-      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.6/OpenShell-1.1.6-windows-x86_64.exe",
-      "size": 4649587,
-      "sha256": "4256f750a3cd88d85d2034771085bac0e778eade028b149a0e56e99d31ab46a0",
+      "name": "OpenShell-1.1.7-macos-x86_64.dmg",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-macos-x86_64.dmg",
+      "size": 7420663,
+      "sha256": "136aff6af7741f6c8d7d64df55124d953911facdf413f61247091b01ae30193e",
+      "platform": "macos",
+      "arch": "x86_64"
+    },
+    {
+      "name": "OpenShell-1.1.7-macos-x86_64-portable.zip",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-macos-x86_64-portable.zip",
+      "size": 7142648,
+      "sha256": "c76b8f069b993ad3773d84b87167de599a3e638769df4a7c72858d5bea04adf1",
+      "platform": "macos",
+      "arch": "x86_64"
+    },
+    {
+      "name": "OpenShell-1.1.7-windows-aarch64.exe",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-windows-aarch64.exe",
+      "size": 4253172,
+      "sha256": "d52f7d1e876c368d3287bba4f56593ed4c8b16e0743d7c4f9ff9dc1c884e5ceb",
+      "platform": "windows",
+      "arch": "aarch64"
+    },
+    {
+      "name": "OpenShell-1.1.7-windows-aarch64-portable.zip",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-windows-aarch64-portable.zip",
+      "size": 5669929,
+      "sha256": "716acb2cafdd78dc0a677383a2eb9da5e4fc2db0d4b5de644570f56b30e01be1",
+      "platform": "windows",
+      "arch": "aarch64"
+    },
+    {
+      "name": "OpenShell-1.1.7-windows-x86_64.exe",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-windows-x86_64.exe",
+      "size": 4678969,
+      "sha256": "853416bdea6100cfeb14195c38a2340651294f102d1a61e74d6a4bfb410eb383",
       "platform": "windows",
       "arch": "x86_64"
     },
     {
-      "name": "OpenShell-1.1.6-windows-x86_64-portable.zip",
-      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.6/OpenShell-1.1.6-windows-x86_64-portable.zip",
-      "size": 5949997,
-      "sha256": "79d01595ad137f57bd60c051a59d93135518f54e1d809fd6e2da12e1f127c763",
+      "name": "OpenShell-1.1.7-windows-x86_64-portable.zip",
+      "url": "https://github.com/fieecbin-source/openshell/releases/download/v1.1.7/OpenShell-1.1.7-windows-x86_64-portable.zip",
+      "size": 5989355,
+      "sha256": "5543560d5791389fb7e8ed00177f5c6d22c05ca0dcc85bf6f924ca9dcd144c8c",
       "platform": "windows",
       "arch": "x86_64"
     }
