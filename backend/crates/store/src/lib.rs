@@ -78,4 +78,22 @@ mod tests {
         let reloaded = session_repo.get(&session.id).await.expect("get session");
         assert_eq!(reloaded.host_key_policy, HostKeyPolicy::Strict);
     }
+
+    /// 新建会话未显式指定策略时，必须默认严格校验，而不是静默接受首次主机密钥。
+    #[tokio::test]
+    async fn test_new_session_defaults_to_strict_host_key_policy() {
+        let store = Store::open_in_memory().expect("open in-memory db");
+        store.migrate().expect("migration succeed");
+
+        let session_repo = SessionRepo::new(store.clone());
+        let session = session_repo
+            .create(SessionInput {
+                name: Some("default-policy".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("create session");
+
+        assert_eq!(session.host_key_policy, HostKeyPolicy::Strict);
+    }
 }

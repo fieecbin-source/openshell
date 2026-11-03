@@ -496,7 +496,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         auth_method: "password",
         credential_id: null,
         ssh_key_id: null,
-        host_key_policy: "accept_new",
+        host_key_policy: "strict",
         proxy_jump_json: null,
         proxy_id: null,
         terminal_profile_id: null,

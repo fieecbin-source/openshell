@@ -122,7 +122,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [authMethod, setAuthMethod] = useState<AuthMethod>("password");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [hostKeyPolicy, setHostKeyPolicy] = useState<HostKeyPolicy>("accept_new");
+  const [hostKeyPolicy, setHostKeyPolicy] = useState<HostKeyPolicy>("strict");
   const [keepaliveSec, setKeepaliveSec] = useState<number>(30);
   const [jumpHostSessionId, setJumpHostSessionId] = useState<string>("");
 
@@ -224,7 +224,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           setPort(editingSession.port || 22);
           setUsername(editingSession.username || "");
           setAuthMethod(editingSession.auth_method || "password");
-          setHostKeyPolicy(editingSession.host_key_policy || "accept_new");
+          setHostKeyPolicy(editingSession.host_key_policy || "strict");
           const keyId = editingSession.ssh_key_id || "";
           setSelectedKeyId(keyId);
           loadKeys(keyId);
@@ -265,7 +265,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setPort(parsedPort);
         setUsername(parsedUser);
         setAuthMethod(initialValues?.auth_method || "password");
-        setHostKeyPolicy(initialValues?.host_key_policy || "accept_new");
+        setHostKeyPolicy(initialValues?.host_key_policy || "strict");
         const keyId = initialValues?.ssh_key_id || "";
         setSelectedKeyId(keyId);
         loadKeys(keyId);
@@ -825,10 +825,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     onChange={(e) => setHostKeyPolicy(e.target.value as HostKeyPolicy)}
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   >
-                    <option value="accept_new">自动接受首次连接 (Accept New - 推荐)</option>
-                    <option value="strict">严格校验 (Strict - 仅已知公钥)</option>
+                    <option value="strict">严格校验 (Strict - 推荐，首次连接需确认指纹)</option>
+                    <option value="accept_new">自动接受首次连接 (Accept New - 有中间人风险，需显式选择)</option>
                     <option value="insecure">不校验主机密钥 (Insecure - 仅用于开发测试)</option>
                   </select>
+                  <p className="mt-1 text-[11px] leading-snug text-ink-secondary/70">
+                    默认 Strict：未知主机会被拒绝并展示指纹，确认后才写入信任；仅在你明确接受首连风险时才改用 Accept New。
+                  </p>
                 </div>
 
                 <div>
