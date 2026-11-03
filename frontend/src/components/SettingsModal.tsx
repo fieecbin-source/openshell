@@ -4,6 +4,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import {
   SCENIC_WALLPAPERS,
   ARTISTIC_WALLPAPERS,
+  cacheScenicWallpaper,
   getBackgroundLabel,
   getStoredCustomWallpapers,
   addStoredCustomWallpaper,
@@ -170,6 +171,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
     setBackgroundMsg("已恢复终端默认纯净背景");
   };
 
+  const handleSelectScenicBackground = (id: string) => {
+    if (backgroundId === id) {
+      void handleRestoreDefaultBackground();
+      return;
+    }
+    void setBackgroundId(id);
+    cacheScenicWallpaper(id);
+  };
+
   // 5. 修改保险库主密码
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -313,7 +323,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                         壁纸不透明度
                       </h4>
                       <p className="text-[10px] text-ink-tertiary">
-                        拖动调节 0–100%，默认 100%，仅改变壁纸，不影响终端文字
+                        拖动调节 0–100%，默认 50%，仅改变壁纸，不影响终端文字
                       </p>
                     </div>
                   </div>
@@ -434,7 +444,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                       <button
                         key={s.id}
                         type="button"
-                        onClick={() => (isSelected ? handleRestoreDefaultBackground() : setBackgroundId(s.id))}
+                        onClick={() => handleSelectScenicBackground(s.id)}
                         className={`group relative aspect-[16/10] rounded-2xl overflow-hidden border transition active:scale-[0.98] ${
                           isSelected
                             ? "border-accent ring-2 ring-accent/40 shadow-lg scale-[1.02]"

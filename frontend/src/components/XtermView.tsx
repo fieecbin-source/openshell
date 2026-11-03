@@ -9,7 +9,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { TerminalTab } from "../stores/terminalStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { resolveTheme, useSettingsStore } from "../stores/settingsStore";
-import { getWallpaperStyle } from "../lib/wallpapers";
+import {
+  cacheScenicWallpaper,
+  getCachedScenicWallpaper,
+  getWallpaperStyle,
+  SCENIC_WALLPAPERS,
+} from "../lib/wallpapers";
 import { formatFriendlyError } from "../lib/errors";
 import { appendSessionLog, dropSessionLog } from "../lib/terminal-log";
 import { TerminalSearch } from "./TerminalSearch";
@@ -82,10 +87,28 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   const backgroundBlur = useSettingsStore((s) => s.backgroundBlur);
 
   const currentTheme = resolveTheme(theme, customThemes);
+  const [cachedScenicWallpaper, setCachedScenicWallpaper] = useState<{ id: string; url: string } | null>(null);
+
+  useEffect(() => {
+    if (!SCENIC_WALLPAPERS.some((item) => item.id === backgroundId)) return;
+    let active = true;
+    void getCachedScenicWallpaper(backgroundId).then((cachedUrl) => {
+      if (!active) return;
+      if (cachedUrl) setCachedScenicWallpaper({ id: backgroundId, url: cachedUrl });
+      else cacheScenicWallpaper(backgroundId);
+    });
+    return () => { active = false; };
+  }, [backgroundId]);
 
   const wallpaper = useMemo(
-    () => getWallpaperStyle(backgroundId, backgroundCustom),
-    [backgroundId, backgroundCustom]
+    () => {
+      const style = getWallpaperStyle(backgroundId, backgroundCustom);
+      if (style && cachedScenicWallpaper?.id === backgroundId) {
+        return { ...style, backgroundImage: `url("${cachedScenicWallpaper.url}")` };
+      }
+      return style;
+    },
+    [backgroundId, backgroundCustom, cachedScenicWallpaper]
   );
 
   // 根据壁纸控制背景：

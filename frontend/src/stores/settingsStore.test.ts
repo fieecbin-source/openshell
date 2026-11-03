@@ -37,7 +37,7 @@ describe("shell and terminal appearance isolation", () => {
     await setOpacity(-10);
     expect(useSettingsStore.getState().backgroundOpacity).toBe(0);
     await setOpacity(Number.NaN);
-    expect(useSettingsStore.getState().backgroundOpacity).toBe(100);
+    expect(useSettingsStore.getState().backgroundOpacity).toBe(DEFAULT_SETTINGS.backgroundOpacity);
   });
 
   it("restores full wallpaper opacity without changing the terminal theme", async () => {
@@ -52,10 +52,10 @@ describe("shell and terminal appearance isolation", () => {
     expect(useSettingsStore.getState().theme).toBe("clean_light");
   });
 
-  it("defaults to full wallpaper opacity and pure black terminal text", async () => {
+  it("defaults to 50% wallpaper opacity and pure black terminal text", async () => {
     await useSettingsStore.getState().loadSettings();
     const store = useSettingsStore.getState();
-    expect(store.backgroundOpacity).toBe(100);
+    expect(store.backgroundOpacity).toBe(50);
     expect(resolveTheme(store.theme, store.customThemes).foreground).toBe("#000000");
     expect(resolveTheme(store.theme, store.customThemes).black).toBe("#000000");
   });

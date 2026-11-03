@@ -155,6 +155,47 @@ export const SCENIC_WALLPAPERS: ScenicWallpaper[] = [
   },
 ];
 
+const SCENIC_WALLPAPER_CACHE = "openshell-scenic-wallpapers-v1";
+const scenicWallpaperObjectUrls = new Map<string, string>();
+const scenicWallpaperDownloads = new Map<string, Promise<void>>();
+
+/** Return the locally cached image when available. */
+export async function getCachedScenicWallpaper(id: string): Promise<string | null> {
+  const scenic = SCENIC_WALLPAPERS.find((item) => item.id === id);
+  if (!scenic || typeof caches === "undefined") return null;
+
+  try {
+    const cachedUrl = scenicWallpaperObjectUrls.get(id);
+    if (cachedUrl) return cachedUrl;
+    const response = await (await caches.open(SCENIC_WALLPAPER_CACHE)).match(scenic.image);
+    if (!response) return null;
+    const objectUrl = URL.createObjectURL(await response.blob());
+    scenicWallpaperObjectUrls.set(id, objectUrl);
+    return objectUrl;
+  } catch {
+    return null;
+  }
+}
+
+/** Download in the background; cache failures never block online display. */
+export function cacheScenicWallpaper(id: string): void {
+  const scenic = SCENIC_WALLPAPERS.find((item) => item.id === id);
+  if (!scenic || typeof caches === "undefined" || scenicWallpaperDownloads.has(id)) return;
+
+  const download = (async () => {
+    try {
+      const cache = await caches.open(SCENIC_WALLPAPER_CACHE);
+      if (await cache.match(scenic.image)) return;
+      const response = await fetch(scenic.image);
+      if (response.ok) await cache.put(scenic.image, response);
+    } catch {
+      // The image remains available from its online URL if caching is unavailable.
+    }
+  })();
+  scenicWallpaperDownloads.set(id, download);
+  void download.finally(() => scenicWallpaperDownloads.delete(id));
+}
+
 /** 质感艺术纹理备用预设 */
 export const ARTISTIC_WALLPAPERS: WallpaperPreset[] = [
   {
@@ -306,7 +347,7 @@ export function getWallpaperStyle(
   const scenic = SCENIC_WALLPAPERS.find((s) => s.id === id);
   if (scenic) {
     return {
-      backgroundImage: `url("${scenic.image}")`,
+      backgroundImage: `url("${scenicWallpaperObjectUrls.get(id) ?? scenic.image}")`,
       backgroundSize: "cover",
     };
   }

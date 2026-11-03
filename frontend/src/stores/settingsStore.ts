@@ -526,7 +526,7 @@ export const DEFAULT_SETTINGS = {
   renderer: "dom" as RendererKind,
   logSessionOutput: false,
   keepaliveDefaultSec: 30,
-  backgroundOpacity: 100,
+  backgroundOpacity: 50,
 } as const;
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
