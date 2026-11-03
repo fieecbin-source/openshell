@@ -31,8 +31,41 @@ pub struct SyncClient {
 }
 
 impl SyncClient {
+    /// 凭证只允许通过 HTTPS 发送；仅 loopback 的 http 地址保留给本机开发/自托管。
+    pub fn validate_server_url(server_url: &str) -> Result<(), SyncClientError> {
+        let url = reqwest::Url::parse(server_url)
+            .map_err(|e| SyncClientError::Config(format!("invalid server URL: {e}")))?;
+        match url.scheme() {
+            "https" => Ok(()),
+            "http" => {
+                let host = url.host_str().unwrap_or_default();
+                let loopback = host == "localhost"
+                    || host
+                        .trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback());
+                if loopback {
+                    Ok(())
+                } else {
+                    Err(SyncClientError::Config(
+                        "Refusing to send credentials over plain HTTP to a remote host; use https:// or a loopback http URL"
+                            .to_string(),
+                    ))
+                }
+            }
+            other => Err(SyncClientError::Config(format!(
+                "Unsupported server URL scheme '{other}'; use https://"
+            ))),
+        }
+    }
+
     pub fn new(server_url: impl Into<String>, device_id: impl Into<String>) -> Self {
-        let server_url = server_url.into().trim_end_matches('/').to_string();
+        let server_url = server_url.into();
+        // 调用方应先通过 validate_server_url 拒绝不安全地址；这里仅作防御性提醒。
+        if let Err(err) = Self::validate_server_url(&server_url) {
+            tracing::warn!("{err}");
+        }
+        let server_url = server_url.trim_end_matches('/').to_string();
         let mut builder = reqwest::Client::builder()
             .user_agent(concat!("OpenShell/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(15));
@@ -628,5 +661,22 @@ impl SyncClient {
                 status: 500,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_url_policy_requires_https_unless_loopback() {
+        assert!(SyncClient::validate_server_url("https://sync.example.com").is_ok());
+        assert!(SyncClient::validate_server_url("http://127.0.0.1:8085").is_ok());
+        assert!(SyncClient::validate_server_url("http://localhost:8085").is_ok());
+        assert!(SyncClient::validate_server_url("http://[::1]:8085").is_ok());
+
+        assert!(SyncClient::validate_server_url("http://sync.example.com").is_err());
+        assert!(SyncClient::validate_server_url("http://10.0.0.5:8085").is_err());
+        assert!(SyncClient::validate_server_url("ftp://sync.example.com").is_err());
     }
 }

@@ -192,6 +192,8 @@ impl SyncService {
         password: &str,
         invite_code: Option<String>,
     ) -> DomainResult<AuthResponse> {
+        SyncClient::validate_server_url(server_url)
+            .map_err(|e| DomainError::new(ErrorCode::Validation, e.to_string()))?;
         let device_id = self.get_or_create_device_id();
         let client = SyncClient::new(server_url, &device_id);
 
@@ -220,6 +222,8 @@ impl SyncService {
         email: &str,
         password: &str,
     ) -> DomainResult<AuthResponse> {
+        SyncClient::validate_server_url(server_url)
+            .map_err(|e| DomainError::new(ErrorCode::Validation, e.to_string()))?;
         let device_id = self.get_or_create_device_id();
         let client = SyncClient::new(server_url, &device_id);
 
