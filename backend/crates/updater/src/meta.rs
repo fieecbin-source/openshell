@@ -10,14 +10,20 @@ use std::collections::HashMap;
 ///
 /// ```json
 /// {
+///   "key_id": "openshell-updater-2026a",
 ///   "mandatory": true,
 ///   "min_supported_version": "1.0.5",
 ///   "notes": "本次为安全修复，建议所有用户升级",
 ///   "assets": [{ "name": "OpenShell-1.1.0-windows-x86_64.exe", "sha256": "…64位hex…" }]
 /// }
 /// ```
+///
+/// `key_id` 由发布侧签名工具写入，客户端据此在信任列表里选择公钥；
+/// 缺失时拒绝验签（fail-closed）。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ReleaseMetaFile {
+    #[serde(default)]
+    pub key_id: Option<String>,
     #[serde(default)]
     pub mandatory: bool,
     #[serde(default)]

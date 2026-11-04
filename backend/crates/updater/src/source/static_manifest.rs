@@ -33,6 +33,12 @@ struct Manifest {
     min_supported_version: Option<String>,
     #[serde(default)]
     release_page: Option<String>,
+    /// 已签名清单的原始文本（发布侧由 `scripts/updater-sign.mjs` 写入）。
+    #[serde(default)]
+    manifest: Option<String>,
+    /// 清单分离签名文件的原始文本。
+    #[serde(default)]
+    signature: Option<String>,
     #[serde(default)]
     assets: Vec<ManifestAsset>,
 }
@@ -136,6 +142,12 @@ impl UpdateSource for StaticManifestSource {
                 min_supported_version: manifest.min_supported_version,
                 notes_markdown: None,
             },
+            signed_manifest: manifest.manifest.zip(manifest.signature).map(
+                |(manifest, signature)| super::SignedManifestRaw {
+                    manifest,
+                    signature,
+                },
+            ),
         };
 
         Ok(SourceOutcome {

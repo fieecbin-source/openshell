@@ -16,6 +16,8 @@ tracing = { workspace = true }
 time = { workspace = true }
 semver = "1"
 sha2 = "0.10"
+ed25519-dalek = "2"
+base64 = "0.22"
 pulldown-cmark = "0.13"
 ammonia = "4"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -33,4 +35,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shel
 
 [dev-dependencies]
 tempfile = "3"
+ed25519-dalek = "2"
+base64 = "0.22"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "fs"] }

@@ -31,6 +31,10 @@ pub enum UpdaterErrorKind {
     ChecksumMismatch,
     /// 清单未提供 sha256，或提供的值不是 64 位十六进制（无法校验，拒绝安装）。
     ChecksumMissing,
+    /// 清单签名无效（内容被篡改、key 不匹配或密钥已吊销）。
+    Signature,
+    /// 清单没有签名（旧发布或签名资产缺失，拒绝自动安装）。
+    SignatureMissing,
     /// 磁盘空间不足。
     InsufficientDisk,
     /// 安装器启动失败。
@@ -171,6 +175,9 @@ impl From<UpdaterError> for DomainError {
             UpdaterErrorKind::AssetNotFound => ErrorCode::UpdateAssetNotFound,
             UpdaterErrorKind::ChecksumMismatch => ErrorCode::UpdateChecksumMismatch,
             UpdaterErrorKind::ChecksumMissing => ErrorCode::UpdateChecksumMissing,
+            UpdaterErrorKind::Signature | UpdaterErrorKind::SignatureMissing => {
+                ErrorCode::UpdateSignature
+            }
             UpdaterErrorKind::InsufficientDisk => ErrorCode::UpdateInsufficientDisk,
             UpdaterErrorKind::Install => ErrorCode::UpdateInstallFailed,
             UpdaterErrorKind::Cancelled => ErrorCode::Cancelled,

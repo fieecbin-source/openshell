@@ -18,7 +18,7 @@
 //!        │ http   │  仅 HTTPS + 域名白名单 + 退避重试
 //!        └───┬────┘
 //!   ┌────────▼─────────┐
-//!   │ download / verify │  断点续传 + sha256
+//!   │ download / verify │  断点续传 + Ed25519 清单签名 + sha256
 //!   │ install           │  备份 → 退出 → 运行安装包
 //!   └───────────────────┘
 //! ```
@@ -28,6 +28,7 @@
 //! * 客户端不含任何 GitHub token；
 //! * 只允许 HTTPS，且 host 必须命中白名单或用户配置的镜像；
 //! * Release 说明在 Rust 侧完成 Markdown → 白名单 HTML 的转换，前端不执行任何脚本；
+//! * 更新清单必须通过 Ed25519 签名验证，之后才校验安装包 sha256，任一失败即拒绝安装；
 //! * 安装前必须先做数据快照，且哈希不匹配的包永不执行。
 
 pub mod asset;
@@ -63,7 +64,10 @@ pub use model::{
     DEFAULT_INTERVAL_HOURS, STARTUP_DELAY_SECS,
 };
 pub use policy::NotifyDecision;
-pub use precheck::{normalize_sha256, validate_installer};
+pub use precheck::{normalize_sha256, validate_installer, validate_installer_with};
 pub use proxy::ProxyMode;
 pub use service::{CheckOutcome, UpdateService};
-pub use verify::{Sha256Verifier, SignatureVerifier, Verifier};
+pub use verify::{
+    KeyStatus, Sha256Verifier, SignatureVerifier, TrustedKey, VerifiedManifest, Verifier,
+    MANIFEST_FILE_NAME, SIGNATURE_FILE_NAME, SIGNATURE_FORMAT_VERSION,
+};

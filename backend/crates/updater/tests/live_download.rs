@@ -1,7 +1,7 @@
 //! Opt-in check of the production HTTP/proxy, Release metadata and streaming download path.
 use openshell_updater::download::{DownloadRequest, Downloader, FsSpaceProbe, ReqwestFetcher};
 use openshell_updater::http::HostPolicy;
-use openshell_updater::{Sha256Verifier, UpdateConfig, UpdateService};
+use openshell_updater::{Sha256Verifier, SignatureVerifier, UpdateConfig, UpdateService};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -22,6 +22,8 @@ async fn published_installer_downloads_and_verifies() {
         file_name: asset.name,
         expected_size: asset.size,
         sha256: asset.sha256.expect("published checksum"),
+        manifest: asset.manifest.expect("signed manifest"),
+        signature: asset.signature.expect("manifest signature"),
         dest_dir: dir.path().join("downloads"),
     };
     let fetcher = ReqwestFetcher::new(&config.proxy, HostPolicy::new(None)).unwrap();
@@ -29,6 +31,7 @@ async fn published_installer_downloads_and_verifies() {
         Arc::new(fetcher),
         Arc::new(FsSpaceProbe),
         Arc::new(Sha256Verifier),
+        Arc::new(SignatureVerifier::builtin()),
     )
     .download(&request)
     .await

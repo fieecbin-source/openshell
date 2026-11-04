@@ -2,14 +2,19 @@
 //!
 //! 全部使用内存假 HTTP 客户端，不访问网络，可在 CI 离线运行。
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use ed25519_dalek::{Signer, SigningKey};
 use openshell_updater::http::{HttpClient, HttpRequest, HttpResponse};
 use openshell_updater::{
-    async_trait, NotifyDecision, UpdateConfig, UpdateService, UpdaterError, UpdaterErrorKind,
+    async_trait, KeyStatus, NotifyDecision, SignatureVerifier, TrustedKey, UpdateConfig,
+    UpdateService, UpdaterError, UpdaterErrorKind,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const API_URL: &str = "https://api.github.com/repos/fieecbin-source/openshell/releases/latest";
+const TEST_KEY_ID: &str = "test-key";
 
 /// 当前主机可安装的资产名。
 ///
@@ -44,6 +49,53 @@ const META_URL: &str =
     "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/update-meta.json";
 const SUMS_URL: &str =
     "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/SHA256SUMS.txt";
+const SIG_URL: &str =
+    "https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/update-meta.json.sig";
+
+fn signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[7u8; 32])
+}
+
+fn test_verifier() -> Arc<SignatureVerifier> {
+    Arc::new(SignatureVerifier::with_keys(vec![TrustedKey {
+        key_id: TEST_KEY_ID.to_string(),
+        status: KeyStatus::Active,
+        key: signing_key().verifying_key(),
+    }]))
+}
+
+fn revoked_verifier() -> Arc<SignatureVerifier> {
+    Arc::new(SignatureVerifier::with_keys(vec![TrustedKey {
+        key_id: TEST_KEY_ID.to_string(),
+        status: KeyStatus::Revoked,
+        key: signing_key().verifying_key(),
+    }]))
+}
+
+/// 已签名清单：声明资产哈希，客户端应只信任这里的 sha256。
+fn meta_body(mandatory: bool, min_supported: Option<&str>, notes: &str) -> String {
+    serde_json::json!({
+        "key_id": TEST_KEY_ID,
+        "mandatory": mandatory,
+        "min_supported_version": min_supported,
+        "notes": notes,
+        "assets": [{ "name": exe_name(), "sha256": HASH }],
+    })
+    .to_string()
+}
+
+fn signature_for(manifest: &str) -> String {
+    let signature = signing_key().sign(manifest.as_bytes());
+    serde_json::json!({
+        "version": 1,
+        "signatures": [{
+            "key_id": TEST_KEY_ID,
+            "alg": "ed25519",
+            "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        }],
+    })
+    .to_string()
+}
 
 /// 按 URL 路由的假客户端；同一 URL 可按调用顺序返回不同响应。
 struct RoutedClient {
@@ -128,6 +180,11 @@ fn release_body(with_windows_asset: bool, notes: &str) -> String {
             "browser_download_url": META_URL
         }),
         serde_json::json!({
+            "name": "update-meta.json.sig",
+            "size": 120,
+            "browser_download_url": SIG_URL
+        }),
+        serde_json::json!({
             "name": "SHA256SUMS.txt",
             "size": 120,
             "browser_download_url": SUMS_URL
@@ -164,9 +221,15 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with(test_verifier())
+}
+
+fn harness_with(signatures: Arc<SignatureVerifier>) -> Harness {
     let dir = tempfile::tempdir().expect("temp dir");
     let client = Arc::new(RoutedClient::new());
-    let service = UpdateService::with_http(dir.path(), "1.0.1", client.clone()).expect("service");
+    let service =
+        UpdateService::with_http_and_signature(dir.path(), "1.0.1", client.clone(), signatures)
+            .expect("service");
     Harness {
         dir,
         client,
@@ -183,7 +246,9 @@ fn happy_routes(client: &Arc<RoutedClient>) {
             &release_body(true, "- 新增自动更新"),
         ),
     );
-    client.route(META_URL, response(404, &[], ""));
+    let manifest = meta_body(false, None, "");
+    client.route(META_URL, response(200, &[], &manifest));
+    client.route(SIG_URL, response(200, &[], &signature_for(&manifest)));
     client.route(SUMS_URL, response(200, &[], &sums_body()));
 }
 
@@ -208,10 +273,14 @@ async fn detects_update_and_resolves_checksum() {
     assert_eq!(asset.name, exe_name());
     assert_eq!(asset.sha256.as_deref(), Some(HASH));
     assert!(asset.is_auto_installable());
+    assert!(asset.manifest.is_some(), "signed manifest attached");
+    assert!(asset.signature.is_some(), "detached signature attached");
     assert!(outcome.result.notes_html.contains("自动更新"));
-    // 说明与哈希都取到了，且只请求了必要的地址
+    // 说明与哈希都取到了，且只请求了必要的地址（哈希来自已签名清单，不再读 SHA256SUMS）
     assert_eq!(h.client.call_count(API_URL), 1);
-    assert_eq!(h.client.call_count(SUMS_URL), 1);
+    assert_eq!(h.client.call_count(META_URL), 1);
+    assert_eq!(h.client.call_count(SIG_URL), 1);
+    assert_eq!(h.client.call_count(SUMS_URL), 0);
 }
 
 #[tokio::test]
@@ -240,10 +309,10 @@ async fn empty_release_body_falls_back_to_metadata_notes() {
     let h = harness();
     h.client
         .route(API_URL, response(200, &[], &release_body(true, "  ")));
-    h.client.route(
-        META_URL,
-        response(200, &[], r#"{"notes":"- 中文备用说明"}"#),
-    );
+    let manifest = meta_body(false, None, "- 中文备用说明");
+    h.client.route(META_URL, response(200, &[], &manifest));
+    h.client
+        .route(SIG_URL, response(200, &[], &signature_for(&manifest)));
     let outcome = h
         .service
         .check(&UpdateConfig::default(), true)
@@ -354,14 +423,10 @@ async fn mandatory_flag_and_minimum_version_from_meta() {
         API_URL,
         response(200, &[], &release_body(true, "Release 正文")),
     );
-    h.client.route(
-        META_URL,
-        response(
-            200,
-            &[],
-            r#"{"mandatory":false,"min_supported_version":"1.0.5","notes":"- 安全修复，请尽快升级"}"#,
-        ),
-    );
+    let manifest = meta_body(false, Some("1.0.5"), "- 安全修复，请尽快升级");
+    h.client.route(META_URL, response(200, &[], &manifest));
+    h.client
+        .route(SIG_URL, response(200, &[], &signature_for(&manifest)));
     h.client.route(SUMS_URL, response(200, &[], &sums_body()));
 
     let outcome = h
@@ -438,6 +503,8 @@ async fn falls_back_to_manifest_source_when_github_fails() {
     // GitHub 404 不会重试，源链立即尝试备用源
     h.client.route(API_URL, response(404, &[], ""));
     let manifest_url = "https://cdn.jsdelivr.net/gh/fieecbin-source/openshell@updater/latest.json";
+    let manifest = meta_body(false, None, "");
+    let signature = signature_for(&manifest);
     h.client.route(
         manifest_url,
         response(
@@ -449,6 +516,8 @@ async fn falls_back_to_manifest_source_when_github_fails() {
                 "name": "OpenShell 1.1.0",
                 "notes": "- 来自备用源",
                 "release_page": "https://github.com/fieecbin-source/openshell/releases/tag/v1.1.0",
+                "manifest": manifest,
+                "signature": signature,
                 "assets": [{
                     "name": exe_name(),
                     "url": exe_url(),
@@ -473,11 +542,57 @@ async fn falls_back_to_manifest_source_when_github_fails() {
         .expect("fallback works");
     assert_eq!(outcome.result.source, "manifest");
     assert!(outcome.result.has_update);
-    assert_eq!(
-        outcome.result.asset.expect("asset").sha256.as_deref(),
-        Some(HASH)
-    );
+    let asset = outcome.result.asset.expect("asset");
+    assert_eq!(asset.sha256.as_deref(), Some(HASH));
+    assert!(asset.is_auto_installable());
+    assert!(asset.manifest.is_some());
+    assert!(asset.signature.is_some());
     assert!(outcome.result.notes_html.contains("来自备用源"));
+}
+
+#[tokio::test]
+async fn unsigned_release_is_not_auto_installable() {
+    let h = harness();
+    h.client.route(
+        API_URL,
+        response(200, &[], &release_body(true, "- 旧的无签名发布")),
+    );
+    // 旧发布只有 update-meta.json，没有 .sig（默认路由 404）
+    h.client
+        .route(META_URL, response(200, &[], r#"{"mandatory":false}"#));
+    h.client.route(SUMS_URL, response(200, &[], &sums_body()));
+
+    let outcome = h
+        .service
+        .check(&UpdateConfig::default(), true)
+        .await
+        .expect("check");
+
+    let asset = outcome.result.asset.expect("asset");
+    assert_eq!(asset.sha256.as_deref(), Some(HASH));
+    assert!(asset.manifest.is_none());
+    assert!(asset.signature.is_none());
+    assert!(
+        !asset.is_auto_installable(),
+        "unsigned releases must not be installed automatically"
+    );
+}
+
+#[tokio::test]
+async fn revoked_key_release_is_not_auto_installable() {
+    let h = harness_with(revoked_verifier());
+    happy_routes(&h.client);
+
+    let outcome = h
+        .service
+        .check(&UpdateConfig::default(), true)
+        .await
+        .expect("check");
+
+    let asset = outcome.result.asset.expect("asset");
+    assert_eq!(asset.sha256.as_deref(), Some(HASH));
+    assert!(asset.signature.is_none());
+    assert!(!asset.is_auto_installable());
 }
 
 #[tokio::test]

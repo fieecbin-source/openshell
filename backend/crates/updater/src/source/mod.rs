@@ -35,6 +35,18 @@ pub struct SourceMeta {
     pub notes_markdown: Option<String>,
 }
 
+/// 发布侧下发的「已签名清单」原始文本。
+///
+/// GitHub 源从 Release 资产读取 `update-meta.json` + `.sig`；
+/// 静态 `latest.json` 源可直接内嵌这两个字符串，避免备用源无法自动安装。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SignedManifestRaw {
+    /// `update-meta.json` 的原始字节（验签对象）。
+    pub manifest: String,
+    /// `update-meta.json.sig` 的原始字节。
+    pub signature: String,
+}
+
 /// 一个候选版本。
 #[derive(Debug, Clone, Default)]
 pub struct SourceRelease {
@@ -49,6 +61,8 @@ pub struct SourceRelease {
     pub prerelease: bool,
     pub assets: Vec<SourceAsset>,
     pub meta: SourceMeta,
+    /// 已签名清单（缺失表示该源未提供签名，自动安装必须被拒绝）。
+    pub signed_manifest: Option<SignedManifestRaw>,
 }
 
 /// 一次取数的结果。

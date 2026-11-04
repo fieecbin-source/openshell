@@ -135,14 +135,33 @@ pub struct UpdateAsset {
     pub url: String,
     pub size: u64,
     /// 十六进制小写 sha256；缺失时前端只允许「打开 Release 页面」手动下载。
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// 已验签清单的原始文本（与 `signature` 一起作为安装前复核的信任链）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
+    /// 清单分离签名文件的原始文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl UpdateAsset {
-    /// 是否可用于自动下载安装（必须有哈希才允许，避免装了来路不明的包）。
+    /// 是否可用于自动下载安装。
+    ///
+    /// 必须同时具备「已签名清单 + 分离签名 + sha256」，缺一即 fail-closed：
+    /// 前端只能走「打开 Release 页面」手动下载。
     pub fn is_auto_installable(&self) -> bool {
-        self.sha256.as_deref().is_some_and(|s| s.len() == 64)
+        self.sha256
+            .as_deref()
+            .is_some_and(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            && self
+                .manifest
+                .as_deref()
+                .is_some_and(|m| !m.trim().is_empty())
+            && self
+                .signature
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
     }
 }
 

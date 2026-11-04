@@ -202,6 +202,7 @@ fn release_from_json(value: &Value, fallback_page: String) -> Result<SourceRelea
             .unwrap_or(false),
         assets: parse_assets(value),
         meta: Default::default(),
+        signed_manifest: None,
     })
 }
 

@@ -134,6 +134,8 @@ mod tests {
             url: "https://github.com/a/b/releases/download/v1/x".to_string(),
             size: 1,
             sha256: Some("0".repeat(64)),
+            manifest: Some("{}".to_string()),
+            signature: Some("{}".to_string()),
         }
     }
 

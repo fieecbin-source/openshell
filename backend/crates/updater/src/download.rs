@@ -1,18 +1,19 @@
-//! 安装包下载：断点续传、进度/速度回调、取消、磁盘预检、sha256 校验、原子落地。
+//! 安装包下载：断点续传、进度/速度回调、取消、磁盘预检、清单验签、sha256 校验、原子落地。
 //!
 //! 流程：
 //! ```text
-//! 预检磁盘 → 打开 .part（续传则 append）→ Range 请求
+//! 清单 Ed25519 验签 → 预检磁盘 → 打开 .part（续传则 append）→ Range 请求
 //!    ├─ 服务端忽略 Range（200）→ 清空 .part 重下一次
 //!    └─ 206/200 → 写完 → 校验 sha256 → rename 成正式文件名
 //! ```
 //! 失败语义：
+//! * 签名缺失/无效 → 一个字节都不下载，直接拒绝；
 //! * 取消 / 断网 → 保留 `.part`，下次可续传；
 //! * sha256 不匹配 → 删除 `.part`（文件已不可信）；
 //! * 磁盘不足 → 不发起请求，直接报 `InsufficientDisk`。
 
 use crate::error::{UpdaterError, UpdaterErrorKind};
-use crate::verify::Verifier;
+use crate::verify::{SignatureVerifier, Verifier};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -46,6 +47,10 @@ pub struct DownloadRequest {
     pub expected_size: u64,
     /// 期望的 sha256（十六进制小写）。
     pub sha256: String,
+    /// 已验签清单的原始文本。
+    pub manifest: String,
+    /// 清单分离签名文件的原始文本。
+    pub signature: String,
     /// 下载目录（通常是 `<app_data_dir>/updater/downloads`）。
     pub dest_dir: PathBuf,
 }
@@ -115,6 +120,7 @@ pub struct Downloader {
     fetcher: Arc<dyn RangeFetcher>,
     space: Arc<dyn SpaceProbe>,
     verifier: Arc<dyn Verifier>,
+    signatures: Arc<SignatureVerifier>,
     cancel: Arc<AtomicBool>,
     progress: ProgressSink,
 }
@@ -124,11 +130,13 @@ impl Downloader {
         fetcher: Arc<dyn RangeFetcher>,
         space: Arc<dyn SpaceProbe>,
         verifier: Arc<dyn Verifier>,
+        signatures: Arc<SignatureVerifier>,
     ) -> Self {
         Self {
             fetcher,
             space,
             verifier,
+            signatures,
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(|_| {}),
         }
@@ -164,6 +172,30 @@ impl Downloader {
                 "invalid installer file name",
             ));
         }
+
+        // 先验签：签名不通过时连磁盘目录都不创建，更不会发起网络请求。
+        let verified = self
+            .signatures
+            .verify_manifest(&request.manifest, &request.signature)?;
+        let expected = verified.sha256_for(&request.file_name).ok_or_else(|| {
+            UpdaterError::new(
+                UpdaterErrorKind::ChecksumMissing,
+                "signed release manifest has no sha256 for this installer",
+            )
+            .with_retryable(false)
+        })?;
+        if request.sha256.trim().to_ascii_lowercase() != expected {
+            return Err(UpdaterError::new(
+                UpdaterErrorKind::Signature,
+                "download request hash does not match the signed release manifest",
+            )
+            .with_retryable(false)
+            .with_details(serde_json::json!({
+                "reason": "manifest_hash_mismatch",
+                "asset": request.file_name,
+            })));
+        }
+
         tokio::fs::create_dir_all(&request.dest_dir).await?;
 
         let part = request.part_path();
@@ -268,7 +300,7 @@ impl Downloader {
             phase: "verifying".to_string(),
         });
 
-        if let Err(err) = self.verifier.verify(&part, Some(&request.sha256)) {
+        if let Err(err) = self.verifier.verify(&part, Some(&expected)) {
             // 哈希不符的文件不能留，避免下次「续传」到一个坏文件上
             let _ = tokio::fs::remove_file(&part).await;
             return Err(err);
@@ -484,12 +516,49 @@ fn parse_total_len(response: &reqwest::Response, offset: u64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::verify::Sha256Verifier;
+    use crate::verify::{KeyStatus, Sha256Verifier, TrustedKey};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Mutex;
 
     const HELLO: &[u8] = b"hello world";
     /// sha256("hello world")
     const HELLO_SHA: &str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+    const TEST_KEY_ID: &str = "test-key";
+
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    fn test_verifier() -> SignatureVerifier {
+        SignatureVerifier::with_keys(vec![TrustedKey {
+            key_id: TEST_KEY_ID.to_string(),
+            status: KeyStatus::Active,
+            key: test_signing_key().verifying_key(),
+        }])
+    }
+
+    fn manifest_for(sha: &str) -> String {
+        serde_json::json!({
+            "key_id": TEST_KEY_ID,
+            "assets": [{ "name": "OpenShell.exe", "sha256": sha }],
+        })
+        .to_string()
+    }
+
+    fn signature_for(manifest: &str) -> String {
+        let signature = test_signing_key().sign(manifest.as_bytes());
+        serde_json::json!({
+            "version": 1,
+            "signatures": [{
+                "key_id": TEST_KEY_ID,
+                "alg": "ed25519",
+                "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+            }],
+        })
+        .to_string()
+    }
 
     struct MockFetcher {
         payload: Vec<u8>,
@@ -560,11 +629,15 @@ mod tests {
     }
 
     fn request(dir: &Path, sha: &str) -> DownloadRequest {
+        let manifest = manifest_for(sha);
+        let signature = signature_for(&manifest);
         DownloadRequest {
             url: "https://github.com/a/b/releases/download/v1/OpenShell.exe".into(),
             file_name: "OpenShell.exe".into(),
             expected_size: HELLO.len() as u64,
             sha256: sha.to_string(),
+            manifest,
+            signature,
             dest_dir: dir.to_path_buf(),
         }
     }
@@ -577,6 +650,7 @@ mod tests {
             fetcher.clone(),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let outcome = downloader
             .download(&request(dir.path(), HELLO_SHA))
@@ -628,6 +702,7 @@ mod tests {
             fetcher.clone(),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let outcome = downloader
             .download(&request(dir.path(), HELLO_SHA))
@@ -665,6 +740,7 @@ mod tests {
             Arc::new(RejectedRange),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let outcome = downloader
             .download(&request(dir.path(), HELLO_SHA))
@@ -683,6 +759,7 @@ mod tests {
             fetcher.clone(),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let outcome = downloader
             .download(&request(dir.path(), HELLO_SHA))
@@ -707,6 +784,7 @@ mod tests {
             fetcher.clone(),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let outcome = downloader
             .download(&request(dir.path(), HELLO_SHA))
@@ -727,6 +805,7 @@ mod tests {
             Arc::new(MockFetcher::new(HELLO)),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let err = downloader
             .download(&request(dir.path(), &"0".repeat(64)))
@@ -745,6 +824,7 @@ mod tests {
             fetcher.clone(),
             Arc::new(FixedSpace(0)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let err = downloader
             .download(&request(dir.path(), HELLO_SHA))
@@ -761,6 +841,7 @@ mod tests {
             Arc::new(MockFetcher::new(HELLO)),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         downloader.cancel_token().store(true, Ordering::SeqCst);
         let err = downloader
@@ -777,6 +858,7 @@ mod tests {
             Arc::new(MockFetcher::new(HELLO)),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         );
         let mut req = request(dir.path(), HELLO_SHA);
         req.file_name = "../evil.exe".into();
@@ -793,6 +875,7 @@ mod tests {
             Arc::new(MockFetcher::new(HELLO)),
             Arc::new(FixedSpace(u64::MAX)),
             Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
         )
         .with_progress(Arc::new(move |progress| {
             sink.lock().unwrap().push(progress);
@@ -806,5 +889,92 @@ mod tests {
         assert!(events.iter().any(|e| e.phase == "verifying"));
         assert!(events.iter().any(|e| e.phase == "done"));
         assert!(events.last().expect("last").percent >= 99.0);
+    }
+
+    #[tokio::test]
+    async fn rejects_unsigned_manifest_before_network() {
+        let dir = tempfile::tempdir().expect("dir");
+        let fetcher = Arc::new(MockFetcher::new(HELLO));
+        let downloader = Downloader::new(
+            fetcher.clone(),
+            Arc::new(FixedSpace(u64::MAX)),
+            Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
+        );
+        let mut req = request(dir.path(), HELLO_SHA);
+        req.signature = String::new();
+        let err = downloader.download(&req).await.expect_err("unsigned");
+        assert_eq!(err.kind, UpdaterErrorKind::SignatureMissing);
+        assert!(fetcher.calls().is_empty(), "must not hit the network");
+        assert!(!dir.path().join("OpenShell.exe.part").exists());
+    }
+
+    #[tokio::test]
+    async fn rejects_tampered_manifest_before_network() {
+        let dir = tempfile::tempdir().expect("dir");
+        let fetcher = Arc::new(MockFetcher::new(HELLO));
+        let downloader = Downloader::new(
+            fetcher.clone(),
+            Arc::new(FixedSpace(u64::MAX)),
+            Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
+        );
+        let mut req = request(dir.path(), HELLO_SHA);
+        // 签名覆盖的是另一个哈希，当前清单被篡改。
+        let other = manifest_for(&"1".repeat(64));
+        req.signature = signature_for(&other);
+        let err = downloader.download(&req).await.expect_err("tampered");
+        assert_eq!(err.kind, UpdaterErrorKind::Signature);
+        assert_eq!(
+            err.details.as_ref().and_then(|d| d["reason"].as_str()),
+            Some("invalid_signature")
+        );
+        assert!(fetcher.calls().is_empty(), "must not hit the network");
+    }
+
+    #[tokio::test]
+    async fn rejects_revoked_key_before_network() {
+        let dir = tempfile::tempdir().expect("dir");
+        let fetcher = Arc::new(MockFetcher::new(HELLO));
+        let revoked = Arc::new(SignatureVerifier::with_keys(vec![TrustedKey {
+            key_id: TEST_KEY_ID.to_string(),
+            status: KeyStatus::Revoked,
+            key: test_signing_key().verifying_key(),
+        }]));
+        let downloader = Downloader::new(
+            fetcher.clone(),
+            Arc::new(FixedSpace(u64::MAX)),
+            Arc::new(Sha256Verifier),
+            revoked,
+        );
+        let err = downloader
+            .download(&request(dir.path(), HELLO_SHA))
+            .await
+            .expect_err("revoked");
+        assert_eq!(
+            err.details.as_ref().and_then(|d| d["reason"].as_str()),
+            Some("revoked_key")
+        );
+        assert!(fetcher.calls().is_empty(), "must not hit the network");
+    }
+
+    #[tokio::test]
+    async fn rejects_request_hash_that_differs_from_signed_manifest() {
+        let dir = tempfile::tempdir().expect("dir");
+        let fetcher = Arc::new(MockFetcher::new(HELLO));
+        let downloader = Downloader::new(
+            fetcher.clone(),
+            Arc::new(FixedSpace(u64::MAX)),
+            Arc::new(Sha256Verifier),
+            Arc::new(test_verifier()),
+        );
+        let mut req = request(dir.path(), HELLO_SHA);
+        req.sha256 = "2".repeat(64);
+        let err = downloader
+            .download(&req)
+            .await
+            .expect_err("metadata tamper");
+        assert_eq!(err.kind, UpdaterErrorKind::Signature);
+        assert!(fetcher.calls().is_empty(), "must not hit the network");
     }
 }

@@ -4040,6 +4040,8 @@ version = "1.1.7"
 dependencies = [
  "ammonia",
  "async-trait",
+ "base64 0.22.1",
+ "ed25519-dalek 2.2.0",
  "fs2",
  "openshell-core-domain",
  "pulldown-cmark",

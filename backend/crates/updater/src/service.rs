@@ -11,7 +11,7 @@ use crate::http::{
     fetch_with_retry, HostPolicy, HttpClient, HttpRequest, ReqwestClient, RetryPolicy,
 };
 use crate::log::UpdateLog;
-use crate::meta::{self, ReleaseMetaFile};
+use crate::meta;
 use crate::model::{Arch, Channel, Platform, UpdateAsset, UpdateCheckResult, UpdateConfig};
 use crate::notes;
 use crate::policy::{self, NotifyDecision};
@@ -19,6 +19,7 @@ use crate::source::github::GitHubSource;
 use crate::source::server::ServerSource;
 use crate::source::static_manifest::StaticManifestSource;
 use crate::source::{SourceAsset, SourceChain, SourceRelease, SourceRequest};
+use crate::verify::{SignatureVerifier, VerifiedManifest, MANIFEST_FILE_NAME, SIGNATURE_FILE_NAME};
 use crate::version;
 use openshell_core_domain::now_ms;
 use semver::Version;
@@ -57,6 +58,7 @@ pub struct UpdateService {
     state_store: StateStore,
     log: UpdateLog,
     http_for: HttpClientFactory,
+    signatures: Arc<SignatureVerifier>,
     retry: RetryPolicy,
 }
 
@@ -67,7 +69,12 @@ impl UpdateService {
             let policy = HostPolicy::new(cfg.mirror_prefix.as_deref());
             Ok(Arc::new(ReqwestClient::new(&cfg.proxy, policy)?) as Arc<dyn HttpClient>)
         });
-        Self::build(dir.into(), current_version, http_for)
+        Self::build(
+            dir.into(),
+            current_version,
+            http_for,
+            Arc::new(SignatureVerifier::builtin()),
+        )
     }
 
     /// 测试/自定义传输：固定使用同一个 `HttpClient`。
@@ -77,13 +84,30 @@ impl UpdateService {
         http: Arc<dyn HttpClient>,
     ) -> Result<Self, UpdaterError> {
         let http_for: HttpClientFactory = Arc::new(move |_cfg: &UpdateConfig| Ok(http.clone()));
-        Self::build(dir.into(), current_version, http_for)
+        Self::build(
+            dir.into(),
+            current_version,
+            http_for,
+            Arc::new(SignatureVerifier::builtin()),
+        )
+    }
+
+    /// 测试/自定义传输：显式注入信任列表（生产环境请使用 [`Self::new`] / [`Self::with_http`]）。
+    pub fn with_http_and_signature(
+        dir: impl Into<PathBuf>,
+        current_version: &str,
+        http: Arc<dyn HttpClient>,
+        signatures: Arc<SignatureVerifier>,
+    ) -> Result<Self, UpdaterError> {
+        let http_for: HttpClientFactory = Arc::new(move |_cfg: &UpdateConfig| Ok(http.clone()));
+        Self::build(dir.into(), current_version, http_for, signatures)
     }
 
     fn build(
         dir: PathBuf,
         current_version: &str,
         http_for: HttpClientFactory,
+        signatures: Arc<SignatureVerifier>,
     ) -> Result<Self, UpdaterError> {
         let current = version::normalize(current_version)?;
         let platform = Platform::current().ok_or_else(|| {
@@ -100,6 +124,7 @@ impl UpdateService {
             platform,
             arch: Arch::current(),
             http_for,
+            signatures,
             retry: RetryPolicy::default(),
         })
     }
@@ -359,11 +384,11 @@ impl UpdateService {
         had_cache: bool,
     ) -> Result<UpdateCheckResult, UpdaterError> {
         let latest = version::normalize(&release.tag)?;
-        let declared = self.fetch_release_meta(http, release).await;
+        let declared = self.fetch_signed_meta(http, release).await;
 
         let min_supported = declared
             .as_ref()
-            .and_then(|meta| meta.min_supported_version.clone())
+            .and_then(|signed| signed.meta.min_supported_version.clone())
             .or_else(|| release.meta.min_supported_version.clone());
 
         // 发布页可在发版后校订；静态附件中的旧说明不能覆盖人工修正。
@@ -372,7 +397,7 @@ impl UpdateService {
         } else {
             declared
                 .as_ref()
-                .and_then(|meta| meta.notes.clone())
+                .and_then(|signed| signed.meta.notes.clone())
                 .filter(|notes| !notes.trim().is_empty())
                 .or_else(|| release.meta.notes_markdown.clone())
                 .unwrap_or_default()
@@ -384,7 +409,7 @@ impl UpdateService {
         let declared_mandatory = release.meta.mandatory
             || declared
                 .as_ref()
-                .map(|meta| meta.mandatory)
+                .map(|signed| signed.meta.mandatory)
                 .unwrap_or(false);
         let mandatory = policy::is_mandatory(
             &self.current_version.to_string(),
@@ -432,7 +457,7 @@ impl UpdateService {
         http: &dyn HttpClient,
         release: &SourceRelease,
         latest: &Version,
-        declared: Option<&ReleaseMetaFile>,
+        declared: Option<&VerifiedManifest>,
     ) -> Option<UpdateAsset> {
         let mut chosen = match self.select_asset(release, latest) {
             Ok(candidate) => candidate,
@@ -458,13 +483,40 @@ impl UpdateService {
             }
         };
 
-        self.enrich_sha256(http, release, &mut chosen, declared)
-            .await;
+        let (manifest, signature) = match declared {
+            Some(signed) => {
+                // 哈希只信任已签名清单；GitHub digest / SHA256SUMS 不能覆盖它。
+                match signed.sha256_for(&chosen.name) {
+                    Some(hash) => {
+                        chosen.sha256 = Some(hash);
+                        (
+                            Some(signed.raw_manifest.clone()),
+                            Some(signed.raw_signature.clone()),
+                        )
+                    }
+                    None => {
+                        self.log.warn(
+                            "asset_not_in_signed_manifest",
+                            &[("asset", chosen.name.clone())],
+                        );
+                        chosen.sha256 = None;
+                        (None, None)
+                    }
+                }
+            }
+            None => {
+                self.enrich_sha256(http, release, &mut chosen).await;
+                (None, None)
+            }
+        };
+
         Some(UpdateAsset {
             name: chosen.name,
             url: chosen.url,
             size: chosen.size,
             sha256: chosen.sha256,
+            manifest,
+            signature,
         })
     }
 
@@ -516,35 +568,86 @@ impl UpdateService {
         asset::pick(&candidates, self.platform, self.arch, latest)
     }
 
-    async fn fetch_release_meta(
+    /// 读取并验证发布清单。
+    ///
+    /// * 数据源已内嵌签名（`latest.json`）→ 直接验签；
+    /// * GitHub 源 → 从 Release 资产取 `update-meta.json` 与 `.sig`；
+    /// * 任何缺失/验签失败都返回 `None`（该资产将不可自动安装），绝不静默跳过。
+    async fn fetch_signed_meta(
         &self,
         http: &dyn HttpClient,
         release: &SourceRelease,
-    ) -> Option<ReleaseMetaFile> {
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name.eq_ignore_ascii_case("update-meta.json"))?;
-        match fetch_with_retry(http, HttpRequest::json(asset.url.clone()), self.retry).await {
-            Ok(response) if response.is_success() => {
-                match meta::parse_update_meta(&response.body) {
-                    Ok(parsed) => Some(parsed),
-                    Err(err) => {
-                        self.log.warn("meta_invalid", &[("error", err.message)]);
-                        None
-                    }
+    ) -> Option<VerifiedManifest> {
+        let raw = match &release.signed_manifest {
+            Some(raw) if !raw.manifest.trim().is_empty() && !raw.signature.trim().is_empty() => {
+                raw.clone()
+            }
+            _ => {
+                let manifest_asset = release
+                    .assets
+                    .iter()
+                    .find(|asset| asset.name.eq_ignore_ascii_case(MANIFEST_FILE_NAME))?;
+                let signature_asset = release
+                    .assets
+                    .iter()
+                    .find(|asset| asset.name.eq_ignore_ascii_case(SIGNATURE_FILE_NAME));
+                let Some(signature_asset) = signature_asset else {
+                    self.log.warn(
+                        "manifest_signature_missing",
+                        &[("asset", MANIFEST_FILE_NAME.to_string())],
+                    );
+                    return None;
+                };
+                let manifest = self.fetch_text_asset(http, manifest_asset).await?;
+                let signature = self.fetch_text_asset(http, signature_asset).await?;
+                crate::source::SignedManifestRaw {
+                    manifest,
+                    signature,
                 }
             }
+        };
+
+        match self
+            .signatures
+            .verify_manifest(&raw.manifest, &raw.signature)
+        {
+            Ok(verified) => Some(verified),
+            Err(err) => {
+                self.log.warn(
+                    "manifest_signature_invalid",
+                    &[
+                        ("kind", format!("{:?}", err.kind)),
+                        (
+                            "reason",
+                            err.details
+                                .as_ref()
+                                .and_then(|d| d.get("reason"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        ),
+                    ],
+                );
+                None
+            }
+        }
+    }
+
+    async fn fetch_text_asset(&self, http: &dyn HttpClient, asset: &SourceAsset) -> Option<String> {
+        match fetch_with_retry(http, HttpRequest::text(asset.url.clone()), self.retry).await {
+            Ok(response) if response.is_success() => Some(response.text()),
             Ok(response) => {
                 self.log.warn(
-                    "meta_http_error",
+                    "manifest_http_error",
                     &[("status", response.status.to_string())],
                 );
                 None
             }
             Err(err) => {
-                self.log
-                    .warn("meta_fetch_failed", &[("kind", format!("{:?}", err.kind))]);
+                self.log.warn(
+                    "manifest_fetch_failed",
+                    &[("kind", format!("{:?}", err.kind))],
+                );
                 None
             }
         }
@@ -555,16 +658,9 @@ impl UpdateService {
         http: &dyn HttpClient,
         release: &SourceRelease,
         chosen: &mut AssetCandidate,
-        declared: Option<&ReleaseMetaFile>,
     ) {
         if chosen.sha256.is_some() {
             return;
-        }
-        if let Some(meta) = declared {
-            if let Some(hash) = meta.sha256_map().get(&chosen.name) {
-                chosen.sha256 = Some(hash.clone());
-                return;
-            }
         }
         let Some(sums) = release
             .assets
