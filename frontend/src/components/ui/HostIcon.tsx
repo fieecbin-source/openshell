@@ -1,5 +1,5 @@
 import type { Protocol } from "../../types/ipc";
-import { normalizeHostIconKey, HOST_ICONS } from "../../lib/hostIcons";
+import { DEFAULT_HOST_ICON_KEY, normalizeHostIconKey, HOST_ICONS } from "../../lib/hostIcons";
 import { PlugIcon, ServerIcon } from "./icons";
 import { cn } from "./cn";
 
@@ -29,6 +29,8 @@ export function HostIcon({ iconKey, protocol, className, title }: {
           alt={system.label}
           draggable={false}
           className={cn("h-full w-full object-contain",
+            // 彩色 Tux 深色下主体偏黑：只补一层极轻的白色描边，不额外加底板
+            system.key === DEFAULT_HOST_ICON_KEY && "dark:drop-shadow-[0_0_1px_rgba(255,255,255,0.45)]",
             system.tone === "black" && "dark:invert",
             system.tone === "white" && "invert dark:invert-0")}
         />

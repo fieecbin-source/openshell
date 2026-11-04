@@ -72,7 +72,7 @@ export const DEFAULT_HOST_ICON_KEY = "os:tux";
 export const HOST_ICONS: HostIconDef[] = [
   {
     key: DEFAULT_HOST_ICON_KEY, label: "默认", group: "default",
-    src: "/os/tux.svg", keywords: ["default", "none", "默认", "linux", "tux", "企鹅"], tone: "black",
+    src: "/os/tux.svg", keywords: ["default", "none", "默认", "linux", "tux", "企鹅"],
   },
   ...DEVICE_ICONS,
   ...OS_ICONS,
