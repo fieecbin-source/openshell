@@ -5,21 +5,21 @@
 @tailwind utilities;
 
 :root {
-  /* Daylight glass: blue-white materials with high-contrast blue-grey ink. */
-  --os-canvas: 248 251 255;
+  /* Neutral macOS-style chrome with a single blue action color. */
+  --os-canvas: 245 245 247;
   --os-surface: 255 255 255;
-  --os-surface-muted: 243 248 255;
-  --os-line: 69 94 123;
-  --os-ink: 29 49 74;
-  --os-ink-secondary: 61 81 106;
-  --os-ink-tertiary: 78 98 121;
-  --os-accent: 29 90 172;
-  --os-action: 37 99 235;
+  --os-surface-muted: 242 242 244;
+  --os-line: 72 72 82;
+  --os-ink: 29 29 31;
+  --os-ink-secondary: 81 81 88;
+  --os-ink-tertiary: 106 106 114;
+  --os-accent: 0 100 211;
+  --os-action: 0 113 227;
   --os-danger-action: 180 45 67;
   --os-success: 15 111 87;
   --os-warning: 139 89 17;
   --os-danger: 180 45 67;
-  --os-scrim: 226 236 248;
+  --os-scrim: 220 220 225;
 
   /* 动效令牌 */
   --os-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -127,34 +127,30 @@ button:active:not(:disabled) {
 /* The material and foreground share one palette; no competing light overrides. */
 .workspace-background {
   background-color: rgb(var(--os-canvas));
-  background-image:
-    radial-gradient(ellipse at 8% 0%, rgb(177 213 255 / 0.12), transparent 48%),
-    radial-gradient(ellipse at 95% 90%, rgb(194 235 226 / 0.09), transparent 45%);
 }
 
 .liquid-glass-backdrop,
 .liquid-glass-panel,
 .liquid-glass-chrome {
-  backdrop-filter: blur(28px) saturate(125%);
-  -webkit-backdrop-filter: blur(28px) saturate(125%);
+  backdrop-filter: blur(20px) saturate(110%);
+  -webkit-backdrop-filter: blur(20px) saturate(110%);
 }
 
 .liquid-glass-panel {
   color: rgb(var(--os-ink));
-  background: linear-gradient(145deg, rgb(255 255 255 / 0.99), rgb(249 252 255 / 0.99));
-  border: 1px solid rgb(var(--os-line) / 0.18);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95), 0 20px 56px rgb(75 116 165 / 0.12);
+  background: rgb(var(--os-surface) / 0.98);
+  border: 1px solid rgb(var(--os-line) / 0.12);
+  box-shadow: 0 20px 56px rgb(0 0 0 / 0.12), 0 2px 8px rgb(0 0 0 / 0.05);
 }
 
 .liquid-glass-chrome {
-  background: linear-gradient(120deg, rgb(255 255 255 / 0.98), rgb(245 250 255 / 0.98));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85);
+  background: rgb(var(--os-surface-muted) / 0.92);
 }
 
 .liquid-glass-card {
   background: rgb(var(--os-surface) / 0.96);
-  border: 1px solid rgb(var(--os-line) / 0.14);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95);
+  border: 1px solid rgb(var(--os-line) / 0.10);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.025);
   transition: background-color 160ms var(--os-ease), border-color 160ms var(--os-ease);
 }
 .liquid-glass-card:hover {
@@ -170,9 +166,8 @@ button:active:not(:disabled) {
 .liquid-glass-pill:hover { background: rgb(var(--os-line) / 0.08); }
 .liquid-glass-pill-active {
   color: rgb(var(--os-accent));
-  background: rgb(var(--os-accent) / 0.14);
-  border: 1px solid rgb(var(--os-accent) / 0.28);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85);
+  background: rgb(var(--os-accent) / 0.10);
+  border: 1px solid transparent;
   font-weight: 600;
 }
 
@@ -185,25 +180,8 @@ button:active:not(:disabled) {
   overflow: hidden;
   border-radius: inherit;
   pointer-events: none;
-  /* Light can brighten this plane but never tint it grey or black. */
-  mix-blend-mode: screen;
+  background: rgb(var(--os-surface) / 0.08);
 }
-/* The library's black underlays and elastic transforms are disabled on light
-   enterprise surfaces. Its optical filter is confined to the material plane. */
-.glass-material > :not(.liquid-library) { display: none !important; }
-.glass-material .liquid-library { transform: none !important; transition: none !important; }
-.glass-material .glass {
-  display: block !important;
-  width: 100%;
-  height: 100%;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95) !important;
-  transition: none !important;
-}
-.glass-material .glass__warp {
-  background: linear-gradient(130deg, rgb(255 255 255 / 0.50), rgb(225 239 255 / 0.24));
-  opacity: 0.16;
-}
-.glass-material .glass > div, .glass-size-probe { width: 100%; height: 100%; }
 
 /* Native option lists need an opaque backing in the Windows WebView. */
 select option, select optgroup {
@@ -251,6 +229,7 @@ input[type="range"]::-moz-range-thumb {
   .liquid-glass-panel, .liquid-glass-chrome { background: rgb(var(--os-surface)); }
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .glass-material { display: none; }
   .liquid-glass-panel, .liquid-glass-chrome, .liquid-glass-card {
     background: rgb(var(--os-surface));
     backdrop-filter: none;

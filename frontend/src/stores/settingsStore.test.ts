@@ -121,4 +121,16 @@ describe("shell and terminal appearance isolation", () => {
     expect(useSettingsStore.getState().fontSize).toBe(15);
   });
 
+  it("uses a regular monospace default and preserves an explicitly chosen font", async () => {
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().fontFamily).toContain("Cascadia Code");
+    expect(useSettingsStore.getState().fontWeight).toBe(400);
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      return command === "settings_get" && (args as { key: string }).key === "terminal.font_family"
+        ? { value_json: '"JetBrains Mono", monospace' } : null;
+    });
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().fontFamily).toBe('"JetBrains Mono", monospace');
+  });
+
 });

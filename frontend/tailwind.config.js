@@ -69,9 +69,9 @@ export default {
         'apple-md': '0 4px 14px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04)',
         'apple-lg': '0 10px 30px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04)',
         'apple-xl': '0 20px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06)',
-        'os-sm': '0 1px 3px rgb(57 90 137 / 0.08)',
-        'os-md': '0 4px 14px rgb(57 90 137 / 0.12)',
-        'os-lg': '0 20px 56px rgb(57 90 137 / 0.18)',
+        'os-sm': '0 1px 3px rgb(0 0 0 / 0.06)',
+        'os-md': '0 4px 14px rgb(0 0 0 / 0.09)',
+        'os-lg': '0 20px 56px rgb(0 0 0 / 0.15)',
       },
       // 更新弹窗与顶栏徽标专用的轻量动效（150-200ms，避免拖慢交互）
       keyframes: {

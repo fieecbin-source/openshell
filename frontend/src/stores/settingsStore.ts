@@ -515,11 +515,18 @@ interface SettingsState {
   setBackgroundBlur: (blur: number) => Promise<void>;
 }
 
+/** 历史默认字体栈：命中这些值说明用户未自定义，可安全升级到新默认 */
+const LEGACY_FONT_FAMILIES = [
+  'Consolas, "Cascadia Mono", "Microsoft YaHei UI", Menlo, monospace',
+  "Menlo, Monaco",
+  '"Cascadia Code", "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace',
+];
+
 export const DEFAULT_SETTINGS = {
   theme: "clean_light" as TerminalTheme,
   fontSize: 14,
-  fontFamily: 'Consolas, "Cascadia Mono", "Microsoft YaHei UI", Menlo, monospace',
-  fontWeight: 500 as 400 | 500 | 600,
+  fontFamily: '"SFMono-Regular", "SF Mono", "JetBrains Mono", "Cascadia Code", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace',
+  fontWeight: 400 as 400 | 500 | 600,
   cursorBlink: true,
   cursorStyle: "bar" as CursorStyle,
   scrollback: 5000,
@@ -580,8 +587,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         fontSize: clarityRec?.value_json === true
           ? (fontRec?.value_json as number) || DEFAULT_SETTINGS.fontSize
           : Math.max(DEFAULT_SETTINGS.fontSize, (fontRec?.value_json as number) || 0),
+        // 旧默认值（Consolas / Menlo / 早期 Cascadia 组合）视为未自定义，升级为新的等宽字体栈
         fontFamily: typeof fontFamilyRec?.value_json === "string" &&
-          !fontFamilyRec.value_json.startsWith("Menlo, Monaco")
+          !LEGACY_FONT_FAMILIES.some((legacy) => fontFamilyRec.value_json === legacy || (fontFamilyRec.value_json as string).startsWith(legacy))
           ? fontFamilyRec.value_json : DEFAULT_SETTINGS.fontFamily,
         fontWeight: [400, 500, 600].includes(weightRec?.value_json as number)
           ? weightRec!.value_json as 400 | 500 | 600 : DEFAULT_SETTINGS.fontWeight,

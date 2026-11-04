@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { sshExec } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { useContainerStore, type DockerContainerInfo } from "../stores/containerStore";
+import { BoxIcon, FolderIcon } from "./ui/icons";
 
 interface ContainerWorkspaceProps {
   connId: string;
@@ -172,7 +173,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
         </button>
 
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-base">🐳</span>
+          <BoxIcon className="h-5 w-5 text-accent" />
           <span className="truncate text-sm font-bold text-ink">
             {selected ? selected.name : "容器"}
           </span>
@@ -306,7 +307,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {!selected ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 text-ink-secondary">
-              <span className="text-3xl">🐳</span>
+              <BoxIcon className="h-10 w-10 text-ink-tertiary" />
               <p className="text-xs">从左侧选择一个容器查看详情</p>
             </div>
           ) : (
@@ -449,7 +450,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
                           className="space-y-1 rounded-xl border border-line/15 bg-surface p-3 shadow-apple-sm"
                         >
                           <div className="flex items-center justify-between font-semibold text-ink">
-                            <span>{m.Type === "volume" ? "📦 数据卷" : "📁 目录挂载"}</span>
+                            <span className="inline-flex items-center gap-1.5">{m.Type === "volume" ? <BoxIcon className="h-3.5 w-3.5" /> : <FolderIcon className="h-3.5 w-3.5" />}{m.Type === "volume" ? "数据卷" : "目录挂载"}</span>
                             <span className="rounded bg-line/5 px-1.5 py-0.5 text-[10px] text-ink-secondary">
                               {m.RW ? "读写" : "只读"}
                             </span>
