@@ -24,6 +24,16 @@ import { SshKeyImportModal } from "./SshKeyImportModal";
 import { Button, IconButton } from "./ui/Button";
 import { Select } from "./ui/Field";
 import { KeyRound, Trash2 } from "lucide-react";
+import { HostIcon } from "./ui/HostIcon";
+import {
+  HOST_ICONS,
+  HOST_ICON_GROUPS,
+  DEFAULT_HOST_ICON_KEY,
+  normalizeHostIconKey,
+  detectHostIcon,
+  hostIconLabel,
+} from "../lib/hostIcons";
+import { XIcon, KeyIcon, PlugIcon, PlayIcon, TriangleAlertIcon, SearchIcon, SparklesIcon, CheckIcon } from "./ui/icons";
 
 interface SessionModalProps {
   isOpen: boolean;
@@ -103,6 +113,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const [protocol, setProtocol] = useState<Protocol>("ssh");
   const [name, setName] = useState("");
+  const [iconKey, setIconKey] = useState(DEFAULT_HOST_ICON_KEY);
+  const [iconQuery, setIconQuery] = useState("");
+  const [iconHint, setIconHint] = useState<string | null>(null);
   const [groupId, setGroupId] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
@@ -144,6 +157,21 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 图标选择：按名称/别名/分组过滤，自动识别根据会话信息匹配
+  const filteredHostIcons = React.useMemo(() => {
+    const query = iconQuery.trim().toLowerCase();
+    if (!query) return HOST_ICONS;
+    return HOST_ICONS.filter((icon) => [icon.label, icon.key, HOST_ICON_GROUPS[icon.group], ...icon.keywords]
+      .join(" ").toLowerCase().includes(query));
+  }, [iconQuery]);
+
+  const applyAutoIcon = () => {
+    const detected = detectHostIcon({ name, host, username, protocol });
+    setIconKey(detected);
+    setIconQuery("");
+    setIconHint(`已根据主机信息识别为「${hostIconLabel(detected)}」`);
+  };
 
   const loadKeys = async (preferId?: string) => {
     try {
@@ -195,6 +223,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     if (isOpen) {
       if (editingSession) {
         setName(editingSession.name);
+        setIconKey(normalizeHostIconKey(editingSession.icon_key));
         setGroupId(editingSession.group_id || "");
         setProtocol(editingSession.protocol || "ssh");
         setNotes(editingSession.notes || "");
@@ -250,6 +279,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         }
 
         setName(parsedName);
+        setIconKey(normalizeHostIconKey(initialValues?.icon_key));
         setGroupId(initialValues?.group_id || "");
         setProtocol(initialValues?.protocol || "ssh");
         setNotes(initialValues?.notes || "");
@@ -411,6 +441,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             host_key_policy: hostKeyPolicy,
             proxy_jump_json: proxyJumpJson,
             color: null,
+            icon_key: iconKey === DEFAULT_HOST_ICON_KEY ? null : iconKey,
             notes: notes && notes.trim() ? notes.trim() : null,
             keepalive_sec: keepaliveSec,
           });
@@ -428,6 +459,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             host_key_policy: hostKeyPolicy,
             proxy_jump_json: proxyJumpJson,
             color: null,
+            icon_key: iconKey === DEFAULT_HOST_ICON_KEY ? null : iconKey,
             notes: notes && notes.trim() ? notes.trim() : null,
             keepalive_sec: keepaliveSec,
           };
@@ -497,9 +529,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         {/* 顶部标题与协议切换 */}
         <div className="mb-4 flex items-center justify-between border-b border-line/15 pb-3.5 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-action/10 text-accent font-bold text-sm">
-              {protocol === "ssh" ? "⚡" : "🔌"}
-            </div>
+            <HostIcon iconKey={iconKey} protocol={protocol} className="h-8 w-8" />
             <h3 className="text-base font-semibold text-ink tracking-tight">
               {editingSession ? "编辑会话配置" : "新建连接会话"}
             </h3>
@@ -537,9 +567,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               className="text-ink-tertiary hover:text-ink-secondary p-1.5 rounded-full hover:bg-line/5 transition"
               title="关闭"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <XIcon className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -583,12 +611,65 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           {/* ================= SSH 基础连接与主要凭据 ================= */}
           {protocol === "ssh" && activeTab === "general" && (
             <div className="space-y-4">
+              <fieldset>
+                <legend className="sr-only">主机图标</legend>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-ink-secondary">主机图标</span>
+                  <button type="button" onClick={applyAutoIcon}
+                    title="根据会话名称、主机地址和用户名匹配图标"
+                    className="flex items-center gap-1 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1 text-[10px] font-semibold text-accent transition hover:bg-accent/10">
+                    <SparklesIcon className="h-3 w-3" />
+                    自动识别
+                  </button>
+                </div>
+                <div className="mb-2 flex items-center gap-1.5 rounded-xl border border-line/15 bg-surface-muted/50 px-2.5 py-1.5 focus-within:border-accent/40">
+                  <SearchIcon className="h-3.5 w-3.5 shrink-0 text-ink-tertiary" />
+                  <input id="host-icon-search" value={iconQuery} onChange={(event) => setIconQuery(event.target.value)}
+                    aria-label="搜索图标" placeholder="搜索系统、发行版或设备类型"
+                    className="w-full bg-transparent text-xs text-ink placeholder:text-ink-tertiary outline-none" />
+                  {iconQuery && (
+                    <button type="button" aria-label="清空图标搜索" onClick={() => setIconQuery("")}
+                      className="text-ink-tertiary transition hover:text-accent">
+                      <XIcon className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-44 overflow-y-auto pr-1">
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {filteredHostIcons.map((icon) => (
+                      <label key={icon.key} className="min-w-0 cursor-pointer"
+                        title={`${icon.label}（${HOST_ICON_GROUPS[icon.group]}）`}>
+                        <input type="radio" name="host-icon" value={icon.key} aria-label={`图标 ${icon.label}`}
+                          checked={iconKey === icon.key}
+                          onChange={() => { setIconKey(icon.key); setIconHint(null); }}
+                          className="peer sr-only" />
+                        <span className="relative flex flex-col items-center gap-1 rounded-xl border border-transparent px-1 py-2 text-[10px] text-ink-secondary transition-colors hover:bg-line/5 peer-checked:border-accent/40 peer-checked:bg-accent/5 peer-checked:text-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent">
+                          {iconKey === icon.key && (
+                            <span className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent text-surface">
+                              <CheckIcon className="h-2.5 w-2.5" />
+                            </span>
+                          )}
+                          <HostIcon iconKey={icon.key} protocol={protocol} className="h-9 w-9" />
+                          <span className="max-w-full truncate">{icon.label}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {filteredHostIcons.length === 0 && (
+                    <p className="py-6 text-center text-[11px] text-ink-tertiary">
+                      没有匹配的图标，试试“router”“Ubuntu”或“数据库”。
+                    </p>
+                  )}
+                </div>
+                {iconHint && <p role="status" className="mt-1.5 text-[10px] text-accent">{iconHint}</p>}
+              </fieldset>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  <label htmlFor="session-name" className="block text-xs font-semibold text-ink-secondary mb-1">
                     会话显示名称
                   </label>
                   <input
+                    id="session-name"
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -617,10 +698,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  <label htmlFor="session-host" className="block text-xs font-semibold text-ink-secondary mb-1">
                     主机地址 (IP / 域名) *
                   </label>
                   <input
+                    id="session-host"
                     type="text"
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
@@ -1055,10 +1137,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               selectedKey ? (
                 <span>公钥连接</span>
               ) : (
-                <span className="text-state-warning">⚠️ 尚未选择私钥，可能无法免密登录</span>
+                <span className="inline-flex items-center gap-1.5 text-state-warning"><TriangleAlertIcon className="h-3.5 w-3.5" />尚未选择私钥</span>
               )
             ) : (
-              <span>{protocol === "ssh" ? "🔑 密码认证" : "🔌 串口会话"}</span>
+              <span className="inline-flex items-center gap-1.5">{protocol === "ssh" ? <KeyIcon className="h-3.5 w-3.5" /> : <PlugIcon className="h-3.5 w-3.5" />}{protocol === "ssh" ? "密码认证" : "串口会话"}</span>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
@@ -1086,7 +1168,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                 disabled={isSubmitting}
                 className="flex items-center gap-1.5 rounded-xl bg-action px-5 py-2 text-xs font-semibold text-white shadow-apple-md hover:bg-action transition disabled:opacity-50"
               >
-                <span>⚡</span>
+                <PlayIcon className="h-3.5 w-3.5" />
                 <span>{isSubmitting && connectAfterSave ? "保存并连接中..." : "保存并立即连接"}</span>
               </button>
             )}

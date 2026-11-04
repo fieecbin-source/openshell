@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeHub } from "./HomeHub";
 import { useSessionStore } from "../stores/sessionStore";
-import type { Group } from "../types/ipc";
+import type { Group, Session } from "../types/ipc";
 
 vi.mock("./ui/GlassMaterial", () => ({ GlassMaterial: () => null }));
 
@@ -58,5 +58,25 @@ describe("home group entry points", () => {
     expect(document.querySelector('[role="dialog"][aria-label="新建分组"]')).not.toBeNull();
     const submit = document.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     expect(submit.disabled).toBe(true);
+  });
+
+  it("opens the first-host flow with the selected device type", () => {
+    const server = container.querySelector<HTMLButtonElement>('[aria-label="添加 服务器 主机"]')!;
+    act(() => server.click());
+    expect(onNewSession).toHaveBeenCalledWith(undefined, "device:server");
+  });
+
+  it("keeps the same system logo in card and list views and handles legacy keys", () => {
+    const sessions = [
+      { id: "ubuntu", name: "Production", protocol: "ssh", auth_method: "password", icon_key: "os:ubuntu" },
+      { id: "legacy", name: "Legacy", protocol: "ssh", auth_method: "password", icon_key: "old-custom-icon" },
+    ] as Session[];
+    act(() => useSessionStore.setState({ sessions, groups: [] }));
+    expect(container.querySelector('[aria-label="添加第一台主机"]')).toBeNull();
+    expect(container.querySelector('img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
+    expect(container.querySelector('[aria-label="默认主机"]')).not.toBeNull();
+    act(() => container.querySelector<HTMLButtonElement>('[title="列表表格视图"]')!.click());
+    expect(container.querySelector('table img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
+    expect(container.querySelector('table [aria-label="默认主机"]')).not.toBeNull();
   });
 });

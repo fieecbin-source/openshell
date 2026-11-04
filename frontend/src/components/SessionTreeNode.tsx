@@ -1,6 +1,8 @@
 import React from "react";
 import type { Group } from "../types/ipc";
 import { type GroupNode, countSessions } from "../lib/groupTree";
+import { ChevronRightIcon } from "./ui/icons";
+import { DirectoryIcon } from "./ui/DirectoryIcon";
 
 export interface DragPayload {
   kind: "session" | "group";
@@ -76,17 +78,8 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
         title={`${group.name}（可拖拽排序 / 移入其它分组）`}
       >
         <div className="flex min-w-0 items-center space-x-1.5">
-          <span className="inline-block text-[10px] text-ink-tertiary transition-transform duration-150">
-            {isCollapsed ? "▶" : "▼"}
-          </span>
-          <svg className="h-3.5 w-3.5 shrink-0 text-ink-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-            />
-          </svg>
+          <ChevronRightIcon className={`h-3 w-3 shrink-0 text-ink-tertiary transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
+          <DirectoryIcon className="h-4 w-4 shrink-0" />
           <span className="truncate">{group.name}</span>
           <span className="text-[10px] font-normal text-ink-tertiary">({countSessions(node)})</span>
         </div>

@@ -3,14 +3,15 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionModal } from "./SessionModal";
 import { importSshKey, listSshKeys, pickSshKeyFile } from "../lib/ipc";
-import type { SshKey } from "../types/ipc";
+import type { Session, SessionInput, SshKey } from "../types/ipc";
 
 vi.mock("./ui/GlassMaterial", () => ({ GlassMaterial: () => null }));
 
 const { vault } = vi.hoisted(() => ({ vault: {
   status: { state: "unlocked" }, checkStatus: vi.fn().mockResolvedValue(undefined),
 } }));
-vi.mock("../stores/sessionStore", () => ({ useSessionStore: () => ({ sessions: [], groups: [] }) }));
+const actions = vi.hoisted(() => ({ createSession: vi.fn(), updateSession: vi.fn() }));
+vi.mock("../stores/sessionStore", () => ({ useSessionStore: () => ({ sessions: [], groups: [], ...actions }) }));
 vi.mock("../stores/serialStore", () => ({ useSerialStore: () => ({ ports: [], loadPorts: vi.fn() }) }));
 vi.mock("../stores/vaultStore", () => ({ useVaultStore: Object.assign(
   (selector?: (state: typeof vault) => unknown) => selector ? selector(vault) : vault,
@@ -35,13 +36,13 @@ function fill(id: string, value: string) {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
-async function render(keys: SshKey[] = []) {
+async function render(keys: SshKey[] = [], initialValues: Partial<SessionInput> = { auth_method: "publickey" }, editingSession?: Session) {
   vi.mocked(listSshKeys).mockResolvedValue(keys);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   cleanup = () => { act(() => root.unmount()); container.remove(); };
-  await act(async () => root.render(<SessionModal isOpen onClose={() => {}} initialValues={{ auth_method: "publickey" }} />));
+  await act(async () => root.render(<SessionModal isOpen onClose={() => {}} initialValues={initialValues} editingSession={editingSession} />));
   return container;
 }
 
@@ -125,4 +126,33 @@ it("keeps the selected file when the vault is locked and saves only after unlock
   vi.mocked(importSshKey).mockResolvedValueOnce({ id: "unlocked", name: "id_ed25519" } as SshKey);
   await act(async () => click("保存私钥"));
   expect(container.querySelector<HTMLSelectElement>('select[aria-label="已保存的私钥"]')!.value).toBe("unlocked");
+});
+
+it("saves a system selected from the first-host flow", async () => {
+  const container = await render([], { host: "demo.example.invalid", icon_key: "os:ubuntu", auth_method: "password" });
+  expect(container.querySelector<HTMLInputElement>('input[value="os:ubuntu"]')!.checked).toBe(true);
+  act(() => container.querySelector<HTMLInputElement>('input[value="os:debian"]')!.click());
+  actions.createSession.mockResolvedValue({ id: "created" });
+  await act(async () => click("仅保存"));
+  expect(actions.createSession).toHaveBeenCalledWith(expect.objectContaining({ icon_key: "os:debian", host: "demo.example.invalid" }));
+});
+
+it("loads the saved system when editing and can restore the default icon", async () => {
+  const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
+  const container = await render([], {}, session);
+  expect(container.querySelector<HTMLInputElement>('input[value="os:macos"]')!.checked).toBe(true);
+  act(() => container.querySelector<HTMLInputElement>('input[value="none"]')!.click());
+  actions.updateSession.mockResolvedValue({ ...session, icon_key: null });
+  await act(async () => click("仅保存"));
+  expect(actions.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({ icon_key: null }));
+});
+
+it("filters the icon grid by keyword and auto-detects a device from session info", async () => {
+  const container = await render([], { name: "Office router", host: "192.168.1.1", protocol: "ssh" });
+  act(() => container.querySelector<HTMLButtonElement>('button[title="根据会话名称、主机地址和用户名匹配图标"]')!.click());
+  expect(container.querySelector<HTMLInputElement>('input[value="device:router"]')!.checked).toBe(true);
+  expect(container.textContent).toContain("已根据主机信息识别为");
+  act(() => fill("host-icon-search", "ubuntu"));
+  expect(container.querySelector('input[value="device:router"]')).toBeNull();
+  expect(container.querySelector('input[value="os:ubuntu"]')).toBeTruthy();
 });

@@ -147,6 +147,7 @@ export const AppLayout: React.FC = () => {
   }, [activeTabId]);
 
   const activeTab = isHomeActive ? null : tabs.find((t) => t.tabId === activeTabId);
+  const activeSession = activeTab ? sessions.find((s) => s.id === activeTab.sessionId) : undefined;
   const isConnected = activeTab && activeTab.status === "connected" && (activeTab.connectionId || activeTab.protocol === "serial");
 
   // 终端宿主相关派生状态：
@@ -198,9 +199,9 @@ export const AppLayout: React.FC = () => {
     }
   };
 
-  const handleNewSession = (initialGroupId?: string) => {
+  const handleNewSession = (initialGroupId?: string, iconKey?: string) => {
     setEditingSession(null);
-    setInitialSessionValues(initialGroupId ? { group_id: initialGroupId } : undefined);
+    setInitialSessionValues(initialGroupId || iconKey ? { group_id: initialGroupId, icon_key: iconKey } : undefined);
     setIsSessionModalOpen(true);
   };
 
@@ -420,7 +421,7 @@ export const AppLayout: React.FC = () => {
           {isHomeActive && (
             <div className="absolute inset-0 z-30 overflow-hidden bg-canvas text-ink">
               <HomeHub
-                onNewSession={(groupId) => handleNewSession(groupId)}
+                onNewSession={handleNewSession}
                 onEditSession={handleEditSession}
                 onConnectSession={handleConnectSession}
                 onPortCheckerOpen={() => setPortCheckerOpen(true)}
@@ -488,6 +489,7 @@ export const AppLayout: React.FC = () => {
                     {sidebarView === "server" ? (
                       <ServerSidebar
                         tab={activeTab}
+                        iconKey={activeSession?.icon_key}
                         collapsed={sidebarCollapsed}
                         onOpenMonitor={handleOpenMonitor}
                         onOpenContainer={(containerId) => {

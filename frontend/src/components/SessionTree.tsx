@@ -13,6 +13,7 @@ import {
   wouldCreateCycle,
 } from "../lib/groupTree";
 import { SessionTreeNode, type DragPayload, type TreeApi } from "./SessionTreeNode";
+import { HostIcon } from "./ui/HostIcon";
 
 interface SessionTreeProps {
   onNewSession: (initialGroupId?: string) => void;
@@ -375,15 +376,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
         title={`${session.name}（单击连接，可拖拽调整分组）`}
       >
         <div className="flex min-w-0 items-center space-x-2">
-          <span
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-xs transition ${
-              session.protocol === "serial"
-                ? "border border-accent/20 bg-accent/10 text-accent"
-                : "border border-accent/20 bg-action/10 text-accent"
-            }`}
-          >
-            {session.protocol === "serial" ? "🔌" : "⚡"}
-          </span>
+          <HostIcon iconKey={session.icon_key} protocol={session.protocol} className="h-5 w-5" />
 
           <div className="min-w-0 truncate">
             <div className="flex items-center gap-1.5 truncate font-semibold text-ink">

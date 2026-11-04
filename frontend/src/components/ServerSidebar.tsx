@@ -4,10 +4,13 @@ import { useMonitorStore } from "../stores/monitorStore";
 import { sshExec } from "../lib/ipc";
 import { useContainerStore } from "../stores/containerStore";
 import { NetworkTraffic } from "./NetworkTraffic";
+import { HostIcon } from "./ui/HostIcon";
 import { ActivityIcon, BoxIcon, CpuIcon, MemoryIcon, HardDriveIcon, WifiOffIcon } from "./ui/icons";
 
 interface ServerSidebarProps {
   tab: TerminalTab;
+  /** 会话保存的主机图标；未设置时回落到通用服务器图标 */
+  iconKey?: string | null;
   collapsed: boolean;
   /** 打开大屏监控面板（概览页入口，替代原顶栏的「服务器监控」按钮） */
   onOpenMonitor?: () => void;
@@ -25,7 +28,7 @@ const num = (value: unknown, fallback = 0): number =>
 
 const fixed = (value: unknown, digits = 1): string => num(value).toFixed(digits);
 
-export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, collapsed, onOpenMonitor, onOpenContainer }) => {
+export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, collapsed, onOpenMonitor, onOpenContainer }) => {
   const { connId, sessionId } = { connId: tab.connectionId, sessionId: tab.sessionId };
   const connected = tab.status === "connected" && !!connId;
   const {
@@ -235,6 +238,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, collapsed, on
       <div className="p-3 border-b border-line/10 bg-surface/80 backdrop-blur-md">
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-1.5 overflow-hidden">
+            <HostIcon iconKey={iconKey} protocol={tab.protocol} className="h-4 w-4" />
             <span className="h-2 w-2 rounded-full bg-state-success shrink-0 shadow-apple-sm animate-pulse" />
             <h3 className="text-xs font-bold text-ink truncate" title={tab.sessionName}>
               {tab.sessionName}

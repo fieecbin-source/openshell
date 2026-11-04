@@ -67,6 +67,7 @@ export interface Session {
 }
 
 export interface SessionInput {
+  icon_key?: string | null;
   group_id?: string | null;
   name?: string | null;
   protocol?: Protocol;
@@ -87,6 +88,7 @@ export interface SessionInput {
 }
 
 export interface SessionPatch {
+  icon_key?: string | null;
   group_id?: string | null;
   name?: string;
   protocol?: Protocol;

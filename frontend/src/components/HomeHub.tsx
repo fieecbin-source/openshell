@@ -1,6 +1,8 @@
 import { GlassMaterial } from "./ui/GlassMaterial";
 import React, { useMemo, useState } from "react";
-import { FolderIcon, KeyIcon, PlusIcon, ServerIcon, SearchIcon, ShieldIcon } from "./ui/icons";
+import { FolderIcon, KeyIcon, PlusIcon, ServerIcon, SearchIcon, ShieldIcon, StarIcon, PencilIcon, TrashIcon, GridIcon, ListIcon } from "./ui/icons";
+import { HostIcon } from "./ui/HostIcon";
+import { DEVICE_ICONS } from "../lib/hostIcons";
 import { Button } from "./ui/Button";
 import { Field, Input } from "./ui/Field";
 import { Modal } from "./ui/Overlay";
@@ -10,7 +12,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useTerminalStore } from "../stores/terminalStore";
 
 interface HomeHubProps {
-  onNewSession: (groupId?: string) => void;
+  onNewSession: (groupId?: string, iconKey?: string) => void;
   onEditSession: (session: Session) => void;
   onConnectSession: (session: Session) => void;
   onPortCheckerOpen?: (host?: string, port?: number) => void;
@@ -20,22 +22,6 @@ type FilterKey = "all" | "favorites" | "online" | string;
 
 /** 分组色点：分组没配颜色时按顺序取，保证视觉上能区分 */
 const GROUP_DOTS = ["#0ea5e9", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#14b8a6", "#ef4444"];
-
-/** 主机头像渐变：按会话 id 哈希取，保证同一台机器每次颜色一致 */
-const AVATAR_GRADIENTS = [
-  "from-sky-500 to-blue-600",
-  "from-emerald-500 to-teal-600",
-  "from-violet-500 to-purple-600",
-  "from-amber-500 to-orange-600",
-  "from-rose-500 to-pink-600",
-  "from-cyan-500 to-sky-600",
-];
-
-const hashIndex = (key: string, len: number): number => {
-  let hash = 0;
-  for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) | 0;
-  return Math.abs(hash) % len;
-};
 
 /** 后端时间戳可能是秒或毫秒，统一折算成毫秒 */
 const toMs = (ts: number | null | undefined): number => {
@@ -207,6 +193,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
 
   const onlineCount = sessions.filter((s) => onlineIds.has(s.id)).length;
   const favoriteCount = sessions.filter((s) => s.favorite).length;
+  const firstRun = sessions.length === 0 && selectedFilter === "all" && !searchQuery.trim();
   const newGroupId =
     selectedFilter !== "all" && selectedFilter !== "favorites" && selectedFilter !== "online"
       ? selectedFilter
@@ -222,7 +209,6 @@ export const HomeHub: React.FC<HomeHubProps> = ({
     const isBusy = activeTab?.status === "connecting" || activeTab?.status === "reconnecting";
     const isPublicKey = s.auth_method === "publickey" || s.auth_method === "public_key";
     const group = s.group_id ? groupById.get(s.group_id) : undefined;
-    const gradient = AVATAR_GRADIENTS[hashIndex(s.id, AVATAR_GRADIENTS.length)];
 
     return (
       <div
@@ -231,7 +217,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           if (activeTab) setActiveTab(activeTab.tabId);
           else onConnectSession(s);
         }}
-        className={`group relative flex flex-col justify-between rounded-2xl border p-4 transition-all duration-200 cursor-pointer liquid-glass-card hover:shadow-apple-md hover:-translate-y-0.5 ${
+        className={`group relative flex flex-col justify-between rounded-2xl border bg-surface p-4 transition-colors duration-150 cursor-pointer shadow-apple-sm hover:shadow-apple-md ${
           isOnline
             ? "border-state-success/30 ring-2 ring-emerald-500/10"
             : "border-line/15 hover:border-accent/50"
@@ -239,11 +225,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
       >
         {/* 头部：主机头像 + 别名 + 状态 */}
         <div className="flex items-start gap-3">
-          <div
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${gradient} text-sm font-bold text-white shadow-apple-sm`}
-          >
-            {(s.name || "?").trim().charAt(0).toUpperCase() || "?"}
-          </div>
+          <HostIcon iconKey={s.icon_key} protocol={s.protocol} className="h-10 w-10" />
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
@@ -283,14 +265,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               }`}
               title={s.favorite ? "取消收藏" : "收藏该主机"}
             >
-              <svg className="w-3.5 h-3.5" fill={s.favorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.196-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118L2.98 10.1c-.783-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
-                />
-              </svg>
+              <StarIcon className="h-3.5 w-3.5" fill={s.favorite ? "currentColor" : "none"} />
             </button>
             <button
               onClick={(e) => {
@@ -300,9 +275,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               className="p-1 rounded-lg text-ink-tertiary hover:text-ink hover:bg-line/5 transition"
               title="编辑机器配置"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
+              <PencilIcon className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={(e) => {
@@ -312,9 +285,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               className="p-1 rounded-lg text-ink-tertiary hover:text-state-danger hover:bg-state-danger/10 transition"
               title="删除机器"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
+              <TrashIcon className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
@@ -424,9 +395,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               onClick={() => onNewSession(newGroupId)}
               className="flex items-center gap-2 rounded-xl bg-action px-4 py-2.5 text-xs font-semibold text-white shadow-apple-md transition duration-150 hover:bg-action active:scale-98"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-              </svg>
+              <PlusIcon className="h-4 w-4" />
               <span>新建服务器</span>
             </button>
           </div>
@@ -465,7 +434,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                   : "bg-line/5 text-ink-secondary hover:bg-line/10"
               }`}
             >
-              <span>⭐ 收藏</span>
+              <StarIcon className="h-3 w-3" /><span>收藏</span>
             </button>
             <span className="mx-1 h-4 w-px shrink-0 bg-line/10" />
             {[...groups]
@@ -502,14 +471,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                 placeholder="搜索别名、IP、用户或备注..."
                 className="w-full rounded-xl border border-line/15 bg-surface pl-8 pr-3 py-1.5 text-xs text-ink placeholder-ink-tertiary transition shadow-apple-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
-              <svg
-                className="absolute left-2.5 top-2 h-3.5 w-3.5 text-ink-tertiary"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+              <SearchIcon className="absolute left-2.5 top-2 h-3.5 w-3.5 text-ink-tertiary" />
             </div>
 
             <div className="flex items-center rounded-lg border border-line/15 bg-line/5 p-0.5">
@@ -518,18 +480,14 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                 className={`p-1 rounded transition ${viewMode === "grid" ? "bg-surface text-ink shadow-apple-sm" : "text-ink-secondary hover:text-ink"}`}
                 title="网格卡片视图"
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-                </svg>
+                <GridIcon className="h-3.5 w-3.5" />
               </button>
               <button
                 onClick={() => setViewMode("list")}
                 className={`p-1 rounded transition ${viewMode === "list" ? "bg-surface text-ink shadow-apple-sm" : "text-ink-secondary hover:text-ink"}`}
                 title="列表表格视图"
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
+                <ListIcon className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
@@ -539,25 +497,25 @@ export const HomeHub: React.FC<HomeHubProps> = ({
       {/* 主体卡片网格 / 列表区 */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl">
+          {firstRun && <section aria-label="添加第一台主机" className="mx-auto my-8 max-w-xl rounded-3xl bg-surface px-6 py-8 text-center shadow-apple-md sm:px-10">
+            <h2 className="text-lg font-semibold tracking-tight text-ink">添加第一台主机</h2>
+            <div className="my-6 grid grid-cols-3 gap-2 sm:grid-cols-5">
+              {DEVICE_ICONS.slice(0, 10).map((system) => <button key={system.key}
+                type="button" onClick={() => onNewSession(newGroupId, system.key)} aria-label={`添加 ${system.label} 主机`}
+                className="flex min-w-0 flex-col items-center gap-2 rounded-2xl px-1 py-3 transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-accent">
+                <HostIcon iconKey={system.key} className="h-12 w-12" />
+                <span className="max-w-full truncate text-[11px] font-medium text-ink-secondary">{system.label}</span>
+              </button>)}
+            </div>
+            <Button variant="primary" leading={<PlusIcon className="h-4 w-4" />} onClick={() => onNewSession(newGroupId)}>新建服务器</Button>
+          </section>}
           {filteredSessions.length === 0 && (!sections.length || !!searchQuery.trim() || selectedFilter === "online" || selectedFilter === "favorites") ? (
-            <div className="mt-4 space-y-3 rounded-2xl border border-dashed border-line/25 bg-surface p-12 text-center shadow-apple-sm">
+            !firstRun && <div className="mt-4 space-y-3 rounded-2xl bg-surface p-12 text-center shadow-apple-sm">
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-accent/20 bg-accent/10"><ServerIcon className="h-7 w-7 text-accent" /></div>
               <h3 className="text-base font-bold text-ink">
-                {sessions.length === 0 ? "还没有配置任何服务器连接" : "未找到匹配的机器"}
+                未找到匹配的机器
               </h3>
-              <p className="mx-auto max-w-md text-xs text-ink-secondary">
-                {sessions.length === 0
-                  ? "添加 SSH 主机或串口设备，按环境分组管理，随时连接并传输文件。"
-                  : "尝试清空搜索关键字，或切换上方的分类 / 在线 / 收藏筛选。"}
-              </p>
-              {sessions.length === 0 && (
-                <button
-                  onClick={() => onNewSession()}
-                  className="mt-2 rounded-xl bg-action px-5 py-2 text-xs font-semibold text-white shadow-apple-md transition hover:bg-action"
-                >
-                  + 新建第一台机器连接
-                </button>
-              )}
+              <Button onClick={() => { setSearchQuery(""); setSelectedFilter("all"); }}>清除筛选</Button>
             </div>
           ) : viewMode === "grid" || filteredSessions.length === 0 ? (
             <div className="space-y-6">
@@ -595,7 +553,6 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                       <FolderIcon className="h-7 w-7 shrink-0 text-accent/70" />
                       <div>
                         <p className="text-os-sm font-medium text-ink">暂无服务器</p>
-                        <p className="mt-1 text-os-xs text-ink-secondary">点击“新建服务器”，连接将自动归入「{section.name}」。</p>
                       </div>
                     </div>
                   )}
@@ -641,9 +598,10 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                           />
                         </td>
                         <td className="py-2.5 px-4 font-bold text-ink">
-                          <span className="flex items-center gap-1">
-                            {s.name}
-                            {s.favorite && <span className="text-state-warning">★</span>}
+                          <span className="flex items-center gap-2.5">
+                            <HostIcon iconKey={s.icon_key} protocol={s.protocol} className="h-6 w-6" />
+                            <span className="truncate">{s.name}</span>
+                            {s.favorite && <StarIcon className="h-3 w-3 shrink-0 text-state-warning" fill="currentColor" />}
                           </span>
                         </td>
                         <td className="py-2.5 px-4 font-mono text-ink-secondary">
@@ -707,7 +665,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
       </div>
 
       <Modal open={groupModalOpen} onClose={() => { if (!creatingGroup) setGroupModalOpen(false); }}
-        title="新建分组" description="按环境、项目或团队组织服务器。创建后即可在分组内添加服务器。"
+        title="新建分组"
         widthClassName="w-full max-w-[440px]">
         <form onSubmit={handleCreateGroup} className="space-y-5">
           <Field label="分组名称" htmlFor="home-group-name" required error={groupError}>
