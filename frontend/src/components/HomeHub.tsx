@@ -666,17 +666,22 @@ export const HomeHub: React.FC<HomeHubProps> = ({
 
       <Modal open={groupModalOpen} onClose={() => { if (!creatingGroup) setGroupModalOpen(false); }}
         title="新建分组"
-        widthClassName="w-full max-w-[440px]">
-        <form onSubmit={handleCreateGroup} className="space-y-5">
+        widthClassName="w-full max-w-[420px]"
+        footer={
+          <>
+            <Button onClick={() => setGroupModalOpen(false)} disabled={creatingGroup}>取消</Button>
+            <Button type="submit" form="home-group-form" variant="primary" loading={creatingGroup} disabled={!groupName.trim()}>
+              创建分组
+            </Button>
+          </>
+        }>
+        <form id="home-group-form" onSubmit={handleCreateGroup} className="pt-0.5">
           <Field label="分组名称" htmlFor="home-group-name" required error={groupError}>
             <Input id="home-group-name" autoFocus maxLength={80} value={groupName} disabled={creatingGroup}
-              invalid={!!groupError} placeholder="例如：生产环境、预发布环境"
+              invalid={!!groupError} placeholder="例如：生产环境、预发布环境" autoComplete="off"
+              className="h-[38px]"
               onChange={(event) => { setGroupName(event.target.value); setGroupError(null); }} />
           </Field>
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setGroupModalOpen(false)} disabled={creatingGroup}>取消</Button>
-            <Button type="submit" variant="primary" loading={creatingGroup} disabled={!groupName.trim()}>创建分组</Button>
-          </div>
         </form>
       </Modal>
 
