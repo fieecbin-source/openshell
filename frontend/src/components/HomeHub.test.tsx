@@ -74,9 +74,9 @@ describe("home group entry points", () => {
     act(() => useSessionStore.setState({ sessions, groups: [] }));
     expect(container.querySelector('[aria-label="添加第一台主机"]')).toBeNull();
     expect(container.querySelector('img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
-    expect(container.querySelector('[aria-label="默认主机"]')).not.toBeNull();
+    expect(container.querySelector('img[alt="默认"]')?.getAttribute("src")).toBe("/os/tux.svg");
     act(() => container.querySelector<HTMLButtonElement>('[title="列表表格视图"]')!.click());
     expect(container.querySelector('table img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
-    expect(container.querySelector('table [aria-label="默认主机"]')).not.toBeNull();
+    expect(container.querySelector('table img[alt="默认"]')?.getAttribute("src")).toBe("/os/tux.svg");
   });
 });

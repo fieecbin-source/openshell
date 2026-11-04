@@ -33,6 +33,13 @@ function click(text: string) {
 }
 function fill(id: string, value: string) {
   const input = document.getElementById(id) as HTMLInputElement;
+  setInputValue(input, value);
+}
+function fillByLabel(label: string, value: string) {
+  const input = document.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
+  setInputValue(input, value);
+}
+function setInputValue(input: HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
@@ -141,7 +148,7 @@ it("loads the saved system when editing and can restore the default icon", async
   const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
   const container = await render([], {}, session);
   expect(container.querySelector<HTMLInputElement>('input[value="os:macos"]')!.checked).toBe(true);
-  act(() => container.querySelector<HTMLInputElement>('input[value="none"]')!.click());
+  act(() => container.querySelector<HTMLInputElement>('input[value="os:tux"]')!.click());
   actions.updateSession.mockResolvedValue({ ...session, icon_key: null });
   await act(async () => click("仅保存"));
   expect(actions.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({ icon_key: null }));
@@ -152,7 +159,25 @@ it("filters the icon grid by keyword and auto-detects a device from session info
   act(() => container.querySelector<HTMLButtonElement>('button[title="根据会话名称、主机地址和用户名匹配图标"]')!.click());
   expect(container.querySelector<HTMLInputElement>('input[value="device:router"]')!.checked).toBe(true);
   expect(container.textContent).toContain("已根据主机信息识别为");
-  act(() => fill("host-icon-search", "ubuntu"));
+  act(() => fillByLabel("搜索图标", "ubuntu"));
   expect(container.querySelector('input[value="device:router"]')).toBeNull();
   expect(container.querySelector('input[value="os:ubuntu"]')).toBeTruthy();
+});
+
+it("shows and edits the icon from the advanced tab without leaving the tab", async () => {
+  const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
+  const container = await render([], {}, session);
+  await act(async () => click("高级与跳板机"));
+  const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="修改主机图标"]')!;
+  expect(trigger.querySelector('[data-icon-key="os:macos"]')).not.toBeNull();
+  expect(container.textContent).toContain("已选择macOS，点击可更换");
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(container.querySelector<HTMLInputElement>('input[name="advanced-host-icon"][value="os:macos"]')!.checked).toBe(true);
+  act(() => container.querySelector<HTMLInputElement>('input[name="advanced-host-icon"][value="os:ubuntu"]')!.click());
+  expect(trigger.querySelector('[data-icon-key="os:ubuntu"]')).not.toBeNull();
+  expect(container.textContent).toContain("已选择Ubuntu，点击可更换");
+  actions.updateSession.mockResolvedValue({ ...session, icon_key: "os:ubuntu" });
+  await act(async () => click("仅保存"));
+  expect(actions.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({ icon_key: "os:ubuntu" }));
 });

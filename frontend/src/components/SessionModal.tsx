@@ -25,15 +25,14 @@ import { Button, IconButton } from "./ui/Button";
 import { Select } from "./ui/Field";
 import { KeyRound, Trash2 } from "lucide-react";
 import { HostIcon } from "./ui/HostIcon";
+import { HostIconPicker } from "./ui/HostIconPicker";
 import {
-  HOST_ICONS,
-  HOST_ICON_GROUPS,
   DEFAULT_HOST_ICON_KEY,
   normalizeHostIconKey,
   detectHostIcon,
   hostIconLabel,
 } from "../lib/hostIcons";
-import { XIcon, KeyIcon, PlugIcon, PlayIcon, TriangleAlertIcon, SearchIcon, SparklesIcon, CheckIcon } from "./ui/icons";
+import { XIcon, KeyIcon, PlugIcon, PlayIcon, TriangleAlertIcon } from "./ui/icons";
 
 interface SessionModalProps {
   isOpen: boolean;
@@ -114,8 +113,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [protocol, setProtocol] = useState<Protocol>("ssh");
   const [name, setName] = useState("");
   const [iconKey, setIconKey] = useState(DEFAULT_HOST_ICON_KEY);
-  const [iconQuery, setIconQuery] = useState("");
   const [iconHint, setIconHint] = useState<string | null>(null);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [groupId, setGroupId] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
@@ -158,19 +157,15 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 图标选择：按名称/别名/分组过滤，自动识别根据会话信息匹配
-  const filteredHostIcons = React.useMemo(() => {
-    const query = iconQuery.trim().toLowerCase();
-    if (!query) return HOST_ICONS;
-    return HOST_ICONS.filter((icon) => [icon.label, icon.key, HOST_ICON_GROUPS[icon.group], ...icon.keywords]
-      .join(" ").toLowerCase().includes(query));
-  }, [iconQuery]);
-
   const applyAutoIcon = () => {
     const detected = detectHostIcon({ name, host, username, protocol });
     setIconKey(detected);
-    setIconQuery("");
     setIconHint(`已根据主机信息识别为「${hostIconLabel(detected)}」`);
+  };
+
+  const selectIcon = (key: string) => {
+    setIconKey(key);
+    setIconHint(null);
   };
 
   const loadKeys = async (preferId?: string) => {
@@ -613,55 +608,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             <div className="space-y-4">
               <fieldset>
                 <legend className="sr-only">主机图标</legend>
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-ink-secondary">主机图标</span>
-                  <button type="button" onClick={applyAutoIcon}
-                    title="根据会话名称、主机地址和用户名匹配图标"
-                    className="flex items-center gap-1 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1 text-[10px] font-semibold text-accent transition hover:bg-accent/10">
-                    <SparklesIcon className="h-3 w-3" />
-                    自动识别
-                  </button>
-                </div>
-                <div className="mb-2 flex items-center gap-1.5 rounded-xl border border-line/15 bg-surface-muted/50 px-2.5 py-1.5 focus-within:border-accent/40">
-                  <SearchIcon className="h-3.5 w-3.5 shrink-0 text-ink-tertiary" />
-                  <input id="host-icon-search" value={iconQuery} onChange={(event) => setIconQuery(event.target.value)}
-                    aria-label="搜索图标" placeholder="搜索系统、发行版或设备类型"
-                    className="w-full bg-transparent text-xs text-ink placeholder:text-ink-tertiary outline-none" />
-                  {iconQuery && (
-                    <button type="button" aria-label="清空图标搜索" onClick={() => setIconQuery("")}
-                      className="text-ink-tertiary transition hover:text-accent">
-                      <XIcon className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-                <div className="max-h-44 overflow-y-auto pr-1">
-                  <div className="grid grid-cols-5 gap-1.5">
-                    {filteredHostIcons.map((icon) => (
-                      <label key={icon.key} className="min-w-0 cursor-pointer"
-                        title={`${icon.label}（${HOST_ICON_GROUPS[icon.group]}）`}>
-                        <input type="radio" name="host-icon" value={icon.key} aria-label={`图标 ${icon.label}`}
-                          checked={iconKey === icon.key}
-                          onChange={() => { setIconKey(icon.key); setIconHint(null); }}
-                          className="peer sr-only" />
-                        <span className="relative flex flex-col items-center gap-1 rounded-xl border border-transparent px-1 py-2 text-[10px] text-ink-secondary transition-colors hover:bg-line/5 peer-checked:border-accent/40 peer-checked:bg-accent/5 peer-checked:text-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent">
-                          {iconKey === icon.key && (
-                            <span className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent text-surface">
-                              <CheckIcon className="h-2.5 w-2.5" />
-                            </span>
-                          )}
-                          <HostIcon iconKey={icon.key} protocol={protocol} className="h-9 w-9" />
-                          <span className="max-w-full truncate">{icon.label}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  {filteredHostIcons.length === 0 && (
-                    <p className="py-6 text-center text-[11px] text-ink-tertiary">
-                      没有匹配的图标，试试“router”“Ubuntu”或“数据库”。
-                    </p>
-                  )}
-                </div>
-                {iconHint && <p role="status" className="mt-1.5 text-[10px] text-accent">{iconHint}</p>}
+                <HostIconPicker value={iconKey} onChange={selectIcon} onAutoDetect={applyAutoIcon} hint={iconHint} />
               </fieldset>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -869,9 +816,27 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           {/* ================= SSH 高级配置 & 跳板机 ================= */}
           {protocol === "ssh" && activeTab === "advanced" && (
             <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-[11px] text-ink-secondary/80"
+                  title={iconKey === DEFAULT_HOST_ICON_KEY ? "默认图标，点击可更换" : `已选择${hostIconLabel(iconKey)}，点击可更换`}>
+                  {iconKey === DEFAULT_HOST_ICON_KEY ? "默认图标，点击可更换" : `已选择${hostIconLabel(iconKey)}，点击可更换`}
+                </p>
+                <button type="button" onClick={() => setIconPickerOpen((open) => !open)}
+                  aria-expanded={iconPickerOpen} aria-label="修改主机图标" title="点击修改主机图标"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-line/15 bg-surface transition hover:border-accent/40 hover:bg-accent/5 focus-visible:ring-2 focus-visible:ring-accent">
+                  <HostIcon iconKey={iconKey} protocol={protocol} className="h-7 w-7" />
+                </button>
+              </div>
+              {iconPickerOpen && (
+                <div className="rounded-xl border border-line/15 bg-surface-muted/40 p-2.5">
+                  <HostIconPicker value={iconKey} onChange={selectIcon} onAutoDetect={applyAutoIcon}
+                    hint={iconHint} radioName="advanced-host-icon" compact />
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  跳板机链路 (ProxyJump Bastion)
+                  跳板机（可选）
                 </label>
                 <select
                   value={jumpHostSessionId}
@@ -882,7 +847,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   <option value="">不使用跳板机</option>
                   {candidateJumpHosts.map((s) => (
                     <option key={s.id} value={s.id}>
-                      🚀 经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
+                      经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
                     </option>
                   ))}
                 </select>
@@ -891,25 +856,25 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    主机密钥校验策略
+                    主机指纹校验
                   </label>
                   <select
                     value={hostKeyPolicy}
                     onChange={(e) => setHostKeyPolicy(e.target.value as HostKeyPolicy)}
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   >
-                    <option value="strict">严格校验 (Strict - 推荐，首次连接需确认指纹)</option>
-                    <option value="accept_new">自动接受首次连接 (Accept New - 有中间人风险，需显式选择)</option>
-                    <option value="insecure">不校验主机密钥 (Insecure - 仅用于开发测试)</option>
+                    <option value="strict">首次连接时确认主机指纹（推荐）</option>
+                    <option value="accept_new">首次连接自动接受主机指纹</option>
+                    <option value="insecure">不校验主机指纹（仅测试）</option>
                   </select>
                   <p className="mt-1 text-[11px] leading-snug text-ink-secondary/70">
-                    默认 Strict：未知主机会被拒绝并展示指纹，确认后才写入信任；仅在你明确接受首连风险时才改用 Accept New。
+                    默认：首次连接会显示主机指纹，确认后才建立连接；之后指纹发生变化会阻止连接。仅在明确了解风险时才选择自动接受。
                   </p>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    心跳保活间隔 (KeepAlive 秒)
+                    保活间隔（秒）
                   </label>
                   <input
                     type="number"
@@ -924,7 +889,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  备注说明 (Notes)
+                  备注说明
                 </label>
                 <textarea
                   rows={3}
@@ -1060,7 +1025,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     onChange={(e) => setParity(e.target.value as SerialParity)}
                     className="w-full rounded-xl border border-line/15 bg-surface px-2 py-1.5 text-xs text-ink font-mono focus:border-accent focus:outline-none transition"
                   >
-                    <option value="none">None (无校验)</option>
+                    <option value="none">无校验</option>
                     <option value="even">Even (偶校验)</option>
                     <option value="odd">Odd (奇校验)</option>
                     <option value="mark">Mark</option>
@@ -1079,7 +1044,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     onChange={(e) => setFlowControl(e.target.value as SerialFlowControl)}
                     className="w-full rounded-xl border border-line/15 bg-surface px-2 py-1.5 text-xs text-ink font-mono focus:border-accent focus:outline-none transition"
                   >
-                    <option value="none">None (无流控)</option>
+                    <option value="none">无流控</option>
                     <option value="hardware">RTS / CTS 硬件流控</option>
                     <option value="software">XON / XOFF 软件流控</option>
                   </select>
