@@ -36,8 +36,6 @@ interface SessionModalProps {
 const COMMON_BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 
 interface VaultInlineUnlockProps {
-  /** 说明当前为什么要解锁（保存密码 / 导入私钥） */
-  reason: string;
   uninitialized: boolean;
   password: string;
   onPasswordChange: (value: string) => void;
@@ -53,7 +51,6 @@ interface VaultInlineUnlockProps {
  * 否则用户只会看到「主保险库已锁定」，却在弹窗里找不到解锁的地方。
  */
 const VaultInlineUnlock: React.FC<VaultInlineUnlockProps> = ({
-  reason,
   uninitialized,
   password,
   onPasswordChange,
@@ -63,13 +60,8 @@ const VaultInlineUnlock: React.FC<VaultInlineUnlockProps> = ({
 }) => (
   <div className="mt-2 p-2.5 rounded-xl border border-state-warning/30 bg-state-warning/10 space-y-2 text-xs">
     <div className="flex items-center gap-1.5 font-semibold text-state-warning">
-      <span>⚠️ 主保险库当前未解锁</span>
+      <span>{uninitialized ? "设置保险库主密码" : "保险库已锁定"}</span>
     </div>
-    <p className="text-[11px] text-state-warning leading-relaxed">
-      {uninitialized
-        ? `检测到主保险库尚未初始化。请输入主密码一键创建保险库，${reason}将以 XChaCha20 密文安全加密保存：`
-        : `需要解锁主保险库才能${reason}。请输入主密码即刻解锁：`}
-    </p>
     <div className="flex gap-2">
       <input
         type="password"
@@ -84,7 +76,7 @@ const VaultInlineUnlock: React.FC<VaultInlineUnlockProps> = ({
         disabled={busy || !password}
         className="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold text-xs hover:bg-amber-700 disabled:opacity-50 transition"
       >
-        {busy ? "处理中..." : uninitialized ? "设置主密码并初始化" : "即刻解锁"}
+        {busy ? "处理中..." : uninitialized ? "创建保险库" : "解锁"}
       </button>
     </div>
     {error && <div className="text-[11px] text-state-danger">{error}</div>}
@@ -745,7 +737,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     {/* 保险库未解锁 / 未初始化提示卡片 */}
                     {isVaultLocked && password && (
                       <VaultInlineUnlock
-                        reason="加密保存新密码凭据"
                         uninitialized={!!isVaultUninitialized}
                         password={vaultPassword}
                         onPasswordChange={setVaultPassword}
@@ -1115,7 +1106,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           }}
           vaultUnlock={isVaultLocked ? (
             <VaultInlineUnlock
-              reason="导入 SSH 私钥"
               uninitialized={!!isVaultUninitialized}
               password={vaultPassword}
               onPasswordChange={setVaultPassword}

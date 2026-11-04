@@ -53,7 +53,7 @@ export function SshKeyImportModal({ onClose, onSaved, vaultUnlock }: Props) {
     try {
       await checkVaultStatus();
       if (useVaultStore.getState().status?.state !== "unlocked") {
-        setError("请先解锁保险库，再保存私钥。私钥密码与保险库主密码是两个不同的密码。");
+        setError("请先解锁保险库。");
         return;
       }
       const key = await importSshKey(name.trim(), file.pem, passphrase || undefined);
@@ -73,7 +73,6 @@ export function SshKeyImportModal({ onClose, onSaved, vaultUnlock }: Props) {
       open
       onClose={() => { if (!busy) onClose(); }}
       title="导入 SSH 私钥"
-      description="选择文件并填写密码，保存时验证私钥。"
       overlayZClassName="z-[60]"
       footer={<>
         <Button onClick={onClose} disabled={busy}>取消</Button>
@@ -84,14 +83,14 @@ export function SshKeyImportModal({ onClose, onSaved, vaultUnlock }: Props) {
         <Field label="自定义私钥名" htmlFor="ssh-key-name" required>
           <Input id="ssh-key-name" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} placeholder="如：生产服务器" autoFocus />
         </Field>
-        <Field label="导入私钥文件" htmlFor="ssh-key-file" hint="默认打开当前用户的 .ssh 目录。" required>
+        <Field label="导入私钥文件" htmlFor="ssh-key-file" required>
           <div className="flex gap-2">
             <Input id="ssh-key-file" value={file?.file_name ?? ""} readOnly placeholder="尚未选择私钥" className="min-w-0 flex-1" />
             <Button onClick={chooseFile} disabled={busy}>选择文件</Button>
           </div>
         </Field>
-        <Field label="私钥密码 (Passphrase)" htmlFor="ssh-key-password" hint="未加密的私钥可留空；加密私钥需要填写正确密码。">
-          <Input id="ssh-key-password" type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} disabled={busy} autoComplete="off" placeholder="选择私钥文件后填写" />
+        <Field label="私钥密码（可选）" htmlFor="ssh-key-password">
+          <Input id="ssh-key-password" type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} disabled={busy} autoComplete="off" />
         </Field>
         {vaultUnlock}
         {error && <InlineNotice tone="danger" title="私钥尚未保存">{error}</InlineNotice>}
