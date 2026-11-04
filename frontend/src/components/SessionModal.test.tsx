@@ -164,19 +164,16 @@ it("filters the icon grid by keyword and auto-detects a device from session info
   expect(container.querySelector('input[value="os:ubuntu"]')).toBeTruthy();
 });
 
-it("shows and edits the icon from the advanced tab without leaving the tab", async () => {
+it("edits the icon from its own sub-tab in the advanced area", async () => {
   const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
   const container = await render([], {}, session);
   await act(async () => click("高级与跳板机"));
-  const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="修改主机图标"]')!;
-  expect(trigger.querySelector('[data-icon-key="os:macos"]')).not.toBeNull();
-  expect(container.textContent).toContain("已选择macOS，点击可更换");
-  act(() => trigger.click());
-  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(container.textContent).not.toContain("首次连接会显示主机指纹");
+  await act(async () => click("图标"));
+  expect(container.querySelector('[aria-label="当前图标预览"] [data-icon-key="os:macos"]')).not.toBeNull();
   expect(container.querySelector<HTMLInputElement>('input[name="advanced-host-icon"][value="os:macos"]')!.checked).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[name="advanced-host-icon"][value="os:ubuntu"]')!.click());
-  expect(trigger.querySelector('[data-icon-key="os:ubuntu"]')).not.toBeNull();
-  expect(container.textContent).toContain("已选择Ubuntu，点击可更换");
+  expect(container.querySelector('[aria-label="当前图标预览"] [data-icon-key="os:ubuntu"]')).not.toBeNull();
   actions.updateSession.mockResolvedValue({ ...session, icon_key: "os:ubuntu" });
   await act(async () => click("仅保存"));
   expect(actions.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({ icon_key: "os:ubuntu" }));

@@ -109,12 +109,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   } = useVaultStore();
 
   const [activeTab, setActiveTab] = useState<"general" | "advanced">("general");
+  const [advancedTab, setAdvancedTab] = useState<"general" | "jump" | "icon">("general");
 
   const [protocol, setProtocol] = useState<Protocol>("ssh");
   const [name, setName] = useState("");
   const [iconKey, setIconKey] = useState(DEFAULT_HOST_ICON_KEY);
   const [iconHint, setIconHint] = useState<string | null>(null);
-  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [groupId, setGroupId] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
@@ -816,88 +816,110 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           {/* ================= SSH 高级配置 & 跳板机 ================= */}
           {protocol === "ssh" && activeTab === "advanced" && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="min-w-0 truncate text-[11px] text-ink-secondary/80"
-                  title={iconKey === DEFAULT_HOST_ICON_KEY ? "默认图标，点击可更换" : `已选择${hostIconLabel(iconKey)}，点击可更换`}>
-                  {iconKey === DEFAULT_HOST_ICON_KEY ? "默认图标，点击可更换" : `已选择${hostIconLabel(iconKey)}，点击可更换`}
-                </p>
-                <button type="button" onClick={() => setIconPickerOpen((open) => !open)}
-                  aria-expanded={iconPickerOpen} aria-label="修改主机图标" title="点击修改主机图标"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-line/15 bg-surface transition hover:border-accent/40 hover:bg-accent/5 focus-visible:ring-2 focus-visible:ring-accent">
-                  <HostIcon iconKey={iconKey} protocol={protocol} className="h-7 w-7" />
-                </button>
+              <div role="tablist" aria-label="高级设置分类"
+                className="flex w-full overflow-x-auto rounded-lg border border-line/15 bg-line/5 p-0.5 text-xs">
+                {([
+                  ["general", "高级"],
+                  ["jump", "跳板机"],
+                  ["icon", "图标"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={advancedTab === value}
+                    onClick={() => setAdvancedTab(value)}
+                    className={`min-w-[68px] flex-1 whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition ${
+                      advancedTab === value
+                        ? "bg-surface text-accent font-semibold shadow-apple-sm"
+                        : "text-ink-secondary hover:text-ink"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              {iconPickerOpen && (
-                <div className="rounded-xl border border-line/15 bg-surface-muted/40 p-2.5">
-                  <HostIconPicker value={iconKey} onChange={selectIcon} onAutoDetect={applyAutoIcon}
-                    hint={iconHint} radioName="advanced-host-icon" compact />
+
+              {advancedTab === "general" && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                        主机指纹校验
+                      </label>
+                      <select
+                        value={hostKeyPolicy}
+                        onChange={(e) => setHostKeyPolicy(e.target.value as HostKeyPolicy)}
+                        className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                      >
+                        <option value="strict">首次连接时确认主机指纹（推荐）</option>
+                        <option value="accept_new">首次连接自动接受主机指纹</option>
+                        <option value="insecure">不校验主机指纹（仅测试）</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                        保活间隔（秒）
+                      </label>
+                      <input
+                        type="number"
+                        value={keepaliveSec}
+                        onChange={(e) => setKeepaliveSec(Number(e.target.value))}
+                        min={5}
+                        max={600}
+                        className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                      备注说明
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                    />
+                  </div>
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  跳板机（可选）
-                </label>
-                <select
-                  value={jumpHostSessionId}
-                  disabled
-                  onChange={(e) => setJumpHostSessionId(e.target.value)}
-                  className="w-full cursor-not-allowed rounded-xl border border-line/15 bg-line/5 px-3 py-2 text-xs text-ink-secondary focus:outline-none"
-                >
-                  <option value="">不使用跳板机</option>
-                  {candidateJumpHosts.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+              {advancedTab === "jump" && (
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    主机指纹校验
+                    跳板机
                   </label>
                   <select
-                    value={hostKeyPolicy}
-                    onChange={(e) => setHostKeyPolicy(e.target.value as HostKeyPolicy)}
-                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                    value={jumpHostSessionId}
+                    disabled
+                    onChange={(e) => setJumpHostSessionId(e.target.value)}
+                    className="w-full cursor-not-allowed rounded-xl border border-line/15 bg-line/5 px-3 py-2 text-xs text-ink-secondary focus:outline-none"
                   >
-                    <option value="strict">首次连接时确认主机指纹（推荐）</option>
-                    <option value="accept_new">首次连接自动接受主机指纹</option>
-                    <option value="insecure">不校验主机指纹（仅测试）</option>
+                    <option value="">不使用跳板机</option>
+                    {candidateJumpHosts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
+                      </option>
+                    ))}
                   </select>
-                  <p className="mt-1 text-[11px] leading-snug text-ink-secondary/70">
-                    默认：首次连接会显示主机指纹，确认后才建立连接；之后指纹发生变化会阻止连接。仅在明确了解风险时才选择自动接受。
-                  </p>
                 </div>
+              )}
 
-                <div>
-                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    保活间隔（秒）
-                  </label>
-                  <input
-                    type="number"
-                    value={keepaliveSec}
-                    onChange={(e) => setKeepaliveSec(Number(e.target.value))}
-                    min={5}
-                    max={600}
-                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
-                  />
+              {advancedTab === "icon" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 rounded-xl border border-line/15 bg-surface-muted/40 px-3 py-2.5">
+                    <span aria-label="当前图标预览"
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line/15 bg-surface">
+                      <HostIcon iconKey={iconKey} protocol={protocol} className="h-8 w-8" />
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-semibold text-ink">{hostIconLabel(iconKey)}</span>
+                  </div>
+                  <HostIconPicker value={iconKey} onChange={selectIcon} radioName="advanced-host-icon" compact />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  备注说明
-                </label>
-                <textarea
-                  rows={3}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
-                />
-              </div>
+              )}
             </div>
           )}
 
