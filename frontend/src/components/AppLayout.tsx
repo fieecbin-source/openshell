@@ -35,6 +35,7 @@ import { UpdateBadge } from "../updater/UpdateBadge";
 import { UpdateModal } from "../updater/UpdateModal";
 import { RecoveryBanner } from "../updater/RecoveryBanner";
 import { useUpdaterStore } from "../updater/store";
+import { ActivityIcon, ServerIcon, ChevronLeftIcon, ChevronRightIcon, SaveIcon, ArrowUpDownIcon } from "./ui/icons";
 
 export const AppLayout: React.FC = () => {
   const { status, lock } = useVaultStore();
@@ -73,6 +74,7 @@ export const AppLayout: React.FC = () => {
   const setSessionViewMode = useTerminalStore((s) => s.setLayoutMode);
   const [splitRatio, setSplitRatio] = useState<number>(55);
   const [sidebarView, setSidebarView] = useState<"server" | "tree">("server");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // 拖动上下分屏分割条
   const handleSplitMouseDown = (e: React.MouseEvent) => {
@@ -152,6 +154,12 @@ export const AppLayout: React.FC = () => {
   // - sessionTerminalVisible：终端区是否直接可见（SFTP 全屏时为 false，此时不 fit、不轮询串口）
   // - terminalHostHeight：分屏模式下终端只占上半区，尺寸变化由 ResizeObserver 驱动重新 fit
   const terminalIsSsh = !!activeTab && activeTab.protocol !== "serial";
+  useEffect(() => {
+    if (activeTab?.status !== "connected") {
+      setMonitorOpen(false);
+      setContainerWorkspaceOpen(false);
+    }
+  }, [activeTab?.status]);
   // 容器工作区打开时让出整块画布：终端只是不可见（xterm 仍挂载，PTY 不会断）
   const sessionTerminalVisible =
     !isHomeActive &&
@@ -427,29 +435,51 @@ export const AppLayout: React.FC = () => {
             aria-hidden={isHomeActive}
           >
             {!isFullscreen && activeTab && activeTab.protocol === "ssh" && (
-              <div className="shrink-0 flex flex-col h-full border-r border-line/10 bg-surface-muted">
-                <div className="flex items-center p-1 bg-surface-muted/90 border-b border-line/10 text-[11px] font-semibold gap-0.5">
+              <div
+                aria-label="会话侧栏"
+                style={{ width: sidebarCollapsed ? 48 : 256, flex: "0 0 auto" }}
+                className="min-w-0 flex flex-col h-full overflow-hidden border-r border-line/10 bg-surface-muted transition-[width] duration-200 ease-out"
+              >
+                <div className={`flex shrink-0 min-w-0 overflow-hidden items-center p-1 bg-surface-muted/90 border-b border-line/10 text-[11px] font-semibold gap-0.5 ${sidebarCollapsed ? "flex-col" : ""}`}>
                   <button
                     onClick={() => setSidebarView("server")}
-                    className={`flex-1 py-1 rounded-md transition text-center ${
+                    aria-label="资源与容器"
+                    aria-pressed={sidebarView === "server"}
+                    className={`flex min-w-0 items-center justify-center gap-1.5 py-2 rounded-md transition ${sidebarCollapsed ? "w-full" : "flex-1"} ${
                       sidebarView === "server"
                         ? "bg-accent/15 text-accent font-bold"
                         : "text-ink-secondary hover:text-ink"
                     }`}
                     title="查看服务器资源监控、端口与容器"
                   >
-                    📊 资源与容器
+                    <ActivityIcon className="h-4 w-4 shrink-0" />
+                    {!sidebarCollapsed && <span className="truncate">资源与容器</span>}
                   </button>
                   <button
                     onClick={() => setSidebarView("tree")}
-                    className={`flex-1 py-1 rounded-md transition text-center ${
+                    aria-label="主机列表"
+                    aria-pressed={sidebarView === "tree"}
+                    className={`flex min-w-0 items-center justify-center gap-1.5 py-2 rounded-md transition ${sidebarCollapsed ? "w-full" : "flex-1"} ${
                       sidebarView === "tree"
                         ? "bg-accent/15 text-accent font-bold"
                         : "text-ink-secondary hover:text-ink"
                     }`}
                     title="查看主机连接列表与快捷管理"
                   >
-                    💻 主机列表
+                    <ServerIcon className="h-4 w-4 shrink-0" />
+                    {!sidebarCollapsed && <span className="truncate">主机列表</span>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSidebarCollapsed((value) => !value)}
+                    aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
+                    title={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
+                    aria-expanded={!sidebarCollapsed}
+                    className="shrink-0 rounded-md p-2 text-ink-secondary hover:bg-line/10 hover:text-ink"
+                  >
+                    {sidebarCollapsed
+                      ? <ChevronRightIcon className="h-4 w-4" aria-hidden="true" />
+                      : <ChevronLeftIcon className="h-4 w-4" aria-hidden="true" />}
                   </button>
                 </div>
                 <div className="flex-1 overflow-hidden">
@@ -458,6 +488,7 @@ export const AppLayout: React.FC = () => {
                     {sidebarView === "server" ? (
                       <ServerSidebar
                         tab={activeTab}
+                        collapsed={sidebarCollapsed}
                         onOpenMonitor={handleOpenMonitor}
                         onOpenContainer={(containerId) => {
                           setContainerFocusId(containerId);
@@ -465,7 +496,7 @@ export const AppLayout: React.FC = () => {
                         }}
                       />
                     ) : (
-                      <div className="w-64 h-full overflow-y-auto bg-surface-muted">
+                      <div hidden={sidebarCollapsed} className="h-full min-w-0 overflow-y-auto bg-surface-muted">
                         <SessionTree
                           onNewSession={(gId) => handleNewSession(gId)}
                           onEditSession={handleEditSession}
@@ -576,15 +607,12 @@ export const AppLayout: React.FC = () => {
                 {/* 快捷保存/编辑活动会话动作 */}
                 <button
                   onClick={handleSaveActiveTabAsSession}
-                  className="text-[11px] text-accent hover:underline px-1 py-0.5 rounded transition font-medium"
+                  className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline px-1 py-0.5 rounded transition font-medium"
                   title="保存或编辑该活动会话属性"
                 >
-                  💾 保存会话
+                  <SaveIcon className="h-3 w-3" />保存会话
                 </button>
 
-                {activeTab.protocol === "ssh" && (
-                  <span className="text-ink-tertiary font-mono">延迟: ~18ms</span>
-                )}
               </>
             )}
           </div>
@@ -596,7 +624,7 @@ export const AppLayout: React.FC = () => {
                 className="flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-surface border border-line/15 text-ink-secondary hover:bg-surface-muted shadow-apple-sm transition"
                 title="点击打开/关闭传输抽屉"
               >
-                <span className="text-accent font-bold">⚡</span>
+                <ArrowUpDownIcon className="h-3 w-3 text-accent" />
                 <span>
                   传输: {transfers.filter((t) => t.state === "transferring" || t.state === "queued").length} 活动 / {transfers.length} 项
                 </span>

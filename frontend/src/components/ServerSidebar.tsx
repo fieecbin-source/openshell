@@ -3,9 +3,12 @@ import type { TerminalTab } from "../stores/terminalStore";
 import { useMonitorStore } from "../stores/monitorStore";
 import { sshExec } from "../lib/ipc";
 import { useContainerStore } from "../stores/containerStore";
+import { NetworkTraffic } from "./NetworkTraffic";
+import { ActivityIcon, BoxIcon, CpuIcon, MemoryIcon, HardDriveIcon, WifiOffIcon } from "./ui/icons";
 
 interface ServerSidebarProps {
   tab: TerminalTab;
+  collapsed: boolean;
   /** 打开大屏监控面板（概览页入口，替代原顶栏的「服务器监控」按钮） */
   onOpenMonitor?: () => void;
   /** 进入画布级容器工作区（点击容器后终端让位给容器界面），可带上要聚焦的容器 id */
@@ -22,8 +25,17 @@ const num = (value: unknown, fallback = 0): number =>
 
 const fixed = (value: unknown, digits = 1): string => num(value).toFixed(digits);
 
-export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor, onOpenContainer }) => {
+/** 折叠胶囊只放得下简短速率：B/s 与 K/M 单位，避免撑破 48px 侧栏 */
+const rateLabel = (value: unknown): string => {
+  const bytes = Math.max(0, num(value));
+  if (bytes < 1024) return `${bytes.toFixed(0)}B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(0)}K`;
+  return `${(bytes / 1024 ** 2).toFixed(1)}M`;
+};
+
+export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, collapsed, onOpenMonitor, onOpenContainer }) => {
   const { connId, sessionId } = { connId: tab.connectionId, sessionId: tab.sessionId };
+  const connected = tab.status === "connected" && !!connId;
   const {
     latest,
     start,
@@ -35,12 +47,11 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
   /** 采样任务可能因断线/异常被停掉，切到进程页时自愈重启 */
   const ensureMonitoring = () => {
     const st = useMonitorStore.getState();
-    if (!st.isMonitoring && sessionId && connId) void st.start(sessionId, connId);
+    if (!st.isMonitoring && st.activeConnId !== connId && connected && sessionId && connId) void st.start(sessionId, connId);
   };
 
   // 第 2 个标签展示的是监听端口而不是网络流量，直接叫「端口」，避免误导
   const [activeTab, setActiveTab] = useState<"overview" | "ports" | "processes" | "containers">("overview");
-  const [collapsed, setCollapsed] = useState(false);
 
   // 容器数据与画布级容器工作区共用同一个 store，避免两处各自探测
   const containers = useContainerStore((s) => s.containers);
@@ -61,25 +72,26 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
 
   // 周期轮询监控与后台采集
   useEffect(() => {
-    if (!sessionId || !connId) return;
+    if (!connected || !sessionId || !connId) return;
 
     start(sessionId, connId);
 
     return () => {
-      stop();
+      void stop(sessionId, connId);
     };
-  }, [sessionId, connId]);
+  }, [sessionId, connId, connected, start, stop]);
 
   /** connId 可能为 null（未连接），统一收口 */
   const probeDocker = () => {
-    if (connId) void probeContainers(connId);
+    if (connected && connId) void probeContainers(connId);
   };
 
   // 探测 Docker / Podman（结果进 store，画布级容器工作区复用同一份）
   useEffect(() => {
-    probeDocker();
+    if (connected) probeDocker();
+    else useContainerStore.getState().reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connId, probeContainers]);
+  }, [connId, connected, probeContainers]);
 
   const loadListeningPorts = async () => {
     if (!connId) return;
@@ -112,7 +124,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
     }
   };
 
-  const metrics = latest;
+  const metrics = connected && latest?.session_id === sessionId ? latest : null;
   const hasProcesses = (metrics?.top_processes?.length ?? 0) > 0;
 
   /**
@@ -122,7 +134,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
    * 这里在进程页停留期间自动重试，用户不需要手动点「重新采集」。
    */
   useEffect(() => {
-    if (activeTab !== "processes" || !connId) return;
+    if (activeTab !== "processes" || !connected || !connId) return;
     ensureMonitoring();
     void poll();
     if (hasProcesses) return;
@@ -138,7 +150,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
       window.clearTimeout(stopAt);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, connId, sessionId, hasProcesses]);
+  }, [activeTab, connId, sessionId, connected, hasProcesses]);
 
   const formatBytes = (raw: number) => {
     const bytes = num(raw);
@@ -147,13 +159,6 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
     const sizes = ["B", "KB", "MB", "GB", "TB"];
     const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-  };
-
-  const formatSpeed = (raw: number) => {
-    const bytesPerSec = num(raw);
-    if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
-    if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-    return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
   };
 
   const formatUptime = (sec: number) => {
@@ -171,28 +176,21 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
   const memUsed = num(metrics?.memory_used_bytes);
   const memPct = Math.min(100, Math.round((memUsed / memTotal) * 100));
 
+  if (!connected || !metrics) {
+    return <aside className="flex h-full min-w-0 flex-col items-center justify-center gap-3 bg-surface-muted p-3 text-center text-ink-tertiary">
+      {connected ? <ActivityIcon className="h-5 w-5 shrink-0" /> : <WifiOffIcon className="h-5 w-5 shrink-0" />}
+      {!collapsed && <><p className="text-os-xs font-medium text-ink-secondary">{connected ? "正在采集资源" : tab.status === "connecting" ? "正在连接主机" : "主机未连接"}</p><p className="text-os-2xs leading-relaxed">{connected ? "等待首个采样结果" : "在终端按回车重新连接"}</p></>}
+    </aside>;
+  }
+
   // 折叠状态显示胶囊小侧边
   if (collapsed) {
     return (
-      <aside className="w-11 shrink-0 bg-surface-muted border-r border-line/15 flex flex-col items-center py-3 select-none transition-all duration-200">
-        <button
-          onClick={() => setCollapsed(false)}
-          className="p-1 rounded-lg text-ink-secondary hover:text-ink hover:bg-line/10 transition mb-4"
-          title="展开服务器状态侧边栏"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-          </svg>
-        </button>
-
+      <aside className="w-full min-w-0 bg-surface-muted flex flex-col items-center py-3 select-none">
         {/* 极简指示器胶囊 */}
         <div className="flex flex-col gap-4 text-center">
           <div
-            className="flex flex-col items-center cursor-pointer group"
-            onClick={() => {
-              setCollapsed(false);
-              setActiveTab("overview");
-            }}
+            className="flex flex-col items-center"
             title={`CPU 使用率: ${cpuPct}%`}
           >
             <span className="text-[10px] text-ink-secondary font-bold mb-1">CPU</span>
@@ -208,11 +206,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
           </div>
 
           <div
-            className="flex flex-col items-center cursor-pointer group"
-            onClick={() => {
-              setCollapsed(false);
-              setActiveTab("overview");
-            }}
+            className="flex flex-col items-center"
             title={`内存占用: ${memPct}%`}
           >
             <span className="text-[10px] text-ink-secondary font-bold mb-1">MEM</span>
@@ -227,16 +221,21 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             <span className="text-[9px] font-mono text-ink-secondary mt-1">{memPct}%</span>
           </div>
 
+          <div className="flex flex-col items-center" title={`上行 ${rateLabel(metrics?.net_tx_bps)}/s · 下行 ${rateLabel(metrics?.net_rx_bps)}/s`}>
+            <span className="mb-1 text-[10px] text-ink-secondary font-bold">NET</span>
+            <span className="font-mono text-[9px] leading-tight text-accent">↑{rateLabel(metrics?.net_tx_bps)}</span>
+            <span className="font-mono text-[9px] leading-tight text-state-success">↓{rateLabel(metrics?.net_rx_bps)}</span>
+          </div>
+
           {hasDocker && (
             <button
               onClick={() => {
-                setCollapsed(false);
-                setActiveTab("containers");
+                onOpenContainer?.();
               }}
               className="p-1 rounded-lg text-ink-secondary hover:text-accent hover:bg-line/10 transition mt-2"
               title="容器管理"
             >
-              🐳
+              <BoxIcon className="h-4 w-4" />
             </button>
           )}
         </div>
@@ -245,7 +244,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
   }
 
   return (
-    <aside className="w-64 shrink-0 bg-surface/70 backdrop-blur-xl border-r border-line/10 flex flex-col select-none overflow-hidden h-full text-ink">
+    <aside className="w-full min-w-0 bg-surface/70 backdrop-blur-xl flex flex-col select-none overflow-hidden h-full text-ink">
       {/* 顶部服务器概览头 */}
       <div className="p-3 border-b border-line/10 bg-surface/80 backdrop-blur-md">
         <div className="flex items-center justify-between mb-1.5">
@@ -272,15 +271,6 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
                 </svg>
               </button>
             )}
-            <button
-              onClick={() => setCollapsed(true)}
-              className="p-1 rounded-lg text-ink-secondary hover:text-ink hover:bg-line/10 transition"
-              title="收起为迷你胶囊"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-              </svg>
-            </button>
           </div>
         </div>
 
@@ -361,7 +351,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-ink font-semibold flex items-center gap-1.5">
-                  <span className="text-accent">⚡</span>
+                  <CpuIcon className="h-4 w-4 text-accent" />
                   <span>CPU 占用</span>
                 </span>
                 <span className="font-mono font-bold text-ink">{cpuPct}%</span>
@@ -385,7 +375,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-ink font-semibold flex items-center gap-1.5">
-                  <span className="text-state-success">🧠</span>
+                  <MemoryIcon className="h-4 w-4 text-ink-secondary" />
                   <span>内存占用</span>
                 </span>
                 <span className="font-mono font-bold text-ink">{memPct}%</span>
@@ -405,40 +395,13 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
             </div>
 
             {/* 实时网络流量 */}
-            <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-ink font-semibold flex items-center gap-1.5">
-                  <span className="text-accent">🌐</span>
-                  <span>网络传输速率</span>
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-center">
-                <div className="bg-surface/50 p-1.5 rounded-lg border border-line/10">
-                  <span className="text-[10px] text-ink-secondary block">↑ 上行 (Tx)</span>
-                  <span className="text-xs font-mono font-bold text-accent block mt-0.5">
-                    {formatSpeed(metrics?.net_tx_bps || 0)}
-                  </span>
-                  <span className="text-[9px] font-mono text-ink-secondary block mt-0.5">
-                    累计: {formatBytes(metrics?.net_tx_total || 0)}
-                  </span>
-                </div>
-                <div className="bg-surface/50 p-1.5 rounded-lg border border-line/10">
-                  <span className="text-[10px] text-ink-secondary block">↓ 下行 (Rx)</span>
-                  <span className="text-xs font-mono font-bold text-state-success block mt-0.5">
-                    {formatSpeed(metrics?.net_rx_bps || 0)}
-                  </span>
-                  <span className="text-[9px] font-mono text-ink-secondary block mt-0.5">
-                    累计: {formatBytes(metrics?.net_rx_total || 0)}
-                  </span>
-                </div>
-              </div>
-            </div>
+            <NetworkTraffic metrics={metrics} />
 
             {/* 磁盘空间 */}
             {metrics?.disk_mounts && metrics.disk_mounts.length > 0 && (
               <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-2">
                 <span className="text-ink font-semibold flex items-center gap-1.5">
-                  <span className="text-state-warning">💾</span>
+                  <HardDriveIcon className="h-4 w-4 text-ink-secondary" />
                   <span>磁盘空间</span>
                 </span>
                 <div className="space-y-2">
@@ -579,7 +542,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, onOpenMonitor
           <div className="space-y-2.5 text-xs">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-semibold text-ink-secondary flex items-center gap-1">
-                <span>🐳 Docker / Podman 容器</span>
+                <span className="inline-flex items-center gap-1.5"><BoxIcon className="h-4 w-4" />Docker / Podman 容器</span>
                 {containerRuntime && (
                   <span className="font-mono text-[9px] font-normal text-ink-secondary">
                     {containerRuntime.split("/").pop()}

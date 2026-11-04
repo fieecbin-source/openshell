@@ -44,9 +44,9 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
   useEffect(() => {
     start(sessionId, connId);
     return () => {
-      stop();
+      void stop(sessionId, connId);
     };
-  }, [sessionId, connId]);
+  }, [sessionId, connId, start, stop]);
 
   // Esc 返回终端：全屏面板没有任何「外面的东西」可点，必须给键盘出口。
   useEffect(() => {
