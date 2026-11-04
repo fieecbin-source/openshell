@@ -59,14 +59,17 @@ OpenShell-<version>-<platform>-<arch>.<ext>
 
 ## 3. 下载与校验
 
+0. **先验签**：下载前用内置 Ed25519 公钥验证 `update-meta.json` 的分离签名
+   （`update-meta.json.sig`）。缺签名、key 未知、key 已吊销或内容被篡改，一律报
+   `UPDATE_SIGNATURE`，不下载任何字节，也不存在「跳过签名」的降级开关。
 1. 磁盘预检：剩余空间 ≥ 待下载体积 × 1.2 + 64 MB，否则报 `UPDATE_INSUFFICIENT_DISK`。
 2. 写入 `<数据目录>/updater/downloads/<name>.part`；已有 `.part` 时发 `Range: bytes=<n>-` 续传，
    服务端忽略 Range（返回 200）则清空重下。
 3. 进度通过 Tauri `Channel<DownloadProgress>` 推送：已下载 / 总量 / 百分比 / 速度 / 阶段。
 4. 取消：置位令牌，删除 `.part`，状态回到「发现新版本」。
-5. 下载完成 → phase 变为 `verifying` → 流式计算 sha256 与清单比对。
+5. 下载完成 → phase 变为 `verifying` → 流式计算 sha256，与**已验签清单**里的值比对。
    - 不匹配：删除文件并报 `UPDATE_CHECKSUM_MISMATCH`（下次不会续传到坏文件上）。
-6. 安装前再校验一次（防止文件在磁盘上被替换或截断）。
+6. 安装前再验签 + 校验一次（防止文件或 IPC 元数据在磁盘上被替换或截断）。
 
 > 只接受 HTTPS，且 host 必须命中白名单（`api.github.com`、`github.com`、
 > `objects.githubusercontent.com`、`release-assets.githubusercontent.com`、
@@ -145,7 +148,14 @@ ready → (安装器启动失败) install_failed → 重试 / 手动下载
 
 ## 7. Release 资产约定
 
-每个 Release 附带三份元数据（全部为可选，但缺 `sha256` 时禁止自动安装）：
+每个 Release 附带四份元数据。**`update-meta.json` 必须带有效签名，否则客户端只允许手动下载**：
+
+| 资产 | 作用 | 缺失时的行为 |
+| --- | --- | --- |
+| `SHA256SUMS.txt` | 兼容旧工具/人工核对 | 仍可用，但自动更新以已签名清单为准 |
+| `update-meta.json` | 强更策略 + 各资产 sha256 + `key_id` | 无法判断策略，资产不自动安装 |
+| `update-meta.json.sig` | 对上一份文件的 Ed25519 分离签名 | **拒绝自动安装**（`UPDATE_SIGNATURE`） |
+| `latest.json` | jsDelivr 备用源；内嵌 `manifest` / `signature` 原文 | 备用源资产不自动安装 |
 
 ### `SHA256SUMS.txt`
 
@@ -158,6 +168,7 @@ ready → (安装器启动失败) install_failed → 重试 / 手动下载
 
 ```json
 {
+  "key_id": "openshell-updater-2026a",
   "mandatory": false,
   "min_supported_version": "1.0.0",
   "notes": "覆盖 Release 正文的精简说明（可选）",
@@ -165,9 +176,32 @@ ready → (安装器启动失败) install_failed → 重试 / 手动下载
 }
 ```
 
-当 `mandatory = true`，或当前版本低于 `min_supported_version`，客户端进入强制更新模式。
+`key_id` 由签名工具写入；客户端在 `backend/crates/updater/keys/*.pub` 的信任列表里查找，
+找不到即拒绝。当 `mandatory = true`，或当前版本低于 `min_supported_version`，客户端进入强制更新模式。
+
+### `update-meta.json.sig`
+
+```json
+{
+  "version": 1,
+  "file": "update-meta.json",
+  "signatures": [
+    {
+      "key_id": "openshell-updater-2026a",
+      "alg": "ed25519",
+      "signature": "<base64url 的 64 字节签名>"
+    }
+  ]
+}
+```
+
+签名对象是 `update-meta.json` 的**原始字节**（不重新序列化）。轮换期可并列多个
+`signatures` 条目（旧 key + 新 key），客户端只要有一条能用「当前 / 下一把」公钥验证通过即可。
+签名文件缺失按「缺签名」处理，不会回退到 `SHA256SUMS.txt`。
 
 ### `latest.json`（备用检测源）
+
+在原有字段之外，发布侧用签名工具写入两个字符串字段：
 
 ```json
 {
@@ -178,6 +212,8 @@ ready → (安装器启动失败) install_failed → 重试 / 手动下载
   "mandatory": false,
   "min_supported_version": "1.0.0",
   "release_page": "https://github.com/fieecbin-source/openshell/releases",
+  "manifest": "<update-meta.json 原文>",
+  "signature": "<update-meta.json.sig 原文>",
   "assets": [
     {
       "name": "OpenShell-1.1.0-windows-x86_64.exe",
@@ -199,12 +235,13 @@ ready → (安装器启动失败) install_failed → 重试 / 手动下载
 
 ## 8. 完整性保障与已知限制
 
-**能防住**：传输损坏、镜像投毒（哈希不符）、中途被替换的本地文件（安装前二次校验）、
-明文 HTTP 劫持（只允许 HTTPS + 域名白名单）。
+**能防住**：传输损坏、镜像投毒（哈希不符）、中途被替换的本地文件（安装前再次验签 + 二次校验）、
+明文 HTTP 劫持（只允许 HTTPS + 域名白名单）、**发布仓库/账号被入侵后替换安装包与清单**
+（签名私钥离线保存，攻击者拿不到签名就无法生成可安装的更新）。
 
-**防不住**：仓库或发布账号被入侵 —— `SHA256SUMS.txt` 与安装包托管在同一位置，
-攻击者可以同时替换两者。要彻底解决需要引入独立渠道的签名（minisign / 平台代码签名），
-`verify::SignatureVerifier` 已预留实现位，当前 `is_enabled() == false`。
+**防不住**：签名私钥本身泄露、客户端二进制被本地替换、用户手动下载并绕过校验。
+私钥泄露必须走「吊销 + 换钥」流程（见 [RELEASING.md](./RELEASING.md#更新签名密钥生命周期)），
+并在下一次发布中用未吊销的 key 双签，避免旧客户端被锁死。
 
 **系统层面提示**：
 

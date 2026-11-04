@@ -14,6 +14,93 @@
 | `CHANGELOG.md` | 必须能查到当前版本的 `## [x.y.z]` 小节 |
 | 仓库 slug | 默认 `fieecbin-source/openshell`，用户可在设置中覆盖 |
 | `updater-meta` 分支 | 由流水线自动创建并维护，用于 jsDelivr 备用源 |
+| 更新签名密钥 | 至少一把 `active` + 一把 `next`；私钥离线保存，仓库只提交 `backend/crates/updater/keys/*.pub` |
+
+---
+
+## 0.1 更新签名密钥生命周期
+
+更新清单使用 Ed25519 分离签名，客户端内置公钥、先验签再校验 sha256（fail-closed）。
+仓库里**只允许**出现公钥与文档；私钥不得进入仓库、CI 变量、构建日志或聊天记录。
+
+### 生成（一次性，离线机器）
+
+```bash
+node scripts/updater-sign.mjs keygen --id openshell-updater-2026a --out D:\openshell-keys
+node scripts/updater-sign.mjs keygen --id openshell-updater-2027a --out D:\openshell-keys
+```
+
+- `<id>.key` 是私钥，必须放在加密磁盘/硬件令牌等离线位置，权限 0600；
+- `<id>.pub` 是公钥，复制到 `backend/crates/updater/keys/` 并提交；
+- 构建时 `backend/crates/updater/build.rs` 会把该目录下所有 `.pub` 编进客户端；
+- **目录为空时客户端拒绝所有自动安装**（报「签名未配置」），这是预期的 fail-closed。
+
+提交的公钥示例：
+
+```
+key_id = openshell-updater-2026a
+status = active
+created = 2026-11-04
+public_key = <base64url 32 字节>
+```
+
+`status` 语义：`active` 当前密钥、`next` 下一把（提前内置，接受签名）、`revoked` 已吊销（永久拒绝）。
+
+### 每次发版
+
+打包产出 `artifacts/update-meta.json` / `latest.json` 后，在**离线签名机**执行：
+
+```bash
+node scripts/updater-sign.mjs sign \
+  --key D:\openshell-keys\openshell-updater-2026a.key \
+  --meta artifacts\update-meta.json \
+  --out artifacts\update-meta.json.sig \
+  --latest artifacts\latest.json
+node scripts/updater-sign.mjs verify \
+  --meta artifacts\update-meta.json \
+  --sig artifacts\update-meta.json.sig
+```
+
+签名工具会把 `key_id` 写进 `update-meta.json`、把清单与签名原文内嵌进 `latest.json`，
+然后对**写入后的原始字节**签名。上传时连同 `.sig` 一起传：
+
+```bash
+gh release upload v1.1.5 artifacts/update-meta.json.sig --clobber
+```
+
+CI 不持有私钥；签名在离线机完成后上传到 Release（草稿阶段）。若未来要流水线自动签名，
+应使用独立的签名服务/HSM，且不得把私钥放进仓库 Secret 或构建日志。
+
+### 轮换（计划内）
+
+1. **提前内置**：把一个 `status=next` 的新公钥随常规版本发布，至少覆盖两个版本；
+2. **双签过渡**：发版时同时用旧 key 与新 key 签名
+   `--key old.key --also-key new.key`，客户端只要任一受信签名通过即接受；
+3. **切换**：把新公钥改为 `active`、旧公钥改为 `revoked` 发布客户端；
+   旧客户端仍能用旧 key 验证（只是继续接受旧 key），不会因换钥锁死；
+4. **清理**：确认活跃版本都升级后，可在后续版本删除旧公钥文件。
+
+### 吊销（私钥泄露/丢失）
+
+1. 立即停止用泄露 key 签名；
+2. 用**未泄露**的 `next`/备用 key 双签一次发布（签名文件里保留旧 key 条目仅作过渡，
+   新客户端会因旧 key 为 `revoked` 而只认新 key）；
+3. 在新客户端里把泄露 key 标为 `revoked` 并发布；此后旧 key 的签名一律拒绝；
+4. 若所有离线 key 同时丢失且没有可用签名通道，自动更新不可恢复，只能公告并让用户手动下载；
+   **不要**为了「先恢复更新」而临时跳过验签。
+
+> 旧客户端无法远程获知吊销（它只内置旧公钥）。风险窗口由「吊销后第一版客户端」的覆盖率决定；
+> 若泄露影响面大，可在 `update-meta.json` 设置 `mandatory=true` / 提高 `min_supported_version`
+> 强制升级到带吊销列表的版本——这是运维决策，不是客户端静默行为。
+
+### 存量兼容与迁移
+
+- 已安装的旧版本不验签，会像以前一样接受第一个**已签名**版本；旧版本无需强制升级即可进入签名体系。
+- 新版本遇到未签名/签名无效的发布时：仍显示版本与说明，但禁用「立即更新」，
+  提示「该版本缺少有效签名或 sha256，已禁用自动安装，请前往发布页手动下载」；
+  不存在静默降级到「只校验 sha256」的路径。
+- 迁移窗口建议：从第一个带签名的版本起，连续 2 个版本保留 `min_supported_version` 不抬高；
+  确认覆盖率后再用 `mandatory`/`min_supported_version` 推动强制升级。
 
 ---
 
@@ -65,7 +152,8 @@ pnpm package:release --bundles nsis  # 指定格式
 便携标记和许可文件生成，不能压缩本机安装目录，也不能上传整个 `target/`：
 
 ```bash
-gh release create v1.1.5 artifacts/OpenShell-* artifacts/SHA256SUMS.txt artifacts/update-meta.json artifacts/latest.json --draft --notes-file artifacts/release-notes.md
+# 先离线签名（见 0.1），再上传
+gh release create v1.1.5 artifacts/OpenShell-* artifacts/SHA256SUMS.txt artifacts/update-meta.json artifacts/update-meta.json.sig artifacts/latest.json --draft --notes-file artifacts/release-notes.md
 ```
 
 > 用户数据只存在于 `<app_data_dir>`（Windows 为 `%APPDATA%\\dev.openshell.desktop`），
