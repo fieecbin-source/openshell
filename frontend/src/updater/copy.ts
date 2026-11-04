@@ -35,6 +35,8 @@ export const UPDATE_COPY = {
     mandatoryBody: "升级前会自动备份您的连接数据，安装完成后重新打开即可继续使用。",
     releaseNotesFallback: "本次发布没有提供更新说明。",
     manualDownloadHint: "该版本没有提供可自动安装的安装包，请前往版本发布页手动下载。",
+    unsignedDownloadHint:
+      "该版本缺少有效的签名或 sha256，已禁用自动安装。请前往版本发布页手动下载，并先核对官方公布的签名与哈希。",
     unsupportedPlatformHint: "尚未发布适配当前系统的安装包。",
     skippedHint: "你已跳过此版本，手动检查才会再次提示。",
   },

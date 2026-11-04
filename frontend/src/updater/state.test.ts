@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   currentResult,
+  isAssetAutoInstallable,
   isBusy,
   isMandatory,
   progressPercent,
@@ -35,6 +36,25 @@ function result(overrides: Partial<UpdateCheckResult> = {}): UpdateCheckResult {
     ...overrides,
   };
 }
+
+describe("isAssetAutoInstallable", () => {
+  it("requires sha256, manifest and signature together", () => {
+    expect(isAssetAutoInstallable(undefined)).toBe(false);
+    expect(isAssetAutoInstallable({ ...result().asset!, manifest: undefined, signature: undefined })).toBe(
+      false,
+    );
+    expect(
+      isAssetAutoInstallable({ ...result().asset!, manifest: "{}", signature: "" }),
+    ).toBe(false);
+    expect(
+      isAssetAutoInstallable({
+        ...result().asset!,
+        manifest: '{"key_id":"k"}',
+        signature: '{"version":1}',
+      }),
+    ).toBe(true);
+  });
+});
 
 const progress = (overrides: Partial<DownloadProgress> = {}): DownloadProgress => ({
   received: 512,

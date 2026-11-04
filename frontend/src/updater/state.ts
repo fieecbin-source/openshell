@@ -13,7 +13,7 @@
  * * 已经拿到可用新版本时，后台自动检查失败**不会**把界面打回错误态；
  * * 每个状态都自带它需要的上下文（版本信息 / 进度 / 错误），UI 里不需要再猜。
  */
-import type { DownloadProgress, UpdateCheckResult } from "./types";
+import type { DownloadProgress, UpdateAsset, UpdateCheckResult } from "./types";
 
 export interface ReadyInfo {
   result: UpdateCheckResult;
@@ -143,6 +143,20 @@ export function currentResult(state: UpdateState): UpdateCheckResult | null {
 
 function assetSize(result: UpdateCheckResult): number | undefined {
   return result.asset && result.asset.size > 0 ? result.asset.size : undefined;
+}
+
+/**
+ * 只有「已验签清单 + 分离签名 + sha256」齐全时才允许自动安装。
+ * 后端会对同一组字段复核，这里只负责不把「自动更新」按钮点进必然失败的路径。
+ */
+export function isAssetAutoInstallable(asset?: UpdateAsset): boolean {
+  return Boolean(
+    asset &&
+      asset.sha256 &&
+      asset.sha256.length === 64 &&
+      asset.manifest &&
+      asset.signature,
+  );
 }
 
 /** 顶栏是否应该显示红点（有新版本可提示）。 */

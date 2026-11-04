@@ -203,11 +203,31 @@ pub async fn updater_download(
     asset: UpdateAsset,
     on_progress: tauri::ipc::Channel<DownloadProgress>,
 ) -> Result<DownloadOutcome, IpcError> {
-    // 没有哈希就不允许自动下载：装了来路不明的包比不更新更危险
-    let Some(sha256) = asset.sha256.clone().filter(|value| value.len() == 64) else {
+    // 没有「已签名清单 + 哈希」就不允许自动下载：装了来路不明的包比不更新更危险
+    if !asset.is_auto_installable() {
+        let kind = if asset.signature.is_none() || asset.manifest.is_none() {
+            openshell_updater::UpdaterErrorKind::SignatureMissing
+        } else {
+            openshell_updater::UpdaterErrorKind::ChecksumMissing
+        };
         return Err(UpdaterError::new(
-            openshell_updater::UpdaterErrorKind::NotConfigured,
+            kind,
+            "release is not signed with a trusted key; automatic installation is disabled, please download manually",
+        )
+        .into());
+    }
+    let Some(sha256) = asset.sha256.clone() else {
+        return Err(UpdaterError::new(
+            openshell_updater::UpdaterErrorKind::ChecksumMissing,
             "release does not publish a sha256 checksum; please download manually",
+        )
+        .into());
+    };
+    let (Some(manifest), Some(signature)) = (asset.manifest.clone(), asset.signature.clone())
+    else {
+        return Err(UpdaterError::new(
+            openshell_updater::UpdaterErrorKind::SignatureMissing,
+            "release manifest is not signed; automatic installation is disabled",
         )
         .into());
     };
@@ -219,20 +239,27 @@ pub async fn updater_download(
     let flight = updater.downloads.start();
 
     let channel = on_progress;
-    let downloader = Downloader::new(fetcher, Arc::new(FsSpaceProbe), Arc::new(Sha256Verifier))
-        .with_progress(Arc::new(move |progress: DownloadProgress| {
-            if let Err(err) = channel.send(progress) {
-                tracing::debug!(error = %err, "download progress channel closed");
-            }
-        }))
-        // 取消令牌由门闩统一持有，`updater_cancel_download` 才能真的叫停流式写入
-        .with_cancel(flight.clone());
+    let downloader = Downloader::new(
+        fetcher,
+        Arc::new(FsSpaceProbe),
+        Arc::new(Sha256Verifier),
+        Arc::new(openshell_updater::SignatureVerifier::builtin()),
+    )
+    .with_progress(Arc::new(move |progress: DownloadProgress| {
+        if let Err(err) = channel.send(progress) {
+            tracing::debug!(error = %err, "download progress channel closed");
+        }
+    }))
+    // 取消令牌由门闩统一持有，`updater_cancel_download` 才能真的叫停流式写入
+    .with_cancel(flight.clone());
 
     let request = DownloadRequest {
         url: config.download_url(&asset.url),
         file_name: asset.name.clone(),
         expected_size: asset.size,
         sha256,
+        manifest,
+        signature,
         dest_dir: updater.download_dir(),
     };
 

@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { UPDATE_COPY, formatBytes, formatMoment } from "./copy";
-import { currentResult, isBusy } from "./state";
+import { currentResult, isAssetAutoInstallable, isBusy } from "./state";
 import { useUpdaterStore } from "./store";
 import { UpdatePhaseView } from "./UpdatePhaseView";
 
@@ -81,7 +81,7 @@ export const UpdateModal: React.FC = () => {
                 </button>
               </>
             )}
-            {result?.asset ? (
+            {result?.asset && isAssetAutoInstallable(result.asset) ? (
               <button className={PRIMARY} onClick={() => void download()}>
                 {UPDATE_COPY.actions.updateNow}
               </button>

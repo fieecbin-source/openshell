@@ -45,6 +45,10 @@ export interface UpdateAsset {
   url: string;
   size: number;
   sha256?: string;
+  /** 已验签清单的原始文本（与 signature 一起用于安装前复核）。 */
+  manifest?: string;
+  /** 清单的 Ed25519 分离签名。 */
+  signature?: string;
 }
 
 export interface UpdateCheckResult {

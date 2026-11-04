@@ -1,6 +1,6 @@
 import React from "react";
 import { UPDATE_COPY, describeUpdateError, formatBytes, formatMoment, formatRemaining, formatSpeed } from "./copy";
-import { currentResult, progressPercent, type UpdateState } from "./state";
+import { currentResult, isAssetAutoInstallable, progressPercent, type UpdateState } from "./state";
 import { UpdateNotes } from "./UpdateNotes";
 import { useUpdaterStore } from "./store";
 
@@ -105,10 +105,16 @@ export const UpdatePhaseView: React.FC<UpdatePhaseViewProps> = ({ state }) => {
         <div className="space-y-2.5">
           {state.result.mandatory && <MandatoryBanner />}
           <UpdateNotes html={state.result.notes_html} fallback={UPDATE_COPY.modal.releaseNotesFallback} />
-          {!state.result.asset && (
+          {!state.result.asset ? (
             <p className="rounded-lg bg-[#ff9f0a]/[0.08] px-3 py-2 text-[11px] leading-relaxed text-[#8a5a00]">
               {UPDATE_COPY.modal.manualDownloadHint}
             </p>
+          ) : (
+            !isAssetAutoInstallable(state.result.asset) && (
+              <p className="rounded-lg bg-[#ff9f0a]/[0.08] px-3 py-2 text-[11px] leading-relaxed text-[#8a5a00]">
+                {UPDATE_COPY.modal.unsignedDownloadHint}
+              </p>
+            )
           )}
         </div>
       );
