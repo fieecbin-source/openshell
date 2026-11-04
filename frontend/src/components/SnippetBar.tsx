@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useSnippetStore } from "../stores/snippetStore";
+import { useTerminalStore } from "../stores/terminalStore";
 import type { SendMode, Snippet } from "../types/ipc";
 import { writeTerminal } from "../lib/ipc";
+import { SAVE_SNIPPET_EVENT } from "../lib/terminal-actions";
+import { toast } from "../stores/toastStore";
 import { Button, IconButton } from "./ui/Button";
 import { Field, Input, Textarea } from "./ui/Field";
 import { Segmented } from "./ui/Controls";
@@ -18,6 +21,7 @@ interface SnippetBarProps {
 }
 
 export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
+  const connected = useTerminalStore((state) => state.tabs.some((tab) => tab.tabId === activeTabId && tab.status === "connected"));
   const { snippets, loadSnippets, createSnippet, deleteSnippet } = useSnippetStore();
   const [paramModal, setParamModal] = useState<{
     snippet: Snippet;
@@ -31,6 +35,19 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
 
   useEffect(() => {
     loadSnippets();
+  }, [loadSnippets]);
+
+  useEffect(() => {
+    const saveSelection = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      if (!command?.trim()) return;
+      setNewName("");
+      setNewCmd(command);
+      setNewSendMode("insert");
+      setCreateModal(true);
+    };
+    window.addEventListener(SAVE_SNIPPET_EVENT, saveSelection);
+    return () => window.removeEventListener(SAVE_SNIPPET_EVENT, saveSelection);
   }, []);
 
   // 解析命令模板中的占位符，例如 ${PORT:-8080} 或 ${HOST}
@@ -66,7 +83,9 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
     if (!activeTabId) return;
     const finalCmd = mode === "execute" ? `${cmd}\n` : cmd;
     const bytes = new TextEncoder().encode(finalCmd);
-    writeTerminal(activeTabId, bytes).catch(console.warn);
+    writeTerminal(activeTabId, bytes)
+      .then(() => toast.success(mode === "execute" ? "命令已发送并执行" : "命令已插入，按回车执行"))
+      .catch(() => toast.error("发送失败，请确认终端仍处于连接状态"));
   };
 
   const handleApplyParams = () => {
@@ -107,20 +126,22 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
           snippets.map((snip) => (
             <div
               key={snip.id}
-              className="group flex shrink-0 items-center rounded-full border border-line/10 bg-surface px-2 py-0.5 transition-colors duration-os hover:border-line/20"
+              className="group flex h-6 max-w-[200px] shrink-0 items-center gap-0.5 overflow-hidden rounded-full border border-line/10 bg-surface pl-2 pr-1 shadow-os-sm transition-colors duration-os hover:border-accent/25 hover:bg-accent/5"
             >
               <button
                 type="button"
+                disabled={!connected}
                 onClick={() => handleSnippetClick(snip)}
-                title={snip.command_template}
-                className="mr-1 max-w-[160px] truncate font-mono text-os-2xs font-medium text-ink-secondary transition-colors duration-os hover:text-accent"
+                title={`${snip.name}\n${snip.command_template}`}
+                aria-label={snip.name}
+                className="min-w-0 max-w-[160px] truncate rounded-full px-1 text-left text-os-2xs font-medium leading-5 text-ink-secondary transition-colors duration-os hover:text-accent disabled:opacity-40"
               >
                 {snip.name}
               </button>
               <IconButton
                 label="删除片段"
                 size="sm"
-                className="h-[16px] w-[16px] text-ink-tertiary opacity-0 group-hover:opacity-100 hover:text-state-danger"
+                className="!h-4 !w-4 shrink-0 !rounded-full text-ink-tertiary opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-state-danger"
                 onClick={(e) => {
                   e.stopPropagation();
                   deleteSnippet(snip.id);

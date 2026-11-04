@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -18,7 +19,11 @@ import {
 import { formatFriendlyError } from "../lib/errors";
 import { appendSessionLog, dropSessionLog } from "../lib/terminal-log";
 import { TerminalSearch } from "./TerminalSearch";
-import { MaximizeIcon, MinimizeIcon, SearchIcon } from "./ui/icons";
+import { MaximizeIcon, MinimizeIcon, SearchIcon, CopyIcon, DownloadIcon, CommandIcon, TrashIcon, ChevronDownIcon, PlayIcon, RowsIcon, StopIcon, RefreshIcon, SaveIcon, SlidersIcon, PlusIcon } from "./ui/icons";
+import { ConfirmDialog } from "./ui/Overlay";
+import { ConnectAuthModal } from "./ConnectAuthModal";
+import { toast, useToastStore } from "../stores/toastStore";
+import { SAVE_SNIPPET_EVENT } from "../lib/terminal-actions";
 import {
   ackTerminal,
   openTerminal,
@@ -62,6 +67,9 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
   // 由终端初始化时注册的复制/粘贴动作，供右键菜单调用
   const clipboardRef = useRef<{ copy: () => void; paste: () => void } | null>(null);
   const isFullscreen = useTerminalStore((s) => s.isFullscreen);
@@ -155,7 +163,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       fontFamily: opts.fontFamily,
       fontWeight: opts.fontWeight,
       fontWeightBold: 700,
-      lineHeight: 1.3,
+      lineHeight: 1.4,
       letterSpacing: 0,
       minimumContrastRatio: 7,
       allowTransparency: true,
@@ -236,30 +244,52 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     syncSizeRef.current();
 
     // 复制 / 粘贴：终端默认把按键当作输入发送，这里显式拦截常见快捷键
-    const copySelection = () => {
+    const copySelection = async () => {
       const selection = term.getSelection();
       if (!selection) return;
-      navigator.clipboard.writeText(selection).catch(() => {
-        // 旧版 WebView 回退方案
-        const ta = document.createElement("textarea");
-        ta.value = selection;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      });
+      try {
+        try {
+          await navigator.clipboard.writeText(selection);
+        } catch {
+          const ta = document.createElement("textarea");
+          ta.value = selection;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          try {
+            ta.select();
+            if (!document.execCommand("copy")) throw new Error("Clipboard denied");
+          } finally { ta.remove(); }
+        }
+        useToastStore.getState().push({ level: "success", title: "已复制到剪贴板", position: "top-center" });
+      } catch {
+        toast.error("复制失败，请检查剪贴板权限");
+      } finally { if (visibleRef.current) term.focus(); }
     };
     const pasteClipboard = async () => {
       try {
         const text = await navigator.clipboard.readText();
-        if (text) term.paste(text);
+        if (!visibleRef.current) return;
+        if (/[\r\n]/.test(text)) setPendingPaste(text);
+        else if (text) {
+          term.paste(text);
+          term.focus();
+          useToastStore.getState().push({ level: "success", title: "已粘贴到终端", position: "top-center" });
+        }
       } catch {
-        // 剪贴板不可用时静默忽略
+        toast.error("无法读取剪贴板，请检查权限后重试");
       }
     };
-    clipboardRef.current = { copy: copySelection, paste: () => void pasteClipboard() };
+    clipboardRef.current = { copy: () => void copySelection(), paste: () => void pasteClipboard() };
 
     term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== "keydown" || ev.isComposing) return true;
+      const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+      if (ev.key === "Enter" && live && (live.status === "disconnected" || live.status === "error")) {
+        ev.preventDefault();
+        if (!ev.repeat && visibleRef.current) void useTerminalStore.getState().reconnectTab(tab.tabId);
+        return false;
+      }
       const mod = ev.ctrlKey || ev.metaKey;
       const key = ev.key.toLowerCase();
       if (mod && !ev.shiftKey && key === "f") {
@@ -269,19 +299,23 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         return false;
       }
       if (mod && ev.shiftKey && key === "c") {
-        copySelection();
+        ev.preventDefault();
+        void copySelection();
         return false;
       }
       // Ctrl+C 仅在存在选区时复制，否则保留中断当前命令的语义
       if (mod && !ev.shiftKey && key === "c" && term.hasSelection()) {
-        copySelection();
+        ev.preventDefault();
+        void copySelection();
         return false;
       }
       if (mod && key === "v") {
+        ev.preventDefault();
         void pasteClipboard();
         return false;
       }
       if (ev.shiftKey && ev.key === "Insert") {
+        ev.preventDefault();
         void pasteClipboard();
         return false;
       }
@@ -310,15 +344,20 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
 
     // 键盘输入监听
     const onDataDispose = term.onData((data) => {
+      const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+      if (live?.status !== "connected") return;
       const bytes = new TextEncoder().encode(data);
       if (tab.protocol === "serial") {
         sendSerial(tab.cardId || tab.tabId, Array.from(bytes)).catch((e) =>
           console.warn("failed to write to serial", e)
         );
       } else {
-        writeTerminal(tab.tabId, bytes).catch((e) =>
-          console.warn("failed to write to terminal", e)
-        );
+        writeTerminal(tab.tabId, bytes).catch((err) => {
+          const current = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+          if (current?.connectionId === live.connectionId && current.status === "connected") {
+            useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(err));
+          }
+        });
       }
     });
 
@@ -375,6 +414,34 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     };
   }, [ctxMenu]);
 
+  useLayoutEffect(() => {
+    if (!ctxMenu || !menuRef.current) return;
+    const bounds = menuRef.current.getBoundingClientRect();
+    const x = Math.max(8, Math.min(ctxMenu.x, window.innerWidth - bounds.width - 8));
+    const y = Math.max(8, Math.min(ctxMenu.y, window.innerHeight - bounds.height - 8));
+    if (x !== ctxMenu.x || y !== ctxMenu.y) setCtxMenu({ x, y });
+    menuRef.current.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [ctxMenu]);
+
+  useEffect(() => {
+    if (!visible) { setCtxMenu(null); setPendingPaste(null); setAuthOpen(false); }
+  }, [visible]);
+
+  const exportContent = () => {
+    const term = terminalRef.current;
+    if (!term) return;
+    const lines = [];
+    for (let index = 0; index < term.buffer.active.length; index++) {
+      lines.push(term.buffer.active.getLine(index)?.translateToString(true) ?? "");
+    }
+    const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${tab.sessionName.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")}-terminal.txt`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   // 2. 动态响应主题、字体、壁纸、透明度与滚动缓冲等设置更改
   useEffect(() => {
     const term = terminalRef.current;
@@ -421,25 +488,23 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     const term = terminalRef.current;
     if (!term) return;
 
-    const key = `${tab.status}|${tab.reconnectAttempt}|${tab.error ?? ""}`;
+    const key = `${tab.status}|${tab.error ?? ""}`;
     if (lastLoggedStateRef.current === key) return;
     lastLoggedStateRef.current = key;
 
     if (tab.status === "connecting") {
       term.writeln(`\r\n\x1b[38;5;75m➜ [连接中]\x1b[0m 正在建立安全连接: \x1b[1m${tab.sessionName}\x1b[0m...`);
     } else if (tab.status === "reconnecting") {
-      term.writeln(
-        `\x1b[38;5;214m⟳ [自动重连]\x1b[0m 连接已断开或失败，正在自动重新连接（第 ${tab.reconnectAttempt} 次），重试直至连接成功...`
-      );
+      term.writeln("\x1b[38;5;75m[连接中]\x1b[0m 正在建立连接，请稍候…");
     } else if (tab.status === "connected") {
       term.writeln(`\x1b[38;5;82m✔ [已就绪]\x1b[0m 会话连接成功，终端已就绪！\r\n`);
     } else if (tab.status === "error" || tab.status === "disconnected") {
       if (tab.error) {
-        term.writeln(`\x1b[38;5;196m✖ [连接失败]\x1b[0m ${tab.error}`);
-        term.writeln(`\x1b[38;5;220m⚡ [自动重试]\x1b[0m 连接失败自动重试，直到连接成功...\r\n`);
+        term.writeln(`\x1b[38;5;196m[连接已断开]\x1b[0m ${tab.error}`);
       }
+      term.writeln("\r\n\x1b[38;5;75m按 Enter 重新连接。\x1b[0m 不会自动重试；可通过右键菜单修改登录凭据。\r\n");
     }
-  }, [tab.status, tab.reconnectAttempt, tab.error, tab.sessionName]);
+  }, [tab.status, tab.error, tab.sessionName]);
 
   // 3. 从隐藏恢复为可见时补一次 fit + resize（切标签、切分屏、返回主页后回来）
   useEffect(() => {
@@ -495,6 +560,8 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     lastSizeRef.current = { cols: term.cols, rows: term.rows };
 
     const onIncomingData = (frameBytes: number[]) => {
+      const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+      if (live?.connectionId !== tab.connectionId || live.status !== "connected") return;
       if (frameBytes.length < 5) return;
 
       const tag = frameBytes[0];
@@ -524,6 +591,10 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       // 组件可能已经卸载，向已 dispose 的终端写入会抛异常
       if (terminalRef.current !== term) return;
       term.write(`\r\n\x1b[31m[OpenShell] 终端连接失败：${formatFriendlyError(err)}\x1b[0m\r\n`);
+      const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+      if (live?.connectionId === tab.connectionId) {
+        useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(err));
+      }
     });
   }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, logSessionOutput]);
 
@@ -554,7 +625,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       {searchOpen && (
         <TerminalSearch
           searchAddon={searchAddonRef.current}
-          onClose={() => setSearchOpen(false)}
+          onClose={() => { setSearchOpen(false); terminalRef.current?.focus(); }}
         />
       )}
 
@@ -584,6 +655,51 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       </div>
 
       <div ref={containerRef} className="relative z-10 h-full w-full" />
+      {ctxMenu && visible && createPortal(
+        <div ref={menuRef} role="menu" aria-label="终端操作" className="fixed z-[70] max-h-[calc(100vh-16px)] w-60 overflow-y-auto rounded-xl border border-line/10 bg-surface/95 p-1.5 text-os-xs text-ink shadow-os-lg backdrop-blur-xl"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }} onMouseDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            if (event.key === "Escape" || event.key === "Tab") { event.stopPropagation(); setCtxMenu(null); terminalRef.current?.focus(); if (event.key === "Escape") event.preventDefault(); }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.stopPropagation(); event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
+          }}>
+          {[
+            { label: "复制选中内容", icon: CopyIcon, shortcut: "Ctrl/Cmd+C", disabled: !terminalRef.current?.hasSelection(), action: () => clipboardRef.current?.copy() },
+            { label: "粘贴", icon: PlayIcon, shortcut: "Ctrl/Cmd+V", disabled: tab.status !== "connected", action: () => clipboardRef.current?.paste() },
+            { label: "全选", icon: RowsIcon, action: () => terminalRef.current?.selectAll() },
+            { label: "搜索终端内容", icon: SearchIcon, shortcut: "Ctrl/Cmd+F", action: () => setSearchOpen(true) },
+            { label: "发送 Ctrl+C（SIGINT）", icon: StopIcon, shortcut: "Ctrl+C", disabled: tab.protocol === "serial" || tab.status !== "connected", action: () => { void writeTerminal(tab.tabId, new Uint8Array([3])); } },
+            { label: "重新连接", icon: RefreshIcon, disabled: tab.status === "connected" || tab.status === "connecting", action: () => { void useTerminalStore.getState().reconnectTab(tab.tabId); } },
+            { label: "在新标签打开同一会话", icon: PlusIcon, disabled: tab.protocol === "serial", action: () => { void useTerminalStore.getState().duplicateTab(tab.tabId); } },
+            { label: "重新填写登录凭据", icon: CommandIcon, disabled: tab.protocol === "serial" || tab.status === "connected" || tab.status === "connecting", action: () => setAuthOpen(true) },
+            { label: `增大字号（当前 ${fontSize}px）`, icon: SlidersIcon, shortcut: "Ctrl/Cmd +", action: () => { void useSettingsStore.getState().setFontSize(Math.min(32, fontSize + 1)); } },
+            { label: "减小字号", icon: SlidersIcon, shortcut: "Ctrl/Cmd -", action: () => { void useSettingsStore.getState().setFontSize(Math.max(9, fontSize - 1)); } },
+            { label: logSessionOutput ? "停止记录会话日志" : "开始记录会话日志", icon: SaveIcon, action: () => { void useSettingsStore.getState().setLogSessionOutput(!logSessionOutput); } },
+            { label: "选区保存为快捷命令", icon: CommandIcon, disabled: tab.protocol === "serial" || !terminalRef.current?.hasSelection(), action: () => window.dispatchEvent(new CustomEvent(SAVE_SNIPPET_EVENT, { detail: terminalRef.current?.getSelection() })) },
+            { label: "滚动到底部", icon: ChevronDownIcon, action: () => terminalRef.current?.scrollToBottom() },
+            { label: "清空终端显示", icon: TrashIcon, action: () => terminalRef.current?.clear() },
+            { label: "导出终端文本", icon: DownloadIcon, action: exportContent },
+            { label: isFullscreen ? "退出终端全屏" : "全屏放大终端", icon: MaximizeIcon, shortcut: "F11", action: toggleFullscreen },
+          ].map(({ label, icon: Icon, shortcut, disabled, action }) => <button key={label} role="menuitem" type="button" disabled={disabled}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-accent/10 focus:bg-accent/10 disabled:opacity-35"
+            onClick={() => { setCtxMenu(null); terminalRef.current?.focus(); action(); }}>
+            <Icon className="h-3.5 w-3.5 shrink-0 text-ink-secondary" /><span className="flex-1">{label}</span>{shortcut && <kbd className="text-[9px] text-ink-tertiary">{shortcut}</kbd>}
+          </button>)}
+        </div>, document.body
+      )}
+      <ConfirmDialog open={pendingPaste !== null} title="粘贴多行内容" confirmText="确认粘贴"
+        message={<div className="space-y-3"><p>换行可能直接执行终端命令，请确认内容和目标主机。</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-muted p-3 font-mono text-os-xs">{pendingPaste}</pre></div>}
+        onCancel={() => { setPendingPaste(null); terminalRef.current?.focus(); }}
+        onConfirm={() => {
+          if (pendingPaste && tab.status === "connected") {
+            terminalRef.current?.paste(pendingPaste);
+            useToastStore.getState().push({ level: "success", title: "已粘贴到终端", position: "top-center" });
+          }
+          setPendingPaste(null);
+          terminalRef.current?.focus();
+        }} />
+      {authOpen && <ConnectAuthModal tab={tab} onClose={() => { setAuthOpen(false); terminalRef.current?.focus(); }} />}
     </div>
   );
 };
