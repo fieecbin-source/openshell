@@ -55,12 +55,17 @@ pub async fn readyz(State(state): State<AppState>) -> Response {
 }
 
 pub async fn metrics(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
-    if let Some(expected) = &state.config.metrics_token {
+    if let Some(expected) = state
+        .config
+        .metrics_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+    {
         let provided = headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "));
-        if provided != Some(expected.as_str()) {
+        if provided != Some(expected) {
             return make_error(
                 ApiErrorCode::Unauthenticated,
                 "Invalid or missing metrics token",

@@ -59,15 +59,17 @@ impl SyncClient {
         }
     }
 
-    pub fn new(server_url: impl Into<String>, device_id: impl Into<String>) -> Self {
+    pub fn new(
+        server_url: impl Into<String>,
+        device_id: impl Into<String>,
+    ) -> Result<Self, SyncClientError> {
         let server_url = server_url.into();
-        // 调用方应先通过 validate_server_url 拒绝不安全地址；这里仅作防御性提醒。
-        if let Err(err) = Self::validate_server_url(&server_url) {
-            tracing::warn!("{err}");
-        }
+        Self::validate_server_url(&server_url)?;
         let server_url = server_url.trim_end_matches('/').to_string();
         let mut builder = reqwest::Client::builder()
             .user_agent(concat!("OpenShell/", env!("CARGO_PKG_VERSION")))
+            // 重定向可能把密码请求体转发给另一台主机或降级为 HTTP。
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(15));
         let loopback = reqwest::Url::parse(&server_url).ok().is_some_and(|url| {
             url.host_str().is_some_and(|host| {
@@ -81,14 +83,14 @@ impl SyncClient {
         if loopback {
             builder = builder.no_proxy();
         }
-        let client = builder.build().unwrap_or_default();
+        let client = builder.build()?;
 
-        Self {
+        Ok(Self {
             server_url,
             device_id: device_id.into(),
             access_token: None,
             client,
-        }
+        })
     }
 
     pub fn with_access_token(mut self, token: impl Into<String>) -> Self {
@@ -678,5 +680,37 @@ mod tests {
         assert!(SyncClient::validate_server_url("http://sync.example.com").is_err());
         assert!(SyncClient::validate_server_url("http://10.0.0.5:8085").is_err());
         assert!(SyncClient::validate_server_url("ftp://sync.example.com").is_err());
+    }
+
+    #[test]
+    fn constructor_rejects_insecure_saved_server_urls() {
+        assert!(SyncClient::new("http://sync.example.com", "device").is_err());
+    }
+
+    #[tokio::test]
+    async fn credential_requests_do_not_follow_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let location = url.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            socket.write_all(format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ).as_bytes()).await.unwrap();
+        });
+        let client = SyncClient::new(&url, "device").unwrap();
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.client.post(&url).body("secret").send(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        server.await.unwrap();
     }
 }

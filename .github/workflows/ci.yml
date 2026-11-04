@@ -128,7 +128,7 @@ jobs:
         run: node scripts/check-updater-copy.mjs
 
       - name: Release Notes Tests
-        run: node --test scripts/release.test.mjs
+        run: node --test scripts/release.test.mjs scripts/updater-sign.test.mjs
 
       - name: Frontend Lint
         run: pnpm lint

@@ -196,7 +196,7 @@ if (!sigAsset) {
         const verified = signatureFile.signatures.some((entry) => {
           if (String(entry.alg ?? "ed25519").toLowerCase() !== "ed25519") return false;
           const key = keys.find((candidate) => candidate.keyId === entry.key_id);
-          if (!key || key.status === "revoked") return false;
+          if (!key || !["active", "current", "next"].includes(key.status)) return false;
           try {
             return verifySignature(
               null,

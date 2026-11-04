@@ -26,8 +26,8 @@
 ### 生成（一次性，离线机器）
 
 ```bash
-node scripts/updater-sign.mjs keygen --id openshell-updater-2026a --out D:\openshell-keys
-node scripts/updater-sign.mjs keygen --id openshell-updater-2027a --out D:\openshell-keys
+node scripts/updater-sign.mjs keygen --id openshell-updater-2026a --out /mnt/offline/openshell-keys
+node scripts/updater-sign.mjs keygen --id openshell-updater-2027a --status next --out /mnt/offline/openshell-keys
 ```
 
 - `<id>.key` 是私钥，必须放在加密磁盘/硬件令牌等离线位置，权限 0600；
@@ -48,25 +48,37 @@ public_key = <base64url 32 字节>
 
 ### 每次发版
 
-打包产出 `artifacts/update-meta.json` / `latest.json` 后，在**离线签名机**执行：
+本地打包产出 `artifacts/update-meta.json` / `latest.json` 后，在**离线签名机**执行。
+使用 CI 时，先在联网机器下载对应构建的 Actions 产物，再转移到离线签名机；
+CI 草稿仅上传安装包与校验和，不上传未签名清单：
+
+```bash
+gh run download <run-id> --name updater-manifests --dir artifacts
+```
 
 ```bash
 node scripts/updater-sign.mjs sign \
-  --key D:\openshell-keys\openshell-updater-2026a.key \
-  --meta artifacts\update-meta.json \
-  --out artifacts\update-meta.json.sig \
-  --latest artifacts\latest.json
+  --key /mnt/offline/openshell-keys/openshell-updater-2026a.key \
+  --meta artifacts/update-meta.json \
+  --out artifacts/update-meta.json.sig \
+  --latest artifacts/latest.json
 node scripts/updater-sign.mjs verify \
-  --meta artifacts\update-meta.json \
-  --sig artifacts\update-meta.json.sig
+  --meta artifacts/update-meta.json \
+  --sig artifacts/update-meta.json.sig
 ```
 
 签名工具会把 `key_id` 写进 `update-meta.json`、把清单与签名原文内嵌进 `latest.json`，
-然后对**写入后的原始字节**签名。上传时连同 `.sig` 一起传：
+然后对**写入后的原始字节**签名。把这三个签名后的文件转移回联网机器，
+上传到本次新版本的草稿（不加 `--clobber`，同名资产存在时停止检查）：
 
 ```bash
-gh release upload v1.1.5 artifacts/update-meta.json.sig --clobber
+gh release upload vX.Y.Z artifacts/update-meta.json artifacts/update-meta.json.sig artifacts/latest.json
 ```
+
+预发布版本只上传 `update-meta.json` 与 `.sig`，不得上传 `latest.json`。
+发布前核对本地验签结果与草稿中的文件名；有问题时停止发布，不覆盖已上传资产。
+发布后运行 `node scripts/e2e-upgrade/check-release.mjs --repo fieecbin-source/openshell --tag vX.Y.Z`
+检查公开下载与签名链路。
 
 CI 不持有私钥；签名在离线机完成后上传到 Release（草稿阶段）。若未来要流水线自动签名，
 应使用独立的签名服务/HSM，且不得把私钥放进仓库 Secret 或构建日志。
@@ -182,7 +194,8 @@ git push origin main --tags
    `OpenShell-<version>-<platform>-<arch>.<ext>` → 上传 artifacts；
 3. **publish**：从 `CHANGELOG.md` 当前版本小节生成中文发布说明 →
    合并生成 `SHA256SUMS.txt`、`update-meta.json`、`latest.json` →
-   创建 **draft** Release 并上传资产。
+   创建 **draft** Release，上传安装包与校验和；清单保存为 `updater-manifests` Actions 产物，
+   按 0.1 离线签名后首次上传，再人工发布。
 
 > 发布前先整理当前版本的中文日志，再运行 `node scripts/release.mjs notes`。
 > `--from v1.0.1` 仅生成提交历史草稿，不用于正式发布；客户端优先显示发布页正文，正文为空时才回退到元数据说明。

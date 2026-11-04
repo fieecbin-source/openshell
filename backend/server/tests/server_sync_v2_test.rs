@@ -42,7 +42,7 @@ async fn start_server() -> (String, tempfile::TempDir) {
 }
 
 async fn authenticated_client(base_url: &str) -> SyncClient {
-    let mut client = SyncClient::new(base_url, "device-v2");
+    let mut client = SyncClient::new(base_url, "device-v2").expect("sync client");
     let registration = client
         .register(RegisterRequest {
             email: "sync-v2@example.com".to_string(),
@@ -94,7 +94,7 @@ async fn authenticated_client(base_url: &str) -> SyncClient {
 }
 
 async fn additional_client(base_url: &str, device_id: &str) -> SyncClient {
-    let mut client = SyncClient::new(base_url, device_id);
+    let mut client = SyncClient::new(base_url, device_id).expect("sync client");
     let login = client
         .login(LoginRequest {
             email: "sync-v2@example.com".to_string(),

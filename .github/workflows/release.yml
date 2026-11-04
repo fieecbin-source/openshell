@@ -63,7 +63,7 @@ jobs:
 
       - name: Test release notes and unpacked privacy checks
         run: |
-          node --test scripts/release.test.mjs
+          node --test scripts/release.test.mjs scripts/updater-sign.test.mjs
           python3 scripts/test-release-archives.py
 
       # 发布守卫 1：仓库里一旦混入本地数据库/环境文件，先在这里拦住，
@@ -331,6 +331,16 @@ jobs:
             --version "$VERSION" \
             --tag "${{ github.event.inputs.tag_name || github.ref_name }}"
 
+      # 清单必须在离线签名后才首次上传，避免覆盖已上传的未签名文件。
+      - name: Save manifests for offline signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-manifests
+          path: |
+            artifacts/update-meta.json
+            artifacts/latest.json
+          if-no-files-found: error
+
       - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
@@ -348,20 +358,10 @@ jobs:
           files: |
             artifacts/OpenShell-*
             artifacts/SHA256SUMS.txt
-            artifacts/update-meta.json
-
-      # latest.json 是「正式检测源 / 备用源」用的清单，只随稳定版发布；
-      # 预发布附带它会误导用户以为稳定通道已更新。
-      - name: Attach latest.json (stable releases only)
-        if: ${{ !contains(github.event.inputs.tag_name || github.ref_name, '-') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ github.event.inputs.tag_name || github.ref_name }}" artifacts/latest.json
 
       - name: Remind manual editing
         run: |
-          echo "::notice ::草稿 Release 已创建。请按 .github/release-template.md 人工校对说明后再点击 Publish。"
+          echo "::notice ::草稿 Release 已创建。请按 docs/RELEASING.md 下载 updater-manifests，离线签名并上传清单，再校对说明后 Publish。"
 
   # 预发布（rc/beta）**不**写入正式 latest.json 源，避免污染稳定通道用户的检测源。
   # 测试通道客户端直接读 GitHub 的 prerelease（update-meta.json），不需要这份清单。

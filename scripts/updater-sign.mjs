@@ -187,7 +187,9 @@ function sign() {
   if (!keyPath || typeof keyPath !== "string") fail("sign 需要 --key <私钥文件>");
   if (!metaPath || typeof metaPath !== "string") fail("sign 需要 --meta <update-meta.json>");
   if (!outPath || typeof outPath !== "string") fail("sign 需要 --out <update-meta.json.sig>");
-  if (withinRepo(keyPath)) fail("私钥不能位于仓库内");
+  if (withinRepo(keyPath) || (typeof alsoPath === "string" && withinRepo(alsoPath))) {
+    fail("私钥不能位于仓库内");
+  }
 
   const primary = loadPrivateKey(keyPath);
   const extra = alsoPath && typeof alsoPath === "string" ? [loadPrivateKey(alsoPath)] : [];
@@ -240,6 +242,9 @@ function verify() {
   if (!Array.isArray(signatureFile.signatures) || signatureFile.signatures.length === 0) {
     fail("签名文件没有签名条目");
   }
+  if (!signatureFile.signatures.some((entry) => entry.key_id.trim() === meta.key_id.trim())) {
+    fail("签名条目没有覆盖清单声明的 key_id");
+  }
 
   const keysDir = arg("keys-dir", KEYS_DIR);
   const keys = loadTrustedKeys(typeof keysDir === "string" ? keysDir : KEYS_DIR);
@@ -248,13 +253,13 @@ function verify() {
   let sawUnknown = false;
   let sawRevoked = false;
   for (const entry of signatureFile.signatures) {
-    if (String(entry.alg).toLowerCase() !== "ed25519") continue;
-    const key = keys.find((candidate) => candidate.keyId === entry.key_id);
+    if (String(entry.alg ?? "ed25519").toLowerCase() !== "ed25519") continue;
+    const key = keys.find((candidate) => candidate.keyId === entry.key_id.trim());
     if (!key) {
       sawUnknown = true;
       continue;
     }
-    if (key.status === "revoked") {
+    if (!["active", "current", "next"].includes(key.status)) {
       sawRevoked = true;
       continue;
     }

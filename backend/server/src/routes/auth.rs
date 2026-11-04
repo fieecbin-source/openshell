@@ -212,7 +212,11 @@ pub async fn login(
     ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, crate::middleware::ApiError> {
-    let limiter_key = format!("{}|{}", req.email.trim().to_lowercase(), client_addr.ip());
+    let limiter_key = hash_token(&format!(
+        "{}|{}",
+        req.email.trim().to_lowercase(),
+        client_addr.ip()
+    ));
     let ip_hash = hash_token(&client_addr.ip().to_string());
     if let Some(remaining) = state.login_limiter.lock_remaining(&limiter_key) {
         return Err(make_error(

@@ -192,10 +192,9 @@ impl SyncService {
         password: &str,
         invite_code: Option<String>,
     ) -> DomainResult<AuthResponse> {
-        SyncClient::validate_server_url(server_url)
-            .map_err(|e| DomainError::new(ErrorCode::Validation, e.to_string()))?;
         let device_id = self.get_or_create_device_id();
-        let client = SyncClient::new(server_url, &device_id);
+        let client = SyncClient::new(server_url, &device_id)
+            .map_err(|e| DomainError::validation(e.to_string()))?;
 
         let req = RegisterRequest {
             email: email.to_string(),
@@ -222,10 +221,9 @@ impl SyncService {
         email: &str,
         password: &str,
     ) -> DomainResult<AuthResponse> {
-        SyncClient::validate_server_url(server_url)
-            .map_err(|e| DomainError::new(ErrorCode::Validation, e.to_string()))?;
         let device_id = self.get_or_create_device_id();
-        let client = SyncClient::new(server_url, &device_id);
+        let client = SyncClient::new(server_url, &device_id)
+            .map_err(|e| DomainError::validation(e.to_string()))?;
 
         let req = LoginRequest {
             email: email.to_string(),
@@ -316,8 +314,9 @@ impl SyncService {
     ) -> DomainResult<()> {
         let _operation = self.operation.lock().await;
         let old = self.get_config()?;
-        let client =
-            SyncClient::new(server_url, &auth.device_id).with_access_token(&auth.access_token);
+        let client = SyncClient::new(server_url, &auth.device_id)
+            .map_err(|e| DomainError::validation(e.to_string()))?
+            .with_access_token(&auth.access_token);
         let remote_id = crate::sync_vault::prepare(
             &self.store,
             &self.vault_manager,
@@ -392,7 +391,9 @@ impl SyncService {
         let token = self.cached_token.read().clone().ok_or_else(|| {
             DomainError::new(ErrorCode::AuthFailed, "Not logged in to sync server")
         })?;
-        let mut client = SyncClient::new(&url, &config.device_id).with_access_token(token.as_str());
+        let mut client = SyncClient::new(&url, &config.device_id)
+            .map_err(|e| DomainError::validation(e.to_string()))?
+            .with_access_token(token.as_str());
         let expiry = self.expires_at.read().clone();
         let expires_soon = expiry
             .as_deref()
@@ -671,7 +672,8 @@ impl SyncService {
             Some(u) => u,
             None => return Ok(None),
         };
-        let client = SyncClient::new(server_url, &config.device_id);
+        let client = SyncClient::new(server_url, &config.device_id)
+            .map_err(|e| DomainError::validation(e.to_string()))?;
         client
             .check_update("windows-x86_64", "stable", &config.device_id)
             .await

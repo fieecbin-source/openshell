@@ -33,13 +33,28 @@ impl LoginLimiter {
     pub fn lock_remaining(&self, key: &str) -> Option<Duration> {
         let now = Instant::now();
         let mut attempts = self.attempts.lock();
+        if attempts.len() >= LOGIN_ATTEMPT_MAX_ENTRIES {
+            attempts.retain(|_, entry| {
+                now.saturating_duration_since(entry.last_failure)
+                    < Duration::from_secs(LOGIN_ATTEMPT_TTL_SECS)
+            });
+            // 饱和时拒绝新键，不能驱逐仍被锁定的账号让攻击者绕过限流。
+            if attempts.len() >= LOGIN_ATTEMPT_MAX_ENTRIES && !attempts.contains_key(key) {
+                return Some(Duration::from_secs(LOGIN_LOCK_BASE_SECS));
+            }
+        }
+        if attempts.get(key).is_some_and(|entry| {
+            now.saturating_duration_since(entry.last_failure)
+                >= Duration::from_secs(LOGIN_ATTEMPT_TTL_SECS)
+        }) {
+            attempts.remove(key);
+        }
         if let Some(entry) = attempts.get_mut(key) {
             if let Some(until) = entry.locked_until {
                 if until > now {
                     return Some(until - now);
                 }
                 entry.locked_until = None;
-                entry.failures = 0;
             }
         }
         None
@@ -49,11 +64,15 @@ impl LoginLimiter {
         let now = Instant::now();
         let mut attempts = self.attempts.lock();
 
-        if attempts.len() > LOGIN_ATTEMPT_MAX_ENTRIES {
+        if attempts.len() >= LOGIN_ATTEMPT_MAX_ENTRIES {
             attempts.retain(|_, entry| {
                 now.saturating_duration_since(entry.last_failure)
                     < Duration::from_secs(LOGIN_ATTEMPT_TTL_SECS)
             });
+            if attempts.len() >= LOGIN_ATTEMPT_MAX_ENTRIES && !attempts.contains_key(key) {
+                self.total_failures.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
         }
 
         let entry = attempts.entry(key.to_string()).or_insert(LoginAttempt {
@@ -101,5 +120,51 @@ impl AppState {
             start_time: Instant::now(),
             login_limiter: Arc::new(LoginLimiter::default()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limiter_stays_bounded_and_preserves_existing_locks() {
+        let limiter = LoginLimiter::default();
+        for _ in 0..LOGIN_MAX_FAILURES {
+            limiter.record_failure("locked");
+        }
+        for index in 0..LOGIN_ATTEMPT_MAX_ENTRIES {
+            limiter.record_failure(&index.to_string());
+        }
+        assert_eq!(limiter.attempts.lock().len(), LOGIN_ATTEMPT_MAX_ENTRIES);
+        assert!(limiter.lock_remaining("locked").is_some());
+        assert!(limiter.lock_remaining("new-user").is_some());
+        limiter.attempts.lock().get_mut("0").unwrap().last_failure =
+            Instant::now() - Duration::from_secs(LOGIN_ATTEMPT_TTL_SECS + 1);
+        assert!(limiter.lock_remaining("new-user").is_none());
+    }
+
+    #[test]
+    fn expired_lock_keeps_backoff_until_attempts_expire() {
+        let limiter = LoginLimiter::default();
+        for _ in 0..LOGIN_MAX_FAILURES {
+            limiter.record_failure("user");
+        }
+        limiter
+            .attempts
+            .lock()
+            .get_mut("user")
+            .unwrap()
+            .locked_until = Some(Instant::now());
+        assert!(limiter.lock_remaining("user").is_none());
+        limiter.record_failure("user");
+        assert!(limiter.lock_remaining("user").unwrap() > Duration::from_secs(50));
+        limiter
+            .attempts
+            .lock()
+            .get_mut("user")
+            .unwrap()
+            .last_failure = Instant::now() - Duration::from_secs(LOGIN_ATTEMPT_TTL_SECS + 1);
+        assert!(limiter.lock_remaining("user").is_none());
     }
 }

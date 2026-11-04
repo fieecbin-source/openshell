@@ -9,6 +9,13 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
+fn local_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("loopback HTTP client")
+}
+
 async fn start_server(mut configure: impl FnMut(&mut Config)) -> (String, TempDir) {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config {
@@ -88,7 +95,7 @@ async fn audit_events_query_binds_user_filters() {
         config.allow_multi_user = true;
     })
     .await;
-    let http = reqwest::Client::new();
+    let http = local_http_client();
 
     let alice = register_user(
         &http,
@@ -159,7 +166,7 @@ async fn audit_events_query_binds_user_filters() {
 #[tokio::test]
 async fn short_passwords_are_rejected() {
     let (base_url, _dir) = start_server(|_| {}).await;
-    let http = reqwest::Client::new();
+    let http = local_http_client();
 
     let response = http
         .post(format!("{base_url}/v1/auth/register"))
@@ -180,7 +187,7 @@ async fn short_passwords_are_rejected() {
 #[tokio::test]
 async fn login_failures_lock_the_account() {
     let (base_url, _dir) = start_server(|_| {}).await;
-    let http = reqwest::Client::new();
+    let http = local_http_client();
     let auth = register_user(
         &http,
         &base_url,
@@ -220,7 +227,7 @@ async fn login_failures_lock_the_account() {
 #[tokio::test]
 async fn cors_only_allows_configured_origins() {
     let (base_url, _dir) = start_server(|_| {}).await;
-    let http = reqwest::Client::new();
+    let http = local_http_client();
 
     let blocked = http
         .request(reqwest::Method::OPTIONS, format!("{base_url}/v1/account"))
@@ -267,7 +274,7 @@ async fn metrics_requires_configured_bearer_token() {
         config.metrics_token = Some("metrics-secret".to_string());
     })
     .await;
-    let http = reqwest::Client::new();
+    let http = local_http_client();
 
     let missing = http
         .get(format!("{base_url}/metrics"))
@@ -283,4 +290,18 @@ async fn metrics_requires_configured_bearer_token() {
         .await
         .expect("metrics with token");
     assert_eq!(ok.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn empty_metrics_token_keeps_the_default_network_only_policy() {
+    let (base_url, _dir) = start_server(|config| {
+        config.metrics_token = Some(String::new());
+    })
+    .await;
+    let response = local_http_client()
+        .get(format!("{base_url}/metrics"))
+        .send()
+        .await
+        .expect("metrics with the compose default");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
 }

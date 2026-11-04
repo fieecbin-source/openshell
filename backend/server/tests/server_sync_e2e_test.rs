@@ -59,10 +59,13 @@ async fn start_test_server() -> (String, DbPool, AppState) {
 #[tokio::test]
 async fn test_full_server_and_e2ee_sync_lifecycle() {
     let (base_url, db_pool, _app_state) = start_test_server().await;
-    let mut client = SyncClient::new(&base_url, "dev_macos_a");
+    let mut client = SyncClient::new(&base_url, "dev_macos_a").expect("sync client");
 
     // 1. Health & Ops
-    let client_http = reqwest::Client::new();
+    let client_http = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("loopback HTTP client");
     let health_res = client_http
         .get(format!("{}/healthz", base_url))
         .send()
@@ -504,7 +507,7 @@ async fn test_single_user_bootstrap_and_login() {
         .unwrap();
     });
 
-    let client = SyncClient::new(&base_url, "device_admin_1");
+    let client = SyncClient::new(&base_url, "device_admin_1").expect("sync client");
     let login_res = client
         .login(LoginRequest {
             email: "admin".to_string(),
