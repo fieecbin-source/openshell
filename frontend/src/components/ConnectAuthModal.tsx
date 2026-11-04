@@ -86,7 +86,7 @@ export const ConnectAuthModal: React.FC<ConnectAuthModalProps> = ({ tab, onClose
     }
   };
 
-  const liveError = liveTab?.status === "error" ? liveTab.error : null;
+  const liveError = liveTab?.status === "error" || liveTab?.status === "disconnected" ? liveTab.error : null;
   const target = session
     ? `${session.username || "root"}@${session.host || "-"}:${session.port || 22}`
     : tab.sessionName;

@@ -46,8 +46,7 @@ export const App: React.FC = () => {
           if (state === "ready") {
             store.updateTabStatus(tab.tabId, "connected");
           } else if (state === "closed") {
-            // 远端关闭 / 心跳失联：交给 store 决定是否按退避策略自动重连。
-            // 旧实现只把状态改成 disconnected，且没有自动重连，用户只能手动点。
+            // 远端关闭 / 心跳失联后等待用户按回车。
             store.markDisconnected(tab.tabId, error ?? undefined);
           }
         }
@@ -63,7 +62,7 @@ export const App: React.FC = () => {
         } else if (kind === "exit") {
           // 远端 shell 已退出：标签必须变成「已断开」，否则界面会一直显示已连接
           const tab = store.tabs.find((t) => t.tabId === tab_id);
-          if (tab) {
+          if (tab?.status === "connected") {
             store.markDisconnected(
               tab.tabId,
               value || "远端会话已结束",

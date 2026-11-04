@@ -7,6 +7,9 @@ import {
   HomeIcon,
   PlusIcon,
   XIcon,
+  TerminalIcon,
+  RowsIcon,
+  FolderIcon,
 } from "./ui/icons";
 
 interface TerminalTabsProps {
@@ -109,10 +112,10 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
               : tab.status === "connecting"
                 ? "正在连接"
                 : tab.status === "reconnecting"
-                  ? `已断开，正在自动重连（第 ${tab.reconnectAttempt} 次）`
+                  ? "正在连接"
                   : tab.error
                     ? `已断开：${tab.error}`
-                    : "已断开";
+                    : "已断开，按 Enter 重新连接";
 
           let statusDot = (
             <span className="h-2 w-2 shrink-0 rounded-full bg-state-success shadow-apple-sm" />
@@ -228,36 +231,36 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
           <div className="flex items-center rounded-lg border border-line/10 bg-surface p-0.5 shadow-apple-sm text-xs">
             <button
               onClick={() => setLayoutMode("terminal")}
-              className={`px-2 py-0.5 rounded-md transition text-[11px] font-medium ${
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md transition text-[11px] font-medium ${
                 layoutMode === "terminal"
                   ? "bg-action/10 text-accent font-bold"
                   : "text-ink-secondary hover:text-ink"
               }`}
               title="全终端模式"
             >
-              📟 终端
+              <TerminalIcon className="h-3.5 w-3.5" />终端
             </button>
             <button
               onClick={() => setLayoutMode("split")}
-              className={`px-2 py-0.5 rounded-md transition text-[11px] font-medium ${
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md transition text-[11px] font-medium ${
                 layoutMode === "split"
                   ? "bg-action/10 text-accent font-bold"
                   : "text-ink-secondary hover:text-ink"
               }`}
               title="分屏模式 (上终端 + 下 SFTP)"
             >
-              ◫ 分屏
+              <RowsIcon className="h-3.5 w-3.5" />分屏
             </button>
             <button
               onClick={() => setLayoutMode("sftp")}
-              className={`px-2 py-0.5 rounded-md transition text-[11px] font-medium ${
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md transition text-[11px] font-medium ${
                 layoutMode === "sftp"
                   ? "bg-action/10 text-accent font-bold"
                   : "text-ink-secondary hover:text-ink"
               }`}
               title="全屏 SFTP 视图"
             >
-              📁 SFTP
+              <FolderIcon className="h-3.5 w-3.5" />SFTP
             </button>
           </div>
         )}

@@ -1,10 +1,6 @@
 import { create } from "zustand";
 import type { CardMode, Protocol, Session, TabStatus } from "../types/ipc";
 import {
-  type ReconnectPolicy,
-  policyFromSession,
-} from "../lib/backoff";
-import {
   closeConnection,
   closeTerminal,
   closeSerial,
@@ -38,24 +34,7 @@ export interface TerminalTab {
   error?: string;
   /** 远端上报的进程退出码；未知时为 null（不再伪造 0） */
   exitCode?: number | null;
-  /** 已进行的自动重连次数 */
-  reconnectAttempt: number;
-  /** 下一次自动重连的时间戳（毫秒），用于界面倒计时 */
-  nextRetryAt?: number;
-  /** 重连策略，由会话配置派生 */
-  reconnect: ReconnectPolicy;
   baudRate?: number;
-}
-
-/** 自动重连定时器：按 tabId 存放，关闭标签时必须清理，否则会给已关闭的标签重连 */
-const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function clearReconnectTimer(tabId: string) {
-  const timer = reconnectTimers.get(tabId);
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    reconnectTimers.delete(tabId);
-  }
 }
 
 // 后端以 26 位 ULID 校验终端标签 ID，这里生成同格式 ID，
@@ -75,6 +54,25 @@ function generateId(): string {
     id += ULID_CHARS[random[i] % 32];
   }
   return id;
+}
+
+/**
+ * 断线清理是异步的：用户可能在上一条连接还没释放完时就按回车重连。
+ * 用按 tabId 记录的清理 Promise 串行化，避免「旧 PTY/旧连接释放」与「新连接建立」并发，
+ * 导致刚建好的 PTY 被旧清理逻辑关掉，留下僵尸会话。
+ */
+const pendingTeardown = new Map<string, Promise<void>>();
+
+function releaseTab(tabId: string, connectionId?: string | null): Promise<void> {
+  const task = (async () => {
+    await closeTerminal(tabId).catch(() => {});
+    if (connectionId) await closeConnection(connectionId).catch(() => {});
+  })();
+  pendingTeardown.set(tabId, task);
+  void task.finally(() => {
+    if (pendingTeardown.get(tabId) === task) pendingTeardown.delete(tabId);
+  });
+  return task;
 }
 
 /**
@@ -116,11 +114,9 @@ interface TerminalState {
   toggleMode: (tabId: string) => Promise<void>;
   reconnectTab: (tabId: string, overrides?: ConnectOverrides) => Promise<void>;
   /**
-   * 标记标签已断开（远端退出 / 链路中断 / 保活失联），并按会话策略安排自动重连。
+   * 标记标签已断开；等待用户按回车，不安排自动重连。
    */
   markDisconnected: (tabId: string, reason?: string, exitCode?: number | null) => void;
-  /** 取消该标签的自动重连（用户点「取消」或手动重连时调用） */
-  cancelAutoReconnect: (tabId: string) => void;
   updateTabStatus: (tabId: string, status: TabStatus, error?: string) => void;
   renameTab: (tabId: string, newName: string) => void;
   duplicateTab: (tabId: string) => Promise<string | null>;
@@ -159,8 +155,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       cardId,
       currentMode: "command",
       status: "connecting",
-      reconnectAttempt: 0,
-      reconnect: policyFromSession(session.auto_reconnect, session.reconnect_max),
       baudRate: session.protocol_options_json?.baud_rate || 115200,
     };
 
@@ -211,11 +205,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       try {
         const requestId = "req_" + generateId();
         const res = await connectSession(requestId, session.id, overrides);
+        if (!get().tabs.some((item) => item.tabId === tabId)) {
+          await closeConnection(res.connection_id).catch(() => {});
+          return tabId;
+        }
 
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined, reconnectAttempt: 0 }
+              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined }
               : t
           ),
         }));
@@ -274,10 +272,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   reconnectTab: async (tabId: string, overrides?: ConnectOverrides) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
-    if (!tab) return;
-
-    // 先取消已排队的定时器，避免「手动重连 + 自动重连」同时触发两次建连
-    clearReconnectTimer(tabId);
+    if (!tab || tab.status === "connecting" || tab.status === "connected") return;
 
     set((state) => ({
       tabs: state.tabs.map((t) =>
@@ -287,11 +282,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               status: "connecting",
               connectionId: null,
               error: undefined,
-              nextRetryAt: undefined,
             }
           : t
       ),
     }));
+
+    // 先等断线清理落盘，再释放旧 PTY，避免与新连接复用同一标签 ID 时互相踩踏。
+    await pendingTeardown.get(tabId);
+    await releaseTab(tabId, tab.connectionId);
+    if (!get().tabs.some((item) => item.tabId === tabId)) return;
 
     if (tab.protocol === "serial") {
       try {
@@ -310,8 +309,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                   ...t,
                   status: "connected",
                   error: undefined,
-                  reconnectAttempt: 0,
-                  nextRetryAt: undefined,
                 }
               : t
           ),
@@ -326,6 +323,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     try {
       const requestId = "req_" + generateId();
       const res = await connectSession(requestId, tab.sessionId, overrides);
+      if (!get().tabs.some((item) => item.tabId === tabId)) {
+        await closeConnection(res.connection_id).catch(() => {});
+        return;
+      }
       set((state) => ({
         tabs: state.tabs.map((t) =>
           t.tabId === tabId
@@ -335,8 +336,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 status: "connected",
                 error: undefined,
                 exitCode: null,
-                reconnectAttempt: 0,
-                nextRetryAt: undefined,
               }
             : t
         ),
@@ -353,58 +352,29 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
 
-    clearReconnectTimer(tabId);
-
-    const nextAttempt = (tab.reconnectAttempt ?? 0) + 1;
-    // 连接失败自动重试，直到连接成功：快速退避 1.5s ~ 3s 之间
-    const delay = Math.min(1500 + nextAttempt * 300, 3000);
-
-    set((state) => ({
-      tabs: state.tabs.map((t) =>
-        t.tabId === tabId
-          ? {
-              ...t,
-              status: "reconnecting",
-              error: reason,
-              exitCode: exitCode ?? t.exitCode ?? null,
-              reconnectAttempt: nextAttempt,
-              nextRetryAt: Date.now() + delay,
-            }
-          : t
-      ),
-    }));
-
-    const timer = setTimeout(() => {
-      reconnectTimers.delete(tabId);
-      // 标签可能在倒计时期间被用户关闭
-      if (!get().tabs.some((t) => t.tabId === tabId)) return;
-      void get().reconnectTab(tabId);
-    }, delay);
-    reconnectTimers.set(tabId, timer);
-  },
-
-  cancelAutoReconnect: (tabId) => {
-    clearReconnectTimer(tabId);
     set((state) => ({
       tabs: state.tabs.map((t) =>
         t.tabId === tabId
           ? {
               ...t,
               status: "disconnected",
-              reconnectAttempt: 0,
-              nextRetryAt: undefined,
+              connectionId: null,
+              error: reason,
+              exitCode: exitCode ?? t.exitCode ?? null,
             }
           : t
       ),
     }));
+
+    void releaseTab(tabId, tab.connectionId);
   },
 
   closeTab: async (tabId: string) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
 
-    // 关闭标签时必须取消待执行的自动重连，否则倒计时结束后会给已关闭的标签重建连接
-    clearReconnectTimer(tabId);
+    // 等待断线清理完成后，再做最终释放，避免迟到的 closeTerminal 作用到同 ID 的新会话
+    await pendingTeardown.get(tabId);
 
     // 逐项清理：任何一步失败都不能阻断后续释放。
     // 历史上这里用单个 try 包住全部步骤，closeCard 一失败就会跳过 closeTerminal /
