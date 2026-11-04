@@ -11,24 +11,29 @@ export function HostIcon({ iconKey, protocol, className, title }: {
 }) {
   const key = normalizeHostIconKey(iconKey);
   const system = HOST_ICONS.find((item) => item.key === key);
-  const serial = protocol === "serial" && !system?.src;
-  const name = title || system?.label || "不设置";
+  // 串口会话在未显式选择图标时仍使用串口图形，而不是默认的 Linux 图标
+  const serial = protocol === "serial" && (!iconKey || iconKey === "server" || iconKey === "none");
+  const name = title || (serial ? "串口设备" : system?.label || "默认");
   return <span
     className={cn("flex shrink-0 items-center justify-center overflow-hidden", className)}
     title={name}
-    data-icon-key={key}
+    data-icon-key={serial ? "serial" : key}
   >
-    {system?.src
-      ? <img
-        src={system.src}
-        alt={system.label}
-        draggable={false}
-        className={cn("h-full w-full object-contain",
-          system.tone === "black" && "dark:invert",
-          system.tone === "white" && "invert dark:invert-0")}
-      />
-      : <span role="img" aria-label={serial ? "串口设备" : "默认主机"} className="flex h-full w-full items-center justify-center text-accent">
-        {serial ? <PlugIcon className="h-full w-full" /> : <ServerIcon className="h-full w-full" />}
-      </span>}
+    {serial
+      ? <span role="img" aria-label="串口设备" className="flex h-full w-full items-center justify-center text-accent">
+        <PlugIcon className="h-full w-full" />
+      </span>
+      : system?.src
+        ? <img
+          src={system.src}
+          alt={system.label}
+          draggable={false}
+          className={cn("h-full w-full object-contain",
+            system.tone === "black" && "dark:invert",
+            system.tone === "white" && "invert dark:invert-0")}
+        />
+        : <span role="img" aria-label="默认主机" className="flex h-full w-full items-center justify-center text-accent">
+          <ServerIcon className="h-full w-full" />
+        </span>}
   </span>;
 }

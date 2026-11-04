@@ -51,7 +51,7 @@ export const DEVICE_ICONS: HostIconDef[] = [
   device("camera", "摄像头", ["camera", "ipc", "摄像头"]),
   device("database", "数据库", ["database", "mysql", "postgres", "redis", "mongo", "数据库"]),
   device("bastion", "堡垒机", ["bastion", "jump host", "跳板机", "堡垒机"]),
-  device("unknown", "未知设备", ["unknown", "其他", "未识别"]),
+  device("unknown", "其他设备", ["unknown", "其他", "未识别"]),
 ];
 
 /** 系统/发行版图标：沿用官方 logo 资源 */
@@ -67,28 +67,31 @@ export const OS_ICONS: HostIconDef[] = [
   os("macos", "macOS", ["macos", "mac", "苹果"], "black"),
 ];
 
+export const DEFAULT_HOST_ICON_KEY = "os:tux";
+
 export const HOST_ICONS: HostIconDef[] = [
-  { key: "none", label: "不设置", group: "default", src: null, keywords: ["default", "none", "默认", "不设置"] },
+  {
+    key: DEFAULT_HOST_ICON_KEY, label: "默认", group: "default",
+    src: "/os/tux.svg", keywords: ["default", "none", "默认", "linux", "tux", "企鹅"], tone: "black",
+  },
   ...DEVICE_ICONS,
   ...OS_ICONS,
 ];
 
 export const HOST_ICON_GROUPS: Record<HostIconGroup, string> = {
-  default: "默认",
+  default: "默认图标",
   device: "设备类型",
   os: "系统发行版",
 };
 
-export const DEFAULT_HOST_ICON_KEY = "none";
-
-/** 旧数据里的 "server" / 已下架 key 统一回落到“不设置” */
+/** 旧数据里的 null / "server" / "none" / 已下架 key 统一回落到默认图标 */
 export function normalizeHostIconKey(iconKey?: string | null): string {
-  if (!iconKey || iconKey === "server") return DEFAULT_HOST_ICON_KEY;
+  if (!iconKey || iconKey === "server" || iconKey === "none") return DEFAULT_HOST_ICON_KEY;
   return HOST_ICONS.some((item) => item.key === iconKey) ? iconKey : DEFAULT_HOST_ICON_KEY;
 }
 
 export function hostIconLabel(iconKey?: string | null): string {
-  return HOST_ICONS.find((item) => item.key === normalizeHostIconKey(iconKey))?.label || "不设置";
+  return HOST_ICONS.find((item) => item.key === normalizeHostIconKey(iconKey))?.label || "默认";
 }
 
 /** 按可读的系统/设备关键字做“自动识别”，识别不到时回落到通用服务器图标 */
