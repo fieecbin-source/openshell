@@ -7,6 +7,8 @@ import { DeleteConfirmModal } from "./DeleteConfirmModal";
 import { RemoteEditorModal } from "./RemoteEditorModal";
 import { localFsHome, sftpWriteFile } from "../lib/ipc";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { DirectoryIcon } from "./ui/DirectoryIcon";
+import { BoxIcon, FileIcon, LinkIcon, FolderPlusIcon, PlusIcon, EyeIcon, EyeOffIcon, PencilIcon, TrashIcon, LockIcon, InfoIcon, UploadIcon, DownloadIcon, RefreshIcon } from "./ui/icons";
 
 interface SftpViewProps {
   connId: string;
@@ -21,6 +23,7 @@ interface ContextMenuState {
 }
 
 export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
+  const viewRef = useRef<HTMLDivElement>(null);
   const {
     remotePath,
     remoteFiles,
@@ -107,6 +110,11 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
   // 监听全局与本视图快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      // 分屏时 SFTP 快捷键只处理自身焦点，不能截走终端的 Ctrl+L / Delete。
+      if (!target || !viewRef.current?.contains(target)) return;
+      const editing = !!target.closest("input, textarea, select, [contenteditable=true]");
+      if (editing && e.key !== "Escape" && !((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "l")) return;
       // Ctrl+L / Cmd+L 聚焦地址栏
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "l") {
         e.preventDefault();
@@ -417,23 +425,31 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
 
   const getFileIcon = (entry: SftpFileEntry) => {
     if (entry.file_type === "directory") {
-      return <span className="text-state-warning text-sm">📁</span>;
+      return <DirectoryIcon className="h-5 w-6 shrink-0" />;
     }
     if (entry.file_type === "symlink") {
-      return <span className="text-cyan-400 text-sm">🔗</span>;
+      return <LinkIcon className="h-4 w-6 shrink-0 text-accent" />;
     }
     const name = entry.name.toLowerCase();
     if (name.endsWith(".tar") || name.endsWith(".gz") || name.endsWith(".zip") || name.endsWith(".7z")) {
-      return <span className="text-rose-400 text-sm">📦</span>;
+      return <BoxIcon className="h-4 w-6 shrink-0 text-rose-400" />;
     }
     if (name.endsWith(".sh") || name.endsWith(".py") || name.endsWith(".rs") || name.endsWith(".js") || name.endsWith(".json")) {
-      return <span className="text-state-success text-sm">📄</span>;
+      return <FileIcon className="h-4 w-6 shrink-0 text-state-success" />;
     }
-    return <span className="text-ink-secondary text-sm">📄</span>;
+    return <FileIcon className="h-4 w-6 shrink-0 text-ink-tertiary" />;
   };
 
   return (
     <div
+      ref={viewRef}
+      tabIndex={0}
+      aria-label="SFTP 文件浏览器"
+      onPointerDownCapture={(event) => {
+        if (!(event.target as HTMLElement).closest("button, input, textarea, select, a, [contenteditable=true]")) {
+          event.currentTarget.focus({ preventScroll: true });
+        }
+      }}
       className="relative flex h-full w-full flex-col bg-surface-muted font-sans text-ink-secondary select-none overflow-hidden"
       onContextMenu={(e) => handleContextMenu(e, null)}
       onDragOver={handleDragOver}
@@ -530,7 +546,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 className="flex items-center space-x-1 overflow-x-auto rounded-lg border border-line/15 bg-surface-muted/80 px-2.5 py-1 text-xs text-ink-secondary font-mono cursor-text hover:border-line/15 transition h-[30px]"
                 title="点击编辑路径 (Ctrl+L)"
               >
-                <span className="text-state-success font-bold shrink-0">🌐</span>
+                <DirectoryIcon className="h-4 w-5 shrink-0" />
                 {breadcrumbs.map((crumb, idx) => (
                   <React.Fragment key={crumb.path}>
                     <button
@@ -562,7 +578,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
               className="flex items-center space-x-1 rounded-lg border border-line/15 bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink hover:border-line/15 transition"
               title="新建文件夹"
             >
-              <span>+📁</span>
+              <FolderPlusIcon className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">新建目录</span>
             </button>
 
@@ -574,7 +590,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
               className="flex items-center space-x-1 rounded-lg border border-line/15 bg-surface px-2.5 py-1 text-xs text-ink-secondary hover:text-ink hover:border-line/15 transition"
               title="新建文件"
             >
-              <span>+📄</span>
+              <PlusIcon className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">新建文件</span>
             </button>
 
@@ -633,7 +649,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
               }`}
               title="显示/隐藏以点开头的隐藏文件 (Ctrl+H)"
             >
-              {showHidden ? "👁️" : "🙈"}
+              {showHidden ? <EyeIcon className="h-3.5 w-3.5" /> : <EyeOffIcon className="h-3.5 w-3.5" />}
             </button>
           </div>
 
@@ -691,7 +707,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
           </div>
         ) : visibleFiles.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-ink-secondary">
-            <span className="text-3xl mb-2">📁</span>
+            <DirectoryIcon className="mb-3 h-12 w-14" />
             <span className="text-xs">此目录为空，或无匹配项</span>
             <span className="text-[11px] text-ink-tertiary mt-1">
               可直接将本地文件拖拽至此上传
@@ -724,32 +740,32 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                     height: `${virtualRow.size}px`,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
-                  className={`grid grid-cols-12 gap-2 items-center px-4 text-xs font-mono transition cursor-pointer border-b border-line/15 ${
+                  className={`grid grid-cols-12 gap-2 items-center px-4 text-xs transition-colors cursor-pointer rounded-lg ${
                     isSelected
-                      ? "bg-indigo-600/25 text-ink border-accent/30"
-                      : "text-ink-secondary hover:bg-surface-muted/60"
+                      ? "bg-action/15 text-ink"
+                      : virtualRow.index % 2 === 0 ? "text-ink-secondary hover:bg-line/5" : "bg-line/[0.025] text-ink-secondary hover:bg-line/5"
                   }`}
                 >
                   {/* 名称 */}
                   <div className="col-span-5 flex items-center gap-2 truncate">
                     {getFileIcon(entry)}
-                    <span className="truncate" title={entry.name}>
+                    <span className={`truncate ${isDir ? "font-medium text-ink" : ""}`} title={entry.name}>
                       {entry.name}
                     </span>
                   </div>
 
                   {/* 大小 */}
-                  <div className="col-span-2 text-right text-ink-secondary">
-                    {isDir ? "-" : formatSize(entry.size)}
+                  <div className="col-span-2 text-right font-mono text-ink-tertiary">
+                    {isDir ? "文件夹" : formatSize(entry.size)}
                   </div>
 
                   {/* 修改时间 */}
-                  <div className="col-span-3 text-center text-ink-secondary">
+                  <div className="col-span-3 text-center font-mono text-ink-tertiary">
                     {formatDate(entry.modified_at)}
                   </div>
 
                   {/* 权限 */}
-                  <div className="col-span-2 text-right text-ink-secondary">
+                  <div className="col-span-2 text-right font-mono text-ink-tertiary">
                     {formatPermissions(entry.permissions)}
                   </div>
                 </div>
@@ -791,7 +807,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   }}
                   className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
                 >
-                  <span>✏️</span>
+                  <PencilIcon className="h-3.5 w-3.5" />
                   <span>在线编辑</span>
                 </button>
               )}
@@ -803,7 +819,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>⬇️</span>
+                <DownloadIcon className="h-3.5 w-3.5" />
                 <span>下载到本地</span>
               </button>
 
@@ -818,7 +834,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>🏷️</span>
+                <PencilIcon className="h-3.5 w-3.5" />
                 <span>重命名</span>
               </button>
 
@@ -832,7 +848,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>🔒</span>
+                <LockIcon className="h-3.5 w-3.5" />
                 <span>修改权限 (Chmod)</span>
               </button>
 
@@ -846,7 +862,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>ℹ️</span>
+                <InfoIcon className="h-3.5 w-3.5" />
                 <span>属性详情</span>
               </button>
 
@@ -863,7 +879,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-state-danger/100/20 text-state-danger text-left transition"
               >
-                <span>🗑️</span>
+                <TrashIcon className="h-3.5 w-3.5" />
                 <span>删除</span>
               </button>
             </>
@@ -877,7 +893,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>📁</span>
+                <DirectoryIcon className="h-4 w-5" />
                 <span>新建文件夹</span>
               </button>
               <button
@@ -888,7 +904,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>📄</span>
+                <FileIcon className="h-3.5 w-3.5" />
                 <span>新建文件</span>
               </button>
               <button
@@ -898,7 +914,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>⬆️</span>
+                <UploadIcon className="h-3.5 w-3.5" />
                 <span>上传文件至此</span>
               </button>
               <div className="my-1 border-t border-line/15" />
@@ -909,7 +925,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface text-left transition"
               >
-                <span>🔄</span>
+                <RefreshIcon className="h-3.5 w-3.5" />
                 <span>刷新</span>
               </button>
             </>
