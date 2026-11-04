@@ -535,7 +535,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
           if (bytes && bytes.length > 0 && !isCancelled) {
             const payload = new Uint8Array(bytes);
             term.write(payload);
-            if (logSessionOutput) {
+            if (useSettingsStore.getState().logSessionOutput) {
               appendSessionLog(tab.tabId, payload);
             }
           }
@@ -560,6 +560,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     lastSizeRef.current = { cols: term.cols, rows: term.rows };
 
     const onIncomingData = (frameBytes: number[]) => {
+      if (terminalRef.current !== term) return;
       const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
       if (live?.connectionId !== tab.connectionId || live.status !== "connected") return;
       if (frameBytes.length < 5) return;
@@ -573,7 +574,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
           ackTerminal(tab.tabId, payload.length).catch(() => {});
         });
 
-        if (logSessionOutput) {
+        if (useSettingsStore.getState().logSessionOutput) {
           appendSessionLog(tab.tabId, payload);
         }
       }
@@ -596,7 +597,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(err));
       }
     });
-  }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, logSessionOutput]);
+  }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId]);
 
   return (
     <div

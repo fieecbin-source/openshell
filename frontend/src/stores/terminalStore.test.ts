@@ -66,9 +66,15 @@ it("closes a late connection result when its tab was closed during the request",
   vi.mocked(connectSession).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
   const pending = useTerminalStore.getState().reconnectTab(tab.tabId);
   await vi.advanceTimersByTimeAsync(0);
-  await useTerminalStore.getState().closeTab(tab.tabId);
+  let finishClose!: () => void;
+  vi.mocked(closeTerminal).mockImplementationOnce(() => new Promise((resolve) => { finishClose = resolve; }));
+  const closing = useTerminalStore.getState().closeTab(tab.tabId);
+  expect(useTerminalStore.getState().tabs).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(0);
   finish({ connection_id: "late-connection", session_id: tab.sessionId });
   await pending;
+  finishClose();
+  await closing;
   expect(useTerminalStore.getState().tabs).toHaveLength(0);
   expect(closeConnection).toHaveBeenCalledWith("late-connection");
 });

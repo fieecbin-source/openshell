@@ -6,6 +6,8 @@ import type { TerminalTab } from "../stores/terminalStore";
 import { useToastStore } from "../stores/toastStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { openTerminal } from "../lib/ipc";
+import { useSettingsStore } from "../stores/settingsStore";
+import { appendSessionLog } from "../lib/terminal-log";
 
 const { term, keys } = vi.hoisted(() => {
   const keys: { handler?: (event: KeyboardEvent) => boolean } = {};
@@ -27,6 +29,7 @@ vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: class {} }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: class { onContextLoss() {} dispose() {} } }));
 vi.mock("./ui/GlassMaterial", () => ({ GlassMaterial: () => null }));
+vi.mock("../lib/terminal-log", () => ({ appendSessionLog: vi.fn(), dropSessionLog: vi.fn() }));
 vi.mock("../lib/ipc", () => ({
   ackTerminal: vi.fn().mockResolvedValue(undefined), openTerminal: vi.fn().mockResolvedValue(undefined),
   resizeTerminal: vi.fn().mockResolvedValue(undefined), writeTerminal: vi.fn().mockResolvedValue(1),
@@ -48,6 +51,7 @@ beforeEach(() => {
   term.getSelection.mockReturnValue("");
   term.hasSelection.mockReturnValue(false);
   useTerminalStore.setState({ tabs: [tab], activeTabId: tab.tabId });
+  useSettingsStore.setState({ logSessionOutput: false });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -104,4 +108,41 @@ it("marks a failed PTY channel disconnected instead of displaying a healthy conn
   await act(async () => root.render(<XtermView tab={replacement} />));
   expect(useTerminalStore.getState().tabs[0].status).toBe("disconnected");
   expect(useTerminalStore.getState().tabs[0].connectionId).toBeNull();
+});
+
+it("only retries on a deliberate Enter keydown while disconnected", () => {
+  const reconnect = vi.spyOn(useTerminalStore.getState(), "reconnectTab").mockResolvedValue(undefined);
+  useTerminalStore.setState({ tabs: [{ ...tab, status: "disconnected", connectionId: null }] });
+  expect(keys.handler!(new KeyboardEvent("keydown", { key: "a" }))).toBe(true);
+  expect(keys.handler!(new KeyboardEvent("keyup", { key: "Enter" }))).toBe(true);
+  expect(keys.handler!(new KeyboardEvent("keydown", { key: "Enter", repeat: true }))).toBe(false);
+  expect(reconnect).not.toHaveBeenCalled();
+  const enter = new KeyboardEvent("keydown", { key: "Enter", cancelable: true });
+  expect(keys.handler!(enter)).toBe(false);
+  expect(enter.defaultPrevented).toBe(true);
+  expect(reconnect).toHaveBeenCalledTimes(1);
+  expect(reconnect).toHaveBeenCalledWith(tab.tabId);
+  reconnect.mockRestore();
+});
+
+it("applies session logging changes to the existing terminal channel", () => {
+  const incoming = vi.mocked(openTerminal).mock.calls[0][4];
+  const frame = [1, 0, 0, 0, 0, 65];
+  incoming(frame);
+  expect(appendSessionLog).not.toHaveBeenCalled();
+  act(() => useSettingsStore.setState({ logSessionOutput: true }));
+  incoming(frame);
+  expect(appendSessionLog).toHaveBeenCalledWith(tab.tabId, new Uint8Array([65]));
+  act(() => useSettingsStore.setState({ logSessionOutput: false }));
+  incoming(frame);
+  expect(appendSessionLog).toHaveBeenCalledTimes(1);
+  expect(openTerminal).toHaveBeenCalledTimes(1);
+});
+
+it("ignores channel data delivered after the terminal view was disposed", () => {
+  const incoming = vi.mocked(openTerminal).mock.calls[0][4];
+  act(() => root.render(null));
+  term.write.mockClear();
+  incoming([1, 0, 0, 0, 0, 65]);
+  expect(term.write).not.toHaveBeenCalled();
 });

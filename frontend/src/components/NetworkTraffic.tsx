@@ -26,7 +26,7 @@ export function NetworkTraffic({ metrics }: { metrics: HostMetrics | null }) {
   const id = useId();
 
   useEffect(() => {
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (collapsed || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     let frame = 0;
     let last = 0;
     const tick = (time: number) => {
@@ -38,7 +38,7 @@ export function NetworkTraffic({ metrics }: { metrics: HostMetrics | null }) {
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [collapsed]);
 
   const ordered = [...history].sort((a, b) => a.timestamp_ms - b.timestamp_ms).slice(-60);
   const samples = metrics && metrics.timestamp_ms > (ordered[ordered.length - 1]?.timestamp_ms ?? 0)

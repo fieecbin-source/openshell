@@ -25,14 +25,6 @@ const num = (value: unknown, fallback = 0): number =>
 
 const fixed = (value: unknown, digits = 1): string => num(value).toFixed(digits);
 
-/** 折叠胶囊只放得下简短速率：B/s 与 K/M 单位，避免撑破 48px 侧栏 */
-const rateLabel = (value: unknown): string => {
-  const bytes = Math.max(0, num(value));
-  if (bytes < 1024) return `${bytes.toFixed(0)}B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(0)}K`;
-  return `${(bytes / 1024 ** 2).toFixed(1)}M`;
-};
-
 export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, collapsed, onOpenMonitor, onOpenContainer }) => {
   const { connId, sessionId } = { connId: tab.connectionId, sessionId: tab.sessionId };
   const connected = tab.status === "connected" && !!connId;
@@ -219,12 +211,6 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, collapsed, on
               />
             </div>
             <span className="text-[9px] font-mono text-ink-secondary mt-1">{memPct}%</span>
-          </div>
-
-          <div className="flex flex-col items-center" title={`上行 ${rateLabel(metrics?.net_tx_bps)}/s · 下行 ${rateLabel(metrics?.net_rx_bps)}/s`}>
-            <span className="mb-1 text-[10px] text-ink-secondary font-bold">NET</span>
-            <span className="font-mono text-[9px] leading-tight text-accent">↑{rateLabel(metrics?.net_tx_bps)}</span>
-            <span className="font-mono text-[9px] leading-tight text-state-success">↓{rateLabel(metrics?.net_rx_bps)}</span>
           </div>
 
           {hasDocker && (

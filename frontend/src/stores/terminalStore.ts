@@ -373,6 +373,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
 
+    // 先移除标签，让仍在连接中的响应立即失效，再异步释放资源。
+    set((state) => {
+      const nextTabs = state.tabs.filter((t) => t.tabId !== tabId);
+      return {
+        tabs: nextTabs,
+        activeTabId: state.activeTabId === tabId
+          ? nextTabs[nextTabs.length - 1]?.tabId ?? null : state.activeTabId,
+      };
+    });
+
     // 等待断线清理完成后，再做最终释放，避免迟到的 closeTerminal 作用到同 ID 的新会话
     await pendingTeardown.get(tabId);
 
@@ -410,19 +420,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
     }
 
-    set((state) => {
-      const nextTabs = state.tabs.filter((t) => t.tabId !== tabId);
-      let nextActiveId = state.activeTabId;
-
-      if (state.activeTabId === tabId) {
-        nextActiveId = nextTabs.length > 0 ? nextTabs[nextTabs.length - 1].tabId : null;
-      }
-
-      return {
-        tabs: nextTabs,
-        activeTabId: nextActiveId,
-      };
-    });
   },
 
   setActiveTab: (tabId: string) => set({ activeTabId: tabId }),
