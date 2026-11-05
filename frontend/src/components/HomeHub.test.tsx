@@ -20,6 +20,7 @@ describe("home group entry points", () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.clearAllMocks();
+    localStorage.clear();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -75,8 +76,33 @@ describe("home group entry points", () => {
     expect(container.querySelector('[aria-label="添加第一台主机"]')).toBeNull();
     expect(container.querySelector('img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
     expect(container.querySelector('img[alt="默认"]')?.getAttribute("src")).toBe("/os/tux.svg");
-    act(() => container.querySelector<HTMLButtonElement>('[title="列表表格视图"]')!.click());
-    expect(container.querySelector('table img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
-    expect(container.querySelector('table img[alt="默认"]')?.getAttribute("src")).toBe("/os/tux.svg");
+    act(() => container.querySelector<HTMLButtonElement>('[title="列表视图"]')!.click());
+    expect(container.querySelector('[aria-label="机器列表视图"] img[alt="Ubuntu"]')?.getAttribute("src")).toBe("/os/ubuntu.svg");
+    expect(container.querySelector('[aria-label="机器列表视图"] img[alt="默认"]')?.getAttribute("src")).toBe("/os/tux.svg");
+  });
+
+  it("keeps the group sections in list view and persists the view preference", () => {
+    const sessions = [
+      { id: "prod-1", name: "Production", group_id: "prod", protocol: "ssh", auth_method: "password" },
+      { id: "staging-1", name: "Staging", group_id: "staging", protocol: "ssh", auth_method: "password" },
+    ] as Session[];
+    act(() => useSessionStore.setState({ sessions }));
+    act(() => container.querySelector<HTMLButtonElement>('[title="列表视图"]')!.click());
+    expect(localStorage.getItem("openshell_home_view_mode_v1")).toBe("list");
+    expect(container.querySelector('[aria-label="生产环境服务器分组"] [aria-label="机器列表视图"]')?.textContent).toContain("Production");
+    expect(container.querySelector('[aria-label="预发布环境服务器分组"] [aria-label="机器列表视图"]')?.textContent).toContain("Staging");
+  });
+
+  it("shows a compact empty state with a working clear action only when filters are active", () => {
+    const search = container.querySelector<HTMLInputElement>('input[placeholder="搜索别名、IP、用户或备注..."]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "missing");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("未找到匹配的机器");
+    const clear = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.trim() === "清除筛选")!;
+    expect(clear).toBeTruthy();
+    act(() => clear.click());
+    expect(container.textContent).not.toContain("未找到匹配的机器");
   });
 });
