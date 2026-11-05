@@ -5,6 +5,8 @@ pub mod errors;
 pub mod handler;
 pub mod known_hosts;
 pub mod manager;
+pub mod proxy;
+pub use proxy::connect_tcp_via_proxy;
 pub mod stream;
 
 pub use base64;

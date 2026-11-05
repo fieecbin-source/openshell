@@ -3,6 +3,7 @@
 mod commands;
 mod error;
 mod profile;
+mod protocol_runtime;
 mod ssh_keys;
 mod updater;
 
@@ -173,6 +174,12 @@ pub fn run() {
             connection_close,
             connection_list,
             terminal_open,
+            proxy_list_get,
+            proxy_list_save,
+            proxy_test,
+            rdp_launch,
+            local_shell_open,
+            telnet_open,
             terminal_write,
             terminal_resize,
             terminal_ack,

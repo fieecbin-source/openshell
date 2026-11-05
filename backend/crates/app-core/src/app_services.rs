@@ -166,6 +166,7 @@ impl AppServices {
         let connection_service = Arc::new(ConnectionService::new(
             session_repo.clone(),
             known_host_repo.clone(),
+            settings_repo.clone(),
             vault_service.clone(), // implements SecretResolver
             ssh_manager.clone(),
             op_registry.clone(),

@@ -29,6 +29,20 @@ struct RunningForward {
     /// 因此状态必须与任务共享，而不是只在启动成功时写一次。
     status: Arc<StdMutex<ForwardStatus>>,
     handle: JoinHandle<()>,
+    remote: Option<(Arc<SshConnection>, String, u16)>,
+}
+
+impl Drop for RunningForward {
+    fn drop(&mut self) {
+        self.handle.abort();
+        if let Some((conn, host, port)) = self.remote.take() {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = conn.stop_remote_forward(&host, port).await;
+                });
+            }
+        }
+    }
 }
 
 fn lock_status(status: &StdMutex<ForwardStatus>) -> std::sync::MutexGuard<'_, ForwardStatus> {
@@ -58,15 +72,6 @@ fn is_loopback_bind(host: &str) -> bool {
 ///
 /// 返回动态转发需要使用的 SOCKS5 口令（未启用认证时为 `None`）。
 fn validate_rule(rule: &PortForwardRule) -> DomainResult<Option<String>> {
-    // 远端反向转发（-R）目前没有真实实现。旧代码只打一条 info 日志就返回成功，
-    // 前端会一直显示「监听中」，属于会误导用户的假功能——这里改为明确报错。
-    if matches!(rule.rule_type, PortForwardType::Remote) {
-        return Err(DomainError::new(
-            ErrorCode::ForwardBind,
-            "远端反向端口转发（Remote / -R）尚未实现，请改用本地转发（Local）或动态 SOCKS5 代理（Dynamic）",
-        ));
-    }
-
     // 监听非回环地址会把内网服务暴露给局域网/公网，必须由用户显式确认风险。
     if !is_loopback_bind(&rule.bind_host) && !rule.expose_warning_ack {
         return Err(DomainError::new(
@@ -139,6 +144,63 @@ impl ForwardManager {
         self.stop_rule(&id).await;
 
         let socks_password = validate_rule(&rule)?;
+
+        if rule.rule_type == PortForwardType::Remote {
+            let dest_host = rule
+                .dest_host
+                .clone()
+                .filter(|h| !h.trim().is_empty())
+                .ok_or_else(|| {
+                    DomainError::new(
+                        ErrorCode::Validation,
+                        "remote forward requires destination host",
+                    )
+                })?;
+            let dest_port = rule.dest_port.filter(|p| *p > 0).ok_or_else(|| {
+                DomainError::new(
+                    ErrorCode::Validation,
+                    "remote forward requires destination port",
+                )
+            })?;
+            let port = conn
+                .start_remote_forward(
+                    &rule.bind_host,
+                    rule.bind_port,
+                    dest_host.clone(),
+                    dest_port,
+                )
+                .await?;
+            let status = Arc::new(StdMutex::new(ForwardStatus::Listening {
+                bound_addr: format!(
+                    "remote:{}:{} -> {}:{}",
+                    rule.bind_host, port, dest_host, dest_port
+                ),
+            }));
+            let mut closed = conn.closed_channel();
+            let task_status = status.clone();
+            let handle = tokio::spawn(async move {
+                while !*closed.borrow() {
+                    if closed.changed().await.is_err() {
+                        break;
+                    }
+                }
+                set_status(
+                    &task_status,
+                    ForwardStatus::Error("SSH connection closed".into()),
+                );
+            });
+            let remote = Some((conn, rule.bind_host.clone(), port as u16));
+            self.running.write().await.insert(
+                id,
+                RunningForward {
+                    rule,
+                    status,
+                    handle,
+                    remote,
+                },
+            );
+            return Ok(());
+        }
 
         let bind_addr = format!("{}:{}", rule.bind_host, rule.bind_port);
         let listener = TcpListener::bind(&bind_addr).await.map_err(|e| {
@@ -248,7 +310,7 @@ impl ForwardManager {
                             });
                         }
                     }
-                    // 已在上面拦截，不会走到这里
+                    // Remote rules are registered before opening a local listener.
                     PortForwardType::Remote => Ok(()),
                 }
             }
@@ -267,6 +329,7 @@ impl ForwardManager {
                 rule,
                 status,
                 handle,
+                remote: None,
             },
         );
 
@@ -276,7 +339,13 @@ impl ForwardManager {
     /// 停止转发规则。
     pub async fn stop_rule(&self, id: &PortForwardId) {
         let mut running = self.running.write().await;
-        if let Some(rf) = running.remove(id) {
+        if let Some(mut rf) = running.remove(id) {
+            drop(running);
+            if let Some((conn, host, port)) = rf.remote.take() {
+                if let Err(error) = conn.stop_remote_forward(&host, port).await {
+                    tracing::warn!(%error, "failed to cancel remote forwarding");
+                }
+            }
             rf.handle.abort();
         }
     }
@@ -284,7 +353,12 @@ impl ForwardManager {
     /// 停止所有活跃转发规则。
     pub async fn stop_all(&self) {
         let mut running = self.running.write().await;
-        for (_, rf) in running.drain() {
+        let forwards: Vec<_> = running.drain().map(|(_, rf)| rf).collect();
+        drop(running);
+        for mut rf in forwards {
+            if let Some((conn, host, port)) = rf.remote.take() {
+                let _ = conn.stop_remote_forward(&host, port).await;
+            }
             rf.handle.abort();
         }
     }
@@ -356,12 +430,13 @@ mod tests {
         assert_eq!(pass.as_deref(), Some("s3cret"));
     }
 
-    /// 远端反向转发未实现，必须明确报错而不是假装成功。
     #[test]
-    fn rejects_remote_forward_as_unimplemented() {
-        let r = rule(PortForwardType::Remote);
-        let err = validate_rule(&r).unwrap_err();
-        assert_eq!(err.code, ErrorCode::ForwardBind);
-        assert!(err.message.contains("尚未实现"));
+    fn validates_remote_forward_exposure() {
+        let mut r = rule(PortForwardType::Remote);
+        assert!(validate_rule(&r).is_ok());
+        r.bind_host = "0.0.0.0".into();
+        assert!(validate_rule(&r).is_err());
+        r.expose_warning_ack = true;
+        assert!(validate_rule(&r).is_ok());
     }
 }

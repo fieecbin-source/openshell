@@ -429,10 +429,25 @@ pub async fn terminal_open(
     let tid = TabId::from_string(&tab_id)?;
     let conn = state.ssh_manager.get(&cid).await?;
     let sid = conn.session_id.clone();
-    let stream = state
+    let session = state.session.get_session(&sid).await?;
+    let mut stream = state
         .ssh_manager
         .open_shell(&cid, TermSize::new(cols, rows))
         .await?;
+    use tokio::io::AsyncWriteExt;
+    if let Some(dir) = session.working_dir.filter(|dir| !dir.is_empty()) {
+        let escaped = dir.replace('\'', "'\\''");
+        stream
+            .write_all(format!("cd -- '{escaped}'\n").as_bytes())
+            .await?;
+    }
+    if let Some(command) = session
+        .startup_command
+        .filter(|command| !command.trim().is_empty())
+    {
+        stream.write_all(format!("{command}\n").as_bytes()).await?;
+    }
+    stream.flush().await?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
 
     let tracker = state.cwd_tracker.clone();
@@ -769,6 +784,17 @@ pub async fn monitor_start(
     interval_sec: Option<u64>,
 ) -> Result<(), IpcError> {
     let sid = SessionId::from_string(&session_id)?;
+    let session = state.session.get_session(&sid).await?;
+    if session
+        .protocol_options_json
+        .as_ref()
+        .and_then(|options| options.get("exec_channel_enable"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        state.monitor.stop_monitoring(&sid).await;
+        return Ok(());
+    }
     let cid = ConnectionId::from_string(&conn_id)?;
     let conn = state.ssh_manager.get(&cid).await?;
     state
@@ -1048,6 +1074,17 @@ pub async fn importer_commit(
                         credential_id: Some(cand.input.credential_id),
                         ssh_key_id: Some(cand.input.ssh_key_id),
                         keepalive_sec: cand.input.keepalive_sec,
+                        proxy_id: cand.input.proxy_id,
+                        proxy_jump_json: Some(cand.input.proxy_jump_json),
+                        startup_command: Some(cand.input.startup_command),
+                        working_dir: Some(cand.input.working_dir),
+                        auto_reconnect: cand.input.auto_reconnect,
+                        reconnect_max: cand.input.reconnect_max,
+                        compression: cand.input.compression,
+                        agent_forwarding: cand.input.agent_forwarding,
+                        x11_forwarding: cand.input.x11_forwarding,
+                        notes: Some(cand.input.notes),
+                        protocol_options_json: Some(cand.input.protocol_options_json),
                         ..Default::default()
                     };
                     state.session.update_session(&sid, patch, None).await?;
@@ -1119,6 +1156,7 @@ pub async fn importer_preview_bundle_json(
             ssh_key_id: s.ssh_key_id,
             host_key_policy: Some(s.host_key_policy),
             proxy_jump_json: s.proxy_jump_json,
+            proxy_id: s.proxy_id,
             terminal_profile_id: s.terminal_profile_id,
             encoding: Some(s.encoding),
             startup_command: s.startup_command,
@@ -1129,6 +1167,7 @@ pub async fn importer_preview_bundle_json(
             reconnect_max: Some(s.reconnect_max),
             compression: Some(s.compression),
             agent_forwarding: Some(s.agent_forwarding),
+            x11_forwarding: Some(s.x11_forwarding),
             tags_json: s.tags_json,
             favorite: Some(s.favorite),
             color: s.color,
@@ -1170,6 +1209,7 @@ pub async fn importer_preview_bundle_encrypted(
             ssh_key_id: s.ssh_key_id,
             host_key_policy: Some(s.host_key_policy),
             proxy_jump_json: s.proxy_jump_json,
+            proxy_id: s.proxy_id,
             terminal_profile_id: s.terminal_profile_id,
             encoding: Some(s.encoding),
             startup_command: s.startup_command,
@@ -1180,6 +1220,7 @@ pub async fn importer_preview_bundle_encrypted(
             reconnect_max: Some(s.reconnect_max),
             compression: Some(s.compression),
             agent_forwarding: Some(s.agent_forwarding),
+            x11_forwarding: Some(s.x11_forwarding),
             tags_json: s.tags_json,
             favorite: Some(s.favorite),
             color: s.color,
@@ -1670,4 +1711,519 @@ pub async fn ai_set_enabled(
 ) -> Result<(), IpcError> {
     state.ai.set_enabled(enabled)?;
     Ok(())
+}
+
+// ==========================================
+// Proxy servers and non-SSH terminal runtimes
+// ==========================================
+
+fn load_proxies(
+    state: &AppServices,
+) -> Result<Vec<openshell_core_domain::ProxyServerConfig>, IpcError> {
+    state
+        .settings_repo
+        .get("global", None, "proxy_list")?
+        .map(|record| {
+            serde_json::from_value(record.value_json).map_err(|_| {
+                openshell_core_domain::DomainError::validation("代理列表格式无效").into()
+            })
+        })
+        .unwrap_or_else(|| Ok(Vec::new()))
+}
+
+#[tauri::command]
+pub async fn proxy_list_get(
+    state: tauri::State<'_, Arc<AppServices>>,
+) -> Result<Vec<openshell_core_domain::ProxyServerConfig>, IpcError> {
+    load_proxies(&state)
+}
+
+#[tauri::command]
+pub async fn proxy_list_save(
+    state: tauri::State<'_, Arc<AppServices>>,
+    proxies: Vec<openshell_core_domain::ProxyServerConfig>,
+) -> Result<Vec<openshell_core_domain::ProxyServerConfig>, IpcError> {
+    let mut ids = std::collections::HashSet::new();
+    for proxy in &proxies {
+        if proxy.id.trim().is_empty()
+            || proxy.name.trim().is_empty()
+            || proxy.host.trim().is_empty()
+            || proxy.port == 0
+            || proxy.host.contains(['\r', '\n', '\0'])
+            || !ids.insert(&proxy.id)
+        {
+            return Err(openshell_core_domain::DomainError::validation(
+                "代理名称、地址、端口或 ID 无效",
+            )
+            .into());
+        }
+    }
+    let value = serde_json::to_value(&proxies)
+        .map_err(|_| openshell_core_domain::DomainError::internal("无法序列化代理列表"))?;
+    state
+        .settings_repo
+        .set("global", None, "proxy_list", value, false)?;
+    Ok(proxies)
+}
+
+#[tauri::command]
+pub async fn proxy_test(
+    proxy: openshell_core_domain::ProxyServerConfig,
+) -> Result<openshell_core_domain::ProxyTestResult, IpcError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let start = std::time::Instant::now();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut socket = tokio::net::TcpStream::connect((proxy.host.as_str(), proxy.port)).await?;
+        if proxy.proxy_type == openshell_core_domain::ProxyType::Socks5 {
+            socket.write_all(&[5, 2, 0, 2]).await?;
+            let mut reply = [0; 2];
+            socket.read_exact(&mut reply).await?;
+            if reply[0] != 5 || ![0, 2].contains(&reply[1]) {
+                return Err(std::io::Error::other("SOCKS5 握手失败"));
+            }
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await;
+    let ok = matches!(result, Ok(Ok(())));
+    Ok(openshell_core_domain::ProxyTestResult {
+        ok,
+        latency_ms: ok.then(|| start.elapsed().as_millis() as u64),
+        message: if ok {
+            "代理端口可达"
+        } else if result.is_err() {
+            "连接超时"
+        } else {
+            "代理连接失败"
+        }
+        .into(),
+    })
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalShellOpenOptions {
+    session_id: Option<String>,
+    shell_kind: Option<String>,
+    shell_path: Option<String>,
+    working_dir: Option<String>,
+    startup_command: Option<String>,
+}
+
+fn attach_runtime(
+    state: &AppServices,
+    tab_id: &str,
+    stream: Box<dyn openshell_core_domain::ByteStream>,
+    on_data: tauri::ipc::Channel<Vec<u8>>,
+) -> Result<(), IpcError> {
+    let tid = TabId::from_string(tab_id)?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+    state.terminal.attach_stream(tid, stream, tx)?;
+    tokio::spawn(async move {
+        while let Some(frame) = rx.recv().await {
+            if on_data.send(frame).is_err() {
+                break;
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn local_shell_open(
+    state: tauri::State<'_, Arc<AppServices>>,
+    tab_id: String,
+    cols: u16,
+    rows: u16,
+    on_data: tauri::ipc::Channel<Vec<u8>>,
+    options: Option<LocalShellOpenOptions>,
+) -> Result<String, IpcError> {
+    let options = options.unwrap_or_default();
+    let session = if let Some(sid) = options.session_id {
+        let session = state
+            .session
+            .get_session(&SessionId::from_string(sid)?)
+            .await?;
+        if session.protocol != Protocol::LocalShell {
+            return Err(
+                openshell_core_domain::DomainError::validation("此连接不是本地终端").into(),
+            );
+        }
+        Some(session)
+    } else {
+        None
+    };
+    let mut config = serde_json::from_value::<crate::protocol_runtime::ShellConfig>(
+        session
+            .as_ref()
+            .and_then(|s| s.protocol_options_json.clone())
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(|_| openshell_core_domain::DomainError::validation("本地终端配置无效"))?;
+    if options.shell_kind.is_some() {
+        config.shell_kind = options.shell_kind;
+    }
+    if options.shell_path.is_some() {
+        config.shell_path = options.shell_path;
+    }
+    let working = options
+        .working_dir
+        .or_else(|| session.as_ref().and_then(|s| s.working_dir.clone()));
+    let startup = options
+        .startup_command
+        .or_else(|| session.as_ref().and_then(|s| s.startup_command.clone()));
+    let mut stream = crate::protocol_runtime::open_shell(config, working, startup).await?;
+    stream.resize(TermSize::new(cols, rows))?;
+    attach_runtime(&state, &tab_id, stream, on_data)?;
+    if let Some(session) = session {
+        state.session.touch_used(&session.id, "ok").await?;
+    }
+    Ok(tab_id)
+}
+
+async fn saved_password(
+    state: &AppServices,
+    session: &Session,
+) -> Option<zeroize::Zeroizing<String>> {
+    use openshell_core_domain::{PromptPolicy, SecretMaterial, SecretResolver};
+    if let Some(id) = &session.credential_id {
+        if let Ok(SecretMaterial::Password(password)) = state
+            .vault
+            .resolve_credential(id, PromptPolicy::StoredOnly)
+            .await
+        {
+            return Some(password);
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub async fn telnet_open(
+    state: tauri::State<'_, Arc<AppServices>>,
+    tab_id: String,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    on_data: tauri::ipc::Channel<Vec<u8>>,
+    overrides: Option<ConnectOverrides>,
+) -> Result<String, IpcError> {
+    let sid = SessionId::from_string(session_id)?;
+    let session = state.session.get_session(&sid).await?;
+    if session.protocol != Protocol::Telnet {
+        return Err(openshell_core_domain::DomainError::validation("此连接不是 Telnet").into());
+    }
+    let overrides = overrides.unwrap_or_default();
+    let host = overrides
+        .host
+        .or_else(|| session.host.clone())
+        .filter(|h| !h.trim().is_empty())
+        .ok_or_else(|| openshell_core_domain::DomainError::validation("主机不能为空"))?;
+    let port = overrides.port.or(session.port).unwrap_or(23);
+    if port == 0 {
+        return Err(openshell_core_domain::DomainError::validation("端口无效").into());
+    }
+    let proxies = load_proxies(&state)?;
+    let proxy = if let Some(id) = &session.proxy_id {
+        Some(
+            proxies
+                .iter()
+                .find(|p| &p.id == id)
+                .ok_or_else(|| openshell_core_domain::DomainError::not_found("代理服务器不存在"))?,
+        )
+    } else {
+        None
+    };
+    let socket = openshell_ssh::connect_tcp_via_proxy(
+        &host,
+        port,
+        proxy,
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    let config = serde_json::from_value::<crate::protocol_runtime::TelnetConfig>(
+        session
+            .protocol_options_json
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(|_| openshell_core_domain::DomainError::validation("Telnet 配置无效"))?;
+    let username = overrides.username.or_else(|| session.username.clone());
+    let password = match overrides.password {
+        Some(password) => Some(zeroize::Zeroizing::new(password)),
+        None => saved_password(&state, &session).await,
+    };
+    let mut stream = crate::protocol_runtime::open_telnet(socket, config, username, password);
+    stream.resize(TermSize::new(cols, rows))?;
+    attach_runtime(&state, &tab_id, stream, on_data)?;
+    state.session.touch_used(&sid, "ok").await?;
+    Ok(tab_id)
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+pub struct RdpLaunchOverrides {
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    fullscreen: Option<bool>,
+    width: Option<u32>,
+    height: Option<u32>,
+    drivestoredirect: Option<bool>,
+}
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct RdpOptions {
+    fullscreen: bool,
+    custom_size: bool,
+    width: Option<u32>,
+    height: Option<u32>,
+    drivestoredirect: bool,
+    redirect_clipboard: Option<bool>,
+    redirect_printers: bool,
+    redirect_audio: Option<String>,
+    domain: Option<String>,
+    admin_session: bool,
+}
+#[derive(Serialize)]
+pub struct RdpLaunchResult {
+    session_id: String,
+    rdp_file_path: String,
+    pid: Option<u32>,
+    host: String,
+    port: u16,
+}
+
+fn rdp_config(
+    host: &str,
+    port: u16,
+    username: &str,
+    options: &RdpOptions,
+) -> Result<String, openshell_core_domain::DomainError> {
+    if host.trim().is_empty()
+        || host.contains(['\r', '\n', '\0'])
+        || username.contains(['\r', '\n', '\0'])
+        || options
+            .domain
+            .as_deref()
+            .is_some_and(|d| d.contains(['\r', '\n', '\0']))
+        || port == 0
+    {
+        return Err(openshell_core_domain::DomainError::validation(
+            "远程桌面地址或用户名无效",
+        ));
+    }
+    let width = if options.custom_size {
+        options.width.unwrap_or(1920)
+    } else {
+        1920
+    };
+    let height = if options.custom_size {
+        options.height.unwrap_or(1080)
+    } else {
+        1080
+    };
+    if options.custom_size && (!(200..=8192).contains(&width) || !(200..=8192).contains(&height)) {
+        return Err(openshell_core_domain::DomainError::validation(
+            "远程桌面分辨率无效",
+        ));
+    }
+    let address = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let audio = match options.redirect_audio.as_deref().unwrap_or("local") {
+        "local" => 0,
+        "remote" => 1,
+        "none" => 2,
+        _ => {
+            return Err(openshell_core_domain::DomainError::validation(
+                "音频重定向配置无效",
+            ))
+        }
+    };
+    let mut output=format!("full address:s:{address}\r\nusername:s:{username}\r\nscreen mode id:i:{}\r\nsmart sizing:i:1\r\nredirectclipboard:i:{}\r\nredirectprinters:i:{}\r\ndrivestoredirect:s:{}\r\naudiomode:i:{audio}\r\nadministrative session:i:{}\r\n", if options.fullscreen {2}else{1},u8::from(options.redirect_clipboard.unwrap_or(true)),u8::from(options.redirect_printers),if options.drivestoredirect {"*"}else{""},u8::from(options.admin_session));
+    output.push_str(&format!(
+        "desktopwidth:i:{width}\r\ndesktopheight:i:{height}\r\n"
+    ));
+    if let Some(domain) = &options.domain {
+        output.push_str(&format!("domain:s:{domain}\r\n"));
+    }
+    Ok(output)
+}
+
+#[tauri::command]
+pub async fn rdp_launch(
+    state: tauri::State<'_, Arc<AppServices>>,
+    session_id: String,
+    overrides: Option<RdpLaunchOverrides>,
+) -> Result<RdpLaunchResult, IpcError> {
+    if !cfg!(windows) {
+        return Err(openshell_core_domain::DomainError::new(
+            openshell_core_domain::ErrorCode::Unsupported,
+            "远程桌面启动仅支持 Windows",
+        )
+        .into());
+    }
+    let sid = SessionId::from_string(&session_id)?;
+    let session = state.session.get_session(&sid).await?;
+    if session.protocol != Protocol::Rdp {
+        return Err(
+            openshell_core_domain::DomainError::validation("此连接不是 Windows 远程桌面").into(),
+        );
+    }
+    if session.proxy_id.as_deref().is_some_and(|id| !id.is_empty())
+        || session.proxy_jump_json.is_some()
+    {
+        return Err(openshell_core_domain::DomainError::new(
+            openshell_core_domain::ErrorCode::Unsupported,
+            "Windows 远程桌面不支持此 HTTP/SOCKS 代理或 SSH 跳板配置",
+        )
+        .into());
+    }
+    let overrides = overrides.unwrap_or_default();
+    let mut options = serde_json::from_value::<RdpOptions>(
+        session
+            .protocol_options_json
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(|_| openshell_core_domain::DomainError::validation("远程桌面配置无效"))?;
+    if let Some(value) = overrides.fullscreen {
+        options.fullscreen = value;
+    }
+    if let Some(value) = overrides.drivestoredirect {
+        options.drivestoredirect = value;
+    }
+    if let Some(value) = overrides.width {
+        options.width = Some(value);
+        options.custom_size = true;
+    }
+    if let Some(value) = overrides.height {
+        options.height = Some(value);
+        options.custom_size = true;
+    }
+    let host = overrides
+        .host
+        .or_else(|| session.host.clone())
+        .unwrap_or_default();
+    let port = overrides.port.or(session.port).unwrap_or(3389);
+    let username = overrides
+        .username
+        .or_else(|| session.username.clone())
+        .unwrap_or_default();
+    let contents = rdp_config(&host, port, &username, &options)?;
+    let password = match overrides.password {
+        Some(password) => Some(zeroize::Zeroizing::new(password)),
+        None => saved_password(&state, &session).await,
+    };
+    if !session_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(openshell_core_domain::DomainError::validation("会话 ID 无效").into());
+    }
+    let file = std::env::temp_dir()
+        .join("openshell_rdp")
+        .join(format!("{session_id}.rdp"));
+    tokio::fs::create_dir_all(
+        file.parent()
+            .ok_or_else(|| openshell_core_domain::DomainError::internal("远程桌面路径无效"))?,
+    )
+    .await?;
+    let data: Vec<u8> = std::iter::once(0xfeffu16)
+        .chain(contents.encode_utf16())
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    tokio::fs::write(&file, data).await?;
+    #[cfg(windows)]
+    let pid = {
+        let launch_file = file.clone();
+        let launch_host = host.clone();
+        let launch_user = match options.domain.filter(|d| !d.is_empty()) {
+            Some(domain) => format!("{domain}\\{username}"),
+            None => username,
+        };
+        tokio::task::spawn_blocking(
+            move || -> Result<Option<u32>, openshell_core_domain::DomainError> {
+                use std::os::windows::process::CommandExt;
+                if let Some(password) = password.filter(|_| !launch_user.is_empty()) {
+                    let status = std::process::Command::new("cmdkey.exe")
+                        .creation_flags(0x08000000)
+                        .args([
+                            format!("/generic:TERMSRV/{launch_host}"),
+                            format!("/user:{launch_user}"),
+                            format!("/pass:{}", password.as_str()),
+                        ])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()?;
+                    if !status.success() {
+                        return Err(openshell_core_domain::DomainError::new(
+                            openshell_core_domain::ErrorCode::AuthFailed,
+                            "无法注册远程桌面凭据",
+                        ));
+                    }
+                }
+                Ok(Some(
+                    std::process::Command::new("mstsc.exe")
+                        .arg(launch_file)
+                        .spawn()?
+                        .id(),
+                ))
+            },
+        )
+        .await
+        .map_err(|_| openshell_core_domain::DomainError::internal("远程桌面启动任务失败"))??
+    };
+    #[cfg(not(windows))]
+    let pid: Option<u32> = {
+        let _ = password;
+        None
+    };
+    state.session.touch_used(&sid, "ok").await?;
+    Ok(RdpLaunchResult {
+        session_id,
+        rdp_file_path: file.to_string_lossy().into_owned(),
+        pid,
+        host,
+        port,
+    })
+}
+
+#[cfg(test)]
+mod protocol_command_tests {
+    use super::*;
+    #[test]
+    fn local_shell_options_use_ipc_camel_case() {
+        let options: LocalShellOpenOptions = serde_json::from_value(
+            serde_json::json!({"sessionId":"abc","shellKind":"cmd","workingDir":"C:/"}),
+        )
+        .unwrap();
+        assert_eq!(options.session_id.as_deref(), Some("abc"));
+        assert_eq!(options.shell_kind.as_deref(), Some("cmd"));
+        assert_eq!(options.working_dir.as_deref(), Some("C:/"));
+    }
+    #[test]
+    fn rdp_file_validates_lines_and_maps_options() {
+        let default = rdp_config("host", 3389, "user", &RdpOptions::default()).unwrap();
+        assert!(default.contains("desktopwidth:i:1920\r\n"));
+        assert!(default.contains("desktopheight:i:1080\r\n"));
+        let options = RdpOptions {
+            fullscreen: true,
+            custom_size: true,
+            width: Some(1280),
+            height: Some(720),
+            drivestoredirect: true,
+            redirect_audio: Some("remote".into()),
+            ..Default::default()
+        };
+        let config = rdp_config("::1", 3389, "user", &options).unwrap();
+        assert!(config.contains("full address:s:[::1]:3389\r\n"));
+        assert!(config.contains("desktopwidth:i:1280\r\n"));
+        assert!(config.contains("audiomode:i:1\r\n"));
+        assert!(rdp_config("host\r\npassword:s:bad", 3389, "user", &options).is_err());
+    }
 }

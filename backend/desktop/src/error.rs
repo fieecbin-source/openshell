@@ -31,3 +31,9 @@ impl From<openshell_updater::UpdaterError> for IpcError {
         DomainError::from(err).into()
     }
 }
+
+impl From<std::io::Error> for IpcError {
+    fn from(err: std::io::Error) -> Self {
+        DomainError::from(err).into()
+    }
+}

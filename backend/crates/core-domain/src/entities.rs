@@ -109,16 +109,26 @@ pub struct SessionInput {
     pub ssh_key_id: Option<SshKeyId>,
     pub host_key_policy: Option<HostKeyPolicy>,
     pub proxy_jump_json: Option<serde_json::Value>,
+    #[serde(default)]
+    pub proxy_id: Option<String>,
     pub terminal_profile_id: Option<String>,
     pub encoding: Option<String>,
+    #[serde(default)]
     pub startup_command: Option<String>,
+    #[serde(default)]
     pub working_dir: Option<String>,
     pub keepalive_sec: Option<i64>,
     pub keepalive_max_miss: Option<i64>,
+    #[serde(default)]
     pub auto_reconnect: Option<bool>,
+    #[serde(default)]
     pub reconnect_max: Option<i64>,
+    #[serde(default)]
     pub compression: Option<bool>,
+    #[serde(default)]
     pub agent_forwarding: Option<bool>,
+    #[serde(default)]
+    pub x11_forwarding: Option<bool>,
     pub tags_json: Option<serde_json::Value>,
     pub favorite: Option<bool>,
     pub color: Option<String>,
@@ -142,16 +152,26 @@ pub struct SessionPatch {
     pub ssh_key_id: Option<Option<SshKeyId>>,
     pub host_key_policy: Option<HostKeyPolicy>,
     pub proxy_jump_json: Option<Option<serde_json::Value>>,
+    #[serde(default)]
+    pub proxy_id: Option<String>,
     pub terminal_profile_id: Option<Option<String>>,
     pub encoding: Option<String>,
+    #[serde(default)]
     pub startup_command: Option<Option<String>>,
+    #[serde(default)]
     pub working_dir: Option<Option<String>>,
     pub keepalive_sec: Option<i64>,
     pub keepalive_max_miss: Option<i64>,
+    #[serde(default)]
     pub auto_reconnect: Option<bool>,
+    #[serde(default)]
     pub reconnect_max: Option<i64>,
+    #[serde(default)]
     pub compression: Option<bool>,
+    #[serde(default)]
     pub agent_forwarding: Option<bool>,
+    #[serde(default)]
+    pub x11_forwarding: Option<bool>,
     pub tags_json: Option<Option<serde_json::Value>>,
     pub favorite: Option<bool>,
     pub color: Option<Option<String>>,

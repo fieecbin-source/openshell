@@ -5,7 +5,7 @@ use openshell_core_domain::{
     KnownHostRepository, RemoteForwardHandle, TermSize,
 };
 use std::collections::HashMap;
-use std::net::SocketAddr;
+
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -30,6 +30,33 @@ impl SshConnectionManager {
         let mut conns = self.connections.write().await;
         conns.insert(conn_id.clone(), conn);
         Ok(conn_id)
+    }
+
+    pub async fn connect_via_proxy(
+        &self,
+        opts: ConnectOptions,
+        repo: Option<Arc<dyn KnownHostRepository>>,
+        proxy: Option<&openshell_core_domain::ProxyServerConfig>,
+    ) -> DomainResult<ConnectionId> {
+        let id = opts.connection_id.clone();
+        let conn = Arc::new(SshConnection::connect_via_proxy(opts, repo, proxy).await?);
+        self.connections.write().await.insert(id.clone(), conn);
+        Ok(id)
+    }
+
+    pub async fn connect_stream<S>(
+        &self,
+        opts: ConnectOptions,
+        repo: Option<Arc<dyn KnownHostRepository>>,
+        stream: S,
+    ) -> DomainResult<ConnectionId>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let id = opts.connection_id.clone();
+        let conn = Arc::new(SshConnection::connect_stream(opts, repo, stream).await?);
+        self.connections.write().await.insert(id.clone(), conn);
+        Ok(id)
     }
 
     pub async fn disconnect(&self, c: &ConnectionId) -> DomainResult<()> {
@@ -76,28 +103,6 @@ impl Default for SshConnectionManager {
     }
 }
 
-struct DummyRemoteHandle {
-    addr: SocketAddr,
-}
-
-#[async_trait]
-impl RemoteForwardHandle for DummyRemoteHandle {
-    async fn accept(&mut self) -> DomainResult<Box<dyn ByteStream>> {
-        Err(DomainError::new(
-            ErrorCode::Unsupported,
-            "remote port forward incoming accept not yet attached",
-        ))
-    }
-
-    fn bound_addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    async fn close(&mut self) -> DomainResult<()> {
-        Ok(())
-    }
-}
-
 #[async_trait]
 impl ChannelOpener for SshConnectionManager {
     async fn open_shell(
@@ -133,11 +138,11 @@ impl ChannelOpener for SshConnectionManager {
         &self,
         _c: &ConnectionId,
         _host: &str,
-        port: u16,
+        _port: u16,
     ) -> DomainResult<Box<dyn RemoteForwardHandle>> {
-        let addr = format!("127.0.0.1:{}", port)
-            .parse::<SocketAddr>()
-            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
-        Ok(Box::new(DummyRemoteHandle { addr }))
+        Err(DomainError::new(
+            ErrorCode::Unsupported,
+            "use SshConnection::start_remote_forward with an explicit destination",
+        ))
     }
 }

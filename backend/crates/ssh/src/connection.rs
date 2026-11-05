@@ -28,12 +28,16 @@ pub struct ConnectOptions {
     /// 连续多少次 keepalive 失败后判定连接已失联（默认 3）
     pub keepalive_max_miss: u32,
     pub timeout_sec: u64,
+    pub compression: bool,
+    pub agent_forwarding: bool,
 }
 
 pub struct SshConnection {
     pub connection_id: ConnectionId,
     pub session_id: SessionId,
     handle: Arc<Mutex<russh::client::Handle<OpenShellClientHandler>>>,
+    remote_routes: crate::handler::RemoteRoutes,
+    agent_forwarding: bool,
     /// 连接被判定关闭（远端断开 / 保活失联）时置为 true
     closed_tx: Arc<tokio::sync::watch::Sender<bool>>,
     _health_task: Option<JoinHandle<()>>,
@@ -52,6 +56,32 @@ impl SshConnection {
         opts: ConnectOptions,
         known_host_repo: Option<Arc<dyn KnownHostRepository>>,
     ) -> DomainResult<Self> {
+        Self::connect_via_proxy(opts, known_host_repo, None).await
+    }
+
+    pub async fn connect_via_proxy(
+        opts: ConnectOptions,
+        known_host_repo: Option<Arc<dyn KnownHostRepository>>,
+        proxy: Option<&openshell_core_domain::ProxyServerConfig>,
+    ) -> DomainResult<Self> {
+        let stream = crate::connect_tcp_via_proxy(
+            &opts.host,
+            opts.port,
+            proxy,
+            Duration::from_secs(opts.timeout_sec.clamp(5, 60)),
+        )
+        .await?;
+        Self::connect_stream(opts, known_host_repo, stream).await
+    }
+
+    pub async fn connect_stream<S>(
+        opts: ConnectOptions,
+        known_host_repo: Option<Arc<dyn KnownHostRepository>>,
+        stream: S,
+    ) -> DomainResult<Self>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         let timeout_dur = Duration::from_secs(if opts.timeout_sec == 0 {
             15
         } else {
@@ -68,32 +98,44 @@ impl SshConnection {
         // 交互式终端立即发送小包，避免 Nagle 合并按键数据带来的等待。
         let config = Arc::new(russh::client::Config {
             nodelay: true,
+            preferred: russh::Preferred {
+                compression: std::borrow::Cow::Owned(if opts.compression {
+                    vec![russh::compression::ZLIB, russh::compression::NONE]
+                } else {
+                    vec![russh::compression::NONE]
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let addr = format!("{}:{}", host_clean, opts.port);
-        let handler = OpenShellClientHandler::new(verifier);
+        let mut handler = OpenShellClientHandler::new(verifier);
+        handler.agent_forwarding = opts.agent_forwarding;
         // 主机密钥校验发生在握手阶段，russh 只返回通用错误；通过共享槽位把具体原因取回来。
         let host_key_error = handler.host_key_error_slot();
+        let remote_routes = handler.remote_routes.clone();
 
         // 1. TCP + SSH 协议握手
-        let mut handle =
-            match tokio::time::timeout(timeout_dur, russh::client::connect(config, &addr, handler))
-                .await
-            {
-                Err(_) => {
-                    return Err(DomainError::new(
-                        ErrorCode::Timeout,
-                        format!("连接到服务器 {addr} 超时，请检查目标 IP/端口可达性以及防火墙设置"),
-                    ))
+        let mut handle = match tokio::time::timeout(
+            timeout_dur,
+            russh::client::connect_stream(config, stream, handler),
+        )
+        .await
+        {
+            Err(_) => {
+                return Err(DomainError::new(
+                    ErrorCode::Timeout,
+                    format!("连接到服务器 {addr} 超时，请检查目标 IP/端口可达性以及防火墙设置"),
+                ))
+            }
+            Ok(Ok(handle)) => handle,
+            Ok(Err(err)) => {
+                if let Some(host_key_err) = host_key_error.lock().ok().and_then(|g| g.clone()) {
+                    return Err(host_key_err);
                 }
-                Ok(Ok(handle)) => handle,
-                Ok(Err(err)) => {
-                    if let Some(host_key_err) = host_key_error.lock().ok().and_then(|g| g.clone()) {
-                        return Err(host_key_err);
-                    }
-                    return Err(map_russh_error(err));
-                }
-            };
+                return Err(map_russh_error(err));
+            }
+        };
 
         // 2. 身份认证
         //
@@ -493,6 +535,8 @@ impl SshConnection {
             connection_id: opts.connection_id,
             session_id: opts.session_id,
             handle: handle_arc,
+            remote_routes,
+            agent_forwarding: opts.agent_forwarding,
             closed_tx,
             _health_task: Some(health_handle),
         })
@@ -519,6 +563,9 @@ impl SshConnection {
             )
             .await
             .map_err(map_russh_error)?;
+        if self.agent_forwarding {
+            channel.agent_forward(true).await.map_err(map_russh_error)?;
+        }
         channel.request_shell(true).await.map_err(map_russh_error)?;
         Ok(bridge_channel(channel))
     }
@@ -600,6 +647,67 @@ impl SshConnection {
             .await
             .map_err(map_russh_error)?;
         Ok(bridge_channel(channel))
+    }
+
+    pub async fn start_remote_forward(
+        &self,
+        bind_host: &str,
+        bind_port: u16,
+        dest_host: String,
+        dest_port: u16,
+    ) -> DomainResult<u32> {
+        let key = (bind_host.to_string(), bind_port as u32);
+        {
+            let mut routes = self.remote_routes.lock().await;
+            if routes.contains_key(&key) {
+                return Err(DomainError::new(
+                    ErrorCode::ForwardBind,
+                    "remote address already forwarded",
+                ));
+            }
+            routes.insert(key.clone(), (dest_host, dest_port));
+        }
+        let result = self
+            .handle
+            .lock()
+            .await
+            .tcpip_forward(bind_host, bind_port as u32)
+            .await;
+        match result {
+            Ok(allocated) => {
+                let port = if bind_port == 0 {
+                    allocated
+                } else {
+                    bind_port as u32
+                };
+                if port != bind_port as u32 {
+                    let mut routes = self.remote_routes.lock().await;
+                    if let Some(dest) = routes.remove(&key) {
+                        routes.insert((bind_host.to_string(), port), dest);
+                    }
+                }
+                Ok(port)
+            }
+            Err(e) => {
+                self.remote_routes.lock().await.remove(&key);
+                Err(map_russh_error(e))
+            }
+        }
+    }
+
+    pub async fn stop_remote_forward(&self, bind_host: &str, bind_port: u16) -> DomainResult<()> {
+        // Revoke the local route even when the server refuses or loses the cancellation reply.
+        self.remote_routes
+            .lock()
+            .await
+            .remove(&(bind_host.to_string(), bind_port as u32));
+        self.handle
+            .lock()
+            .await
+            .cancel_tcpip_forward(bind_host, bind_port as u32)
+            .await
+            .map_err(map_russh_error)
+            .map(|_| ())
     }
 
     pub async fn open_sftp(&self) -> DomainResult<Box<dyn ByteStream>> {

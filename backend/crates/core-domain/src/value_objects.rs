@@ -10,6 +10,7 @@ pub enum Protocol {
     Telnet,
     Serial,
     LocalShell,
+    Rdp,
 }
 
 impl Protocol {
@@ -20,6 +21,7 @@ impl Protocol {
             Protocol::Telnet => "telnet",
             Protocol::Serial => "serial",
             Protocol::LocalShell => "local_shell",
+            Protocol::Rdp => "rdp",
         }
     }
 
@@ -28,12 +30,16 @@ impl Protocol {
             Protocol::Ssh => Some(22),
             Protocol::Sftp => Some(22),
             Protocol::Telnet => Some(23),
+            Protocol::Rdp => Some(3389),
             Protocol::Serial | Protocol::LocalShell => None,
         }
     }
 
     pub fn requires_host(&self) -> bool {
-        matches!(self, Protocol::Ssh | Protocol::Sftp | Protocol::Telnet)
+        matches!(
+            self,
+            Protocol::Ssh | Protocol::Sftp | Protocol::Telnet | Protocol::Rdp
+        )
     }
 }
 
@@ -46,6 +52,7 @@ impl std::str::FromStr for Protocol {
             "telnet" => Ok(Protocol::Telnet),
             "serial" => Ok(Protocol::Serial),
             "local_shell" => Ok(Protocol::LocalShell),
+            "rdp" | "mstsc" | "windows" => Ok(Protocol::Rdp),
             other => Err(crate::DomainError::validation(format!(
                 "unknown protocol: {other}"
             ))),
@@ -296,4 +303,59 @@ pub enum FileEntryType {
     Directory,
     Symlink,
     Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyType {
+    Http,
+    Socks4,
+    Socks5,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyServerConfig {
+    pub id: String,
+    pub name: String,
+    pub proxy_type: ProxyType,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<i64>,
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyTestResult {
+    pub ok: bool,
+    pub latency_ms: Option<u64>,
+    pub message: String,
+}
+
+#[cfg(test)]
+mod task1_tests {
+    use super::*;
+
+    #[test]
+    fn rdp_wire_value_and_aliases() {
+        for alias in ["rdp", "mstsc", "windows"] {
+            let protocol: Protocol = alias.parse().unwrap();
+            assert_eq!(protocol, Protocol::Rdp);
+            assert_eq!(protocol.default_port(), Some(3389));
+            assert!(protocol.requires_host());
+            assert_eq!(protocol.as_str(), "rdp");
+        }
+        assert_eq!(serde_json::to_string(&Protocol::Rdp).unwrap(), "\"rdp\"");
+        assert_eq!(
+            serde_json::from_str::<Protocol>("\"rdp\"").unwrap(),
+            Protocol::Rdp
+        );
+    }
 }

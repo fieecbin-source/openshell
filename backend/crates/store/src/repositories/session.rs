@@ -82,6 +82,9 @@ fn apply_patch(mut s: Session, patch: SessionPatch) -> Session {
     if let Some(v) = patch.proxy_jump_json {
         s.proxy_jump_json = v;
     }
+    if let Some(v) = patch.proxy_id {
+        s.proxy_id = (!v.trim().is_empty()).then_some(v);
+    }
     if let Some(v) = patch.terminal_profile_id {
         s.terminal_profile_id = v;
     }
@@ -111,6 +114,9 @@ fn apply_patch(mut s: Session, patch: SessionPatch) -> Session {
     }
     if let Some(v) = patch.agent_forwarding {
         s.agent_forwarding = v;
+    }
+    if let Some(v) = patch.x11_forwarding {
+        s.x11_forwarding = v;
     }
     if let Some(v) = patch.tags_json {
         s.tags_json = v;
@@ -209,18 +215,18 @@ impl SessionRepository for SessionRepo {
             // 新会话默认严格校验主机密钥；首次连接必须由用户显式确认指纹。
             host_key_policy: input.host_key_policy.unwrap_or(HostKeyPolicy::Strict),
             proxy_jump_json: input.proxy_jump_json,
-            proxy_id: None,
+            proxy_id: input.proxy_id.filter(|v| !v.trim().is_empty()),
             terminal_profile_id: input.terminal_profile_id,
             encoding: input.encoding.unwrap_or_else(|| "UTF-8".to_string()),
             startup_command: input.startup_command,
             working_dir: input.working_dir,
             keepalive_sec: input.keepalive_sec.unwrap_or(30),
             keepalive_max_miss: input.keepalive_max_miss.unwrap_or(3),
-            auto_reconnect: input.auto_reconnect.unwrap_or(false),
-            reconnect_max: input.reconnect_max.unwrap_or(7),
+            auto_reconnect: input.auto_reconnect.unwrap_or(true),
+            reconnect_max: input.reconnect_max.unwrap_or(5),
             compression: input.compression.unwrap_or(false),
             agent_forwarding: input.agent_forwarding.unwrap_or(false),
-            x11_forwarding: false,
+            x11_forwarding: input.x11_forwarding.unwrap_or(false),
             tags_json: Some(input.tags_json.unwrap_or_else(|| Value::Array(Vec::new()))),
             favorite: input.favorite.unwrap_or(false),
             color: input.color,
@@ -473,5 +479,52 @@ impl SessionRepository for SessionRepo {
             tx.commit().map_err(map_sql_error)?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn advanced_fields_round_trip_and_proxy_can_be_cleared() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let repo = SessionRepo::new(store);
+        let input: SessionInput = serde_json::from_value(serde_json::json!({
+            "name": "RDP", "protocol": "rdp", "host": "example.test",
+            "proxy_id": "proxy-1", "startup_command": "echo ready",
+            "working_dir": "/tmp", "auto_reconnect": false, "reconnect_max": 2,
+            "compression": true, "agent_forwarding": true, "x11_forwarding": true
+        }))
+        .unwrap();
+        let created = repo.create(input).await.unwrap();
+        let saved = repo.get(&created.id).await.unwrap();
+        assert_eq!(saved.protocol, Protocol::Rdp);
+        assert_eq!(saved.port, Some(3389));
+        assert_eq!(saved.proxy_id.as_deref(), Some("proxy-1"));
+        assert_eq!(saved.startup_command.as_deref(), Some("echo ready"));
+        assert_eq!(saved.working_dir.as_deref(), Some("/tmp"));
+        assert!(!saved.auto_reconnect);
+        assert_eq!(saved.reconnect_max, 2);
+        assert!(saved.compression && saved.agent_forwarding && saved.x11_forwarding);
+        let patch: SessionPatch = serde_json::from_value(serde_json::json!({
+            "proxy_id": "", "startup_command": "whoami", "working_dir": "/home",
+            "auto_reconnect": true, "reconnect_max": 9, "compression": false,
+            "agent_forwarding": false, "x11_forwarding": false
+        }))
+        .unwrap();
+        repo.update(&created.id, patch, None).await.unwrap();
+        let updated = repo.get(&created.id).await.unwrap();
+        assert_eq!(updated.proxy_id, None);
+        assert_eq!(updated.startup_command.as_deref(), Some("whoami"));
+        assert_eq!(updated.working_dir.as_deref(), Some("/home"));
+        assert!(updated.auto_reconnect);
+        assert_eq!(updated.reconnect_max, 9);
+        assert!(!updated.compression && !updated.agent_forwarding && !updated.x11_forwarding);
+        let defaults = repo.create(SessionInput::default()).await.unwrap();
+        assert!(defaults.auto_reconnect);
+        assert_eq!(defaults.reconnect_max, 5);
+        assert!(!defaults.compression && !defaults.agent_forwarding && !defaults.x11_forwarding);
     }
 }

@@ -76,6 +76,7 @@ fn parse_protocol(s: String) -> rusqlite::Result<Protocol> {
         "telnet" => Ok(Protocol::Telnet),
         "serial" => Ok(Protocol::Serial),
         "local_shell" => Ok(Protocol::LocalShell),
+        "rdp" => Ok(Protocol::Rdp),
         _ => Err(bad_value(3, "invalid protocol")),
     }
 }
