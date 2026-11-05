@@ -30,7 +30,6 @@ import {
   DEFAULT_HOST_ICON_KEY,
   normalizeHostIconKey,
   detectHostIcon,
-  hostIconLabel,
 } from "../lib/hostIcons";
 import { XIcon, KeyIcon, PlugIcon, PlayIcon, TriangleAlertIcon } from "./ui/icons";
 
@@ -108,13 +107,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     checkStatus: refreshVaultStatus,
   } = useVaultStore();
 
-  const [activeTab, setActiveTab] = useState<"general" | "advanced">("general");
-  const [advancedTab, setAdvancedTab] = useState<"general" | "jump" | "icon">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "advanced" | "icon">("general");
 
   const [protocol, setProtocol] = useState<Protocol>("ssh");
   const [name, setName] = useState("");
   const [iconKey, setIconKey] = useState(DEFAULT_HOST_ICON_KEY);
-  const [iconHint, setIconHint] = useState<string | null>(null);
   const [groupId, setGroupId] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
@@ -158,14 +155,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const applyAutoIcon = () => {
-    const detected = detectHostIcon({ name, host, username, protocol });
-    setIconKey(detected);
-    setIconHint(`已根据主机信息识别为「${hostIconLabel(detected)}」`);
+    setIconKey(detectHostIcon({ name, host, username, protocol }));
   };
 
   const selectIcon = (key: string) => {
     setIconKey(key);
-    setIconHint(null);
   };
 
   const loadKeys = async (preferId?: string) => {
@@ -569,11 +563,14 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
         {/* SSH 模式下的标签页导航 */}
         {protocol === "ssh" && (
-          <div className="flex items-center space-x-1 border-b border-line/15 mb-4 shrink-0 text-xs">
+          <div role="tablist" aria-label="会话设置分类"
+            className="flex items-center gap-1 border-b border-line/15 mb-4 shrink-0 text-xs overflow-x-auto">
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === "general"}
               onClick={() => setActiveTab("general")}
-              className={`pb-2 px-3 border-b-2 font-medium transition ${
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${
                 activeTab === "general"
                   ? "border-accent text-accent font-bold"
                   : "border-transparent text-ink-secondary hover:text-ink"
@@ -583,8 +580,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === "advanced"}
               onClick={() => setActiveTab("advanced")}
-              className={`pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 ${
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${
                 activeTab === "advanced"
                   ? "border-accent text-accent font-bold"
                   : "border-transparent text-ink-secondary hover:text-ink"
@@ -594,6 +593,19 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               {jumpHostSessionId && (
                 <span className="h-1.5 w-1.5 rounded-full bg-state-warning" />
               )}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "icon"}
+              onClick={() => setActiveTab("icon")}
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${
+                activeTab === "icon"
+                  ? "border-accent text-accent font-bold"
+                  : "border-transparent text-ink-secondary hover:text-ink"
+              }`}
+            >
+              图标
             </button>
           </div>
         )}
@@ -606,10 +618,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           {/* ================= SSH 基础连接与主要凭据 ================= */}
           {protocol === "ssh" && activeTab === "general" && (
             <div className="space-y-4">
-              <fieldset>
-                <legend className="sr-only">主机图标</legend>
-                <HostIconPicker value={iconKey} onChange={selectIcon} onAutoDetect={applyAutoIcon} hint={iconHint} />
-              </fieldset>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="session-name" className="block text-xs font-semibold text-ink-secondary mb-1">
@@ -816,111 +824,73 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           {/* ================= SSH 高级配置 & 跳板机 ================= */}
           {protocol === "ssh" && activeTab === "advanced" && (
             <div className="space-y-4">
-              <div role="tablist" aria-label="高级设置分类"
-                className="flex w-full overflow-x-auto rounded-lg border border-line/15 bg-line/5 p-0.5 text-xs">
-                {([
-                  ["general", "高级"],
-                  ["jump", "跳板机"],
-                  ["icon", "图标"],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="tab"
-                    aria-selected={advancedTab === value}
-                    onClick={() => setAdvancedTab(value)}
-                    className={`min-w-[68px] flex-1 whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition ${
-                      advancedTab === value
-                        ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                        : "text-ink-secondary hover:text-ink"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  跳板机
+                </label>
+                <select
+                  value={jumpHostSessionId}
+                  disabled
+                  onChange={(e) => setJumpHostSessionId(e.target.value)}
+                  className="w-full cursor-not-allowed rounded-xl border border-line/15 bg-line/5 px-3 py-2 text-xs text-ink-secondary focus:outline-none"
+                >
+                  <option value="">不使用跳板机</option>
+                  {candidateJumpHosts.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              {advancedTab === "general" && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                        主机指纹校验
-                      </label>
-                      <select
-                        value={hostKeyPolicy}
-                        onChange={(e) => setHostKeyPolicy(e.target.value as HostKeyPolicy)}
-                        className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
-                      >
-                        <option value="strict">首次连接时确认主机指纹（推荐）</option>
-                        <option value="accept_new">首次连接自动接受主机指纹</option>
-                        <option value="insecure">不校验主机指纹（仅测试）</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                        保活间隔（秒）
-                      </label>
-                      <input
-                        type="number"
-                        value={keepaliveSec}
-                        onChange={(e) => setKeepaliveSec(Number(e.target.value))}
-                        min={5}
-                        max={600}
-                        className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                      备注说明
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {advancedTab === "jump" && (
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    跳板机
+                    主机指纹校验
                   </label>
                   <select
-                    value={jumpHostSessionId}
-                    disabled
-                    onChange={(e) => setJumpHostSessionId(e.target.value)}
-                    className="w-full cursor-not-allowed rounded-xl border border-line/15 bg-line/5 px-3 py-2 text-xs text-ink-secondary focus:outline-none"
+                    value={hostKeyPolicy}
+                    onChange={(e) => setHostKeyPolicy(e.target.value as HostKeyPolicy)}
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   >
-                    <option value="">不使用跳板机</option>
-                    {candidateJumpHosts.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
-                      </option>
-                    ))}
+                    <option value="strict">首次连接时确认主机指纹</option>
+                    <option value="accept_new">首次连接自动接受主机指纹</option>
+                    <option value="insecure">不校验主机指纹</option>
                   </select>
                 </div>
-              )}
 
-              {advancedTab === "icon" && (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3 rounded-xl border border-line/15 bg-surface-muted/40 px-3 py-2.5">
-                    <span aria-label="当前图标预览"
-                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line/15 bg-surface">
-                      <HostIcon iconKey={iconKey} protocol={protocol} className="h-8 w-8" />
-                    </span>
-                    <span className="min-w-0 truncate text-sm font-semibold text-ink">{hostIconLabel(iconKey)}</span>
-                  </div>
-                  <HostIconPicker value={iconKey} onChange={selectIcon} radioName="advanced-host-icon" compact />
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    保活间隔（秒）
+                  </label>
+                  <input
+                    type="number"
+                    value={keepaliveSec}
+                    onChange={(e) => setKeepaliveSec(Number(e.target.value))}
+                    min={5}
+                    max={600}
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                  />
                 </div>
-              )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  备注说明
+                </label>
+                <textarea
+                  rows={3}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                />
+              </div>
             </div>
+          )}
+
+          {/* ================= SSH 主机图标 ================= */}
+          {protocol === "ssh" && activeTab === "icon" && (
+            <HostIconPicker value={iconKey} onChange={selectIcon} onAutoDetect={applyAutoIcon} radioName="icon-tab-host-icon" />
           )}
 
           {/* ================= 串口配置区 (Serial) ================= */}

@@ -137,6 +137,7 @@ it("keeps the selected file when the vault is locked and saves only after unlock
 
 it("saves a system selected from the first-host flow", async () => {
   const container = await render([], { host: "demo.example.invalid", icon_key: "os:ubuntu", auth_method: "password" });
+  await act(async () => click("图标"));
   expect(container.querySelector<HTMLInputElement>('input[value="os:ubuntu"]')!.checked).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[value="os:debian"]')!.click());
   actions.createSession.mockResolvedValue({ id: "created" });
@@ -147,6 +148,7 @@ it("saves a system selected from the first-host flow", async () => {
 it("loads the saved system when editing and can restore the default icon", async () => {
   const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
   const container = await render([], {}, session);
+  await act(async () => click("图标"));
   expect(container.querySelector<HTMLInputElement>('input[value="os:macos"]')!.checked).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[value="os:tux"]')!.click());
   actions.updateSession.mockResolvedValue({ ...session, icon_key: null });
@@ -156,24 +158,23 @@ it("loads the saved system when editing and can restore the default icon", async
 
 it("filters the icon grid by keyword and auto-detects a device from session info", async () => {
   const container = await render([], { name: "Office router", host: "192.168.1.1", protocol: "ssh" });
+  await act(async () => click("图标"));
   act(() => container.querySelector<HTMLButtonElement>('button[title="根据会话名称、主机地址和用户名匹配图标"]')!.click());
   expect(container.querySelector<HTMLInputElement>('input[value="device:router"]')!.checked).toBe(true);
-  expect(container.textContent).toContain("已根据主机信息识别为");
   act(() => fillByLabel("搜索图标", "ubuntu"));
   expect(container.querySelector('input[value="device:router"]')).toBeNull();
   expect(container.querySelector('input[value="os:ubuntu"]')).toBeTruthy();
 });
 
-it("edits the icon from its own sub-tab in the advanced area", async () => {
+it("edits the icon from its own top-level tab", async () => {
   const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
   const container = await render([], {}, session);
   await act(async () => click("高级与跳板机"));
   expect(container.textContent).not.toContain("首次连接会显示主机指纹");
   await act(async () => click("图标"));
-  expect(container.querySelector('[aria-label="当前图标预览"] [data-icon-key="os:macos"]')).not.toBeNull();
-  expect(container.querySelector<HTMLInputElement>('input[name="advanced-host-icon"][value="os:macos"]')!.checked).toBe(true);
-  act(() => container.querySelector<HTMLInputElement>('input[name="advanced-host-icon"][value="os:ubuntu"]')!.click());
-  expect(container.querySelector('[aria-label="当前图标预览"] [data-icon-key="os:ubuntu"]')).not.toBeNull();
+  expect(container.querySelector<HTMLInputElement>('input[name="icon-tab-host-icon"][value="os:macos"]')!.checked).toBe(true);
+  act(() => container.querySelector<HTMLInputElement>('input[name="icon-tab-host-icon"][value="os:ubuntu"]')!.click());
+  expect(container.querySelector<HTMLInputElement>('input[name="icon-tab-host-icon"][value="os:ubuntu"]')!.checked).toBe(true);
   actions.updateSession.mockResolvedValue({ ...session, icon_key: "os:ubuntu" });
   await act(async () => click("仅保存"));
   expect(actions.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({ icon_key: "os:ubuntu" }));

@@ -54,7 +54,7 @@ export function HostIconPicker({
         </button>
       )}
     </div>
-    <div className={compact ? "max-h-36 overflow-y-auto pr-1" : "max-h-44 overflow-y-auto pr-1"}>
+    <div className={compact ? "max-h-36 overflow-y-auto pr-1" : "max-h-[min(56vh,26rem)] overflow-y-auto pr-1"}>
       <div className="grid grid-cols-5 gap-1.5">
         {filtered.map((icon) => (
           <label key={icon.key} className="min-w-0 cursor-pointer"
