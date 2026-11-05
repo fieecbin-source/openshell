@@ -5,6 +5,7 @@ import { XtermView } from "./XtermView";
 import { SerialControlBar } from "./SerialControlBar";
 import { SerialSendBar } from "./SerialSendBar";
 import { HexDumpView } from "./HexDumpView";
+import { RdpSessionView } from "./RdpSessionView";
 
 interface TerminalHostProps {
   /** 终端区当前是否真正展示（例如「全 SFTP」视图下为 false） */
@@ -40,7 +41,9 @@ export const TerminalHost: React.FC<TerminalHostProps> = ({ visible, style }) =>
             }}
             aria-hidden={!slotVisible}
           >
-            {tab.protocol === "serial" ? (
+            {tab.protocol === "rdp" ? (
+              <RdpSessionView tab={tab} />
+            ) : tab.protocol === "serial" ? (
               <>
                 <SerialControlBar cardId={tab.cardId || tab.tabId} baudRate={tab.baudRate} />
                 <div className="relative flex-1 overflow-hidden">

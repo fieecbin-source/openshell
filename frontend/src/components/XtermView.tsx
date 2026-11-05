@@ -27,6 +27,8 @@ import { SAVE_SNIPPET_EVENT } from "../lib/terminal-actions";
 import {
   ackTerminal,
   openTerminal,
+  openLocalShell,
+  openTelnet,
   resizeTerminal,
   writeTerminal,
   sendSerial,
@@ -550,7 +552,10 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       };
     }
 
-    // SSH 连接通道（重连后 connectionId 变化时必须重新打开）
+    // RDP 标签不使用 xterm 渲染（由 RdpSessionView 接管），无需建立字符流
+    if (tab.protocol === "rdp") return;
+
+    // 字符流通道（SSH / 本地终端 / Telnet）：重连后 connectionId 变化时必须重新打开
     if (!tab.connectionId || openedConnectionRef.current === tab.connectionId) {
       return;
     }
@@ -580,13 +585,18 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       }
     };
 
-    openTerminal(
-      tab.tabId,
-      tab.connectionId,
-      term.cols,
-      term.rows,
-      onIncomingData
-    ).catch((err) => {
+    const openStream =
+      tab.protocol === "local_shell"
+        ? openLocalShell(tab.tabId, term.cols, term.rows, onIncomingData, {
+            // 临时终端（quick-local-*）没有落库，不允许把伪 sessionId 传给后端
+            sessionId: tab.sessionId.startsWith("quick-local-") ? null : tab.sessionId,
+            shellKind: tab.shellKind ?? null,
+          })
+        : tab.protocol === "telnet"
+          ? openTelnet(tab.tabId, tab.sessionId, term.cols, term.rows, onIncomingData)
+          : openTerminal(tab.tabId, tab.connectionId, term.cols, term.rows, onIncomingData);
+
+    openStream.catch((err) => {
       // 打开失败时清空标记，下次 effect 触发时还允许重试
       openedConnectionRef.current = null;
       // 组件可能已经卸载，向已 dispose 的终端写入会抛异常
@@ -597,7 +607,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(err));
       }
     });
-  }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId]);
+  }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, tab.sessionId, tab.shellKind]);
 
   return (
     <div

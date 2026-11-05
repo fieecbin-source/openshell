@@ -1,6 +1,6 @@
 import { GlassMaterial } from "./ui/GlassMaterial";
 import React, { useEffect, useState } from "react";
-import type { Session, SessionInput } from "../types/ipc";
+import type { Protocol, Session, SessionInput } from "../types/ipc";
 import { useVaultStore } from "../stores/vaultStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -16,6 +16,8 @@ import { RemoteEditorModal } from "./RemoteEditorModal";
 import { MonitorDashboard } from "./MonitorDashboard";
 import { PortForwardModal } from "./PortForwardModal";
 import { SnippetBar } from "./SnippetBar";
+import { CommandInputBar } from "./CommandInputBar";
+import { ProxyManagerModal } from "./ProxyManagerModal";
 import { MultiExecBar } from "./MultiExecBar";
 import { ImportExportModal } from "./ImportExportModal";
 import { SettingsModal } from "./SettingsModal";
@@ -58,6 +60,9 @@ export const AppLayout: React.FC = () => {
   const [containerWorkspaceOpen, setContainerWorkspaceOpen] = useState(false);
   const [containerFocusId, setContainerFocusId] = useState<string | undefined>(undefined);
   const [forwardModalOpen, setForwardModalOpen] = useState(false);
+  const [proxyModalOpen, setProxyModalOpen] = useState(false);
+  // FinalShell 中段快捷命令栏：可在命令输入栏上一键展开/收起
+  const [snippetsOpen, setSnippetsOpen] = useState(true);
   const [multiExecOpen, setMultiExecOpen] = useState(false);
   const [importExportOpen, setImportExportOpen] = useState(false);
   const [portCheckerOpen, setPortCheckerOpen] = useState(false);
@@ -72,7 +77,9 @@ export const AppLayout: React.FC = () => {
   // 布局状态收敛到 store，顶栏、标签栏、会话树共用同一份状态，避免出现「多个 SFTP 视图」互相打架。
   const sessionViewMode = useTerminalStore((s) => s.layoutMode);
   const setSessionViewMode = useTerminalStore((s) => s.setLayoutMode);
-  const [splitRatio, setSplitRatio] = useState<number>(55);
+  // 上终端默认 58%（FinalShell 经典比例），下 SFTP 占剩余空间
+  const splitRatio = useTerminalStore((s) => s.splitRatio);
+  const setSplitRatioPercent = useTerminalStore((s) => s.setSplitRatio);
   const [sidebarView, setSidebarView] = useState<"server" | "tree">("server");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -80,7 +87,7 @@ export const AppLayout: React.FC = () => {
   const handleSplitMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
-    const startRatio = splitRatio;
+    const startRatio = splitRatio * 100;
     const container = (e.currentTarget as HTMLElement).parentElement;
     if (!container) return;
     const containerHeight = container.getBoundingClientRect().height;
@@ -88,8 +95,7 @@ export const AppLayout: React.FC = () => {
     const onMouseMove = (moveEvent: MouseEvent) => {
       const deltaY = moveEvent.clientY - startY;
       const deltaPercent = (deltaY / containerHeight) * 100;
-      const newRatio = Math.min(85, Math.max(15, startRatio + deltaPercent));
-      setSplitRatio(newRatio);
+      setSplitRatioPercent((startRatio + deltaPercent) / 100);
     };
 
     const onMouseUp = () => {
@@ -151,10 +157,18 @@ export const AppLayout: React.FC = () => {
   const isConnected = activeTab && activeTab.status === "connected" && (activeTab.connectionId || activeTab.protocol === "serial");
 
   // 终端宿主相关派生状态：
-  // - terminalIsSsh：当前会话是 SSH（只有 SSH 才有 SFTP 视图 / 分屏概念）
+  // - terminalIsSsh：只有 SSH / SFTP 会话才有 SFTP 视图、监控大屏与上下分屏概念
   // - sessionTerminalVisible：终端区是否直接可见（SFTP 全屏时为 false，此时不 fit、不轮询串口）
-  // - terminalHostHeight：分屏模式下终端只占上半区，尺寸变化由 ResizeObserver 驱动重新 fit
-  const terminalIsSsh = !!activeTab && activeTab.protocol !== "serial";
+  // - commandBarVisible：字符流协议（ssh/local_shell/telnet/serial）常驻显示命令输入栏
+  const terminalIsSsh = !!activeTab && (activeTab.protocol === "ssh" || activeTab.protocol === "sftp");
+  const commandBarVisible =
+    !!activeTab &&
+    !containerWorkspaceOpen &&
+    (activeTab.protocol === "ssh" ||
+      activeTab.protocol === "sftp" ||
+      activeTab.protocol === "local_shell" ||
+      activeTab.protocol === "telnet" ||
+      activeTab.protocol === "serial");
   useEffect(() => {
     if (activeTab?.status !== "connected") {
       setMonitorOpen(false);
@@ -167,8 +181,6 @@ export const AppLayout: React.FC = () => {
     !!activeTab &&
     !containerWorkspaceOpen &&
     (terminalIsSsh ? sessionViewMode !== "sftp" : true);
-  const terminalHostHeight =
-    terminalIsSsh && sessionViewMode === "split" ? `${splitRatio}%` : "100%";
 
   /**
    * 打开全屏服务器监控大屏（恢复最初版本顶栏的「服务器监控」入口）。
@@ -208,6 +220,13 @@ export const AppLayout: React.FC = () => {
   const handleNewSessionWithValues = (values?: Partial<SessionInput>) => {
     setEditingSession(null);
     setInitialSessionValues(values);
+    setIsSessionModalOpen(true);
+  };
+
+  /** 预选协议的新建入口（标签栏「+」菜单 / 首页卡片） */
+  const handleNewSessionWithProtocol = (protocol?: Protocol) => {
+    setEditingSession(null);
+    setInitialSessionValues(protocol ? { protocol } : undefined);
     setIsSessionModalOpen(true);
   };
 
@@ -256,6 +275,33 @@ export const AppLayout: React.FC = () => {
       });
     }
   };
+
+  /** 中段：快捷命令栏（按需展开）+ 命令输入与历史栏，位于终端与 SFTP 之间 */
+  const middleCommandBar = commandBarVisible ? (
+    <>
+      {snippetsOpen && activeTab?.protocol !== "serial" && <SnippetBar activeTabId={activeTabId} />}
+      <CommandInputBar
+        activeTabId={activeTabId}
+        snippetsOpen={snippetsOpen}
+        onToggleSnippets={() => setSnippetsOpen((value) => !value)}
+      />
+    </>
+  ) : null;
+
+  /** 资源监控覆盖层（仅 SSH 连接且终端可见时挂载） */
+  const monitorOverlay =
+    monitorOpen && terminalIsSsh && !!activeTab?.connectionId && sessionTerminalVisible ? (
+      // 大屏固定深色底：父层先铺深色，避免挂载瞬间闪出白底
+      <div className="absolute inset-0 z-20 overflow-hidden bg-canvas">
+        <OverlayBoundary resetKey={`monitor|${activeTab!.connectionId}`}>
+          <MonitorDashboard
+            connId={activeTab!.connectionId!}
+            sessionId={activeTab!.sessionId}
+            onClose={() => setMonitorOpen(false)}
+          />
+        </OverlayBoundary>
+      </div>
+    ) : null;
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans antialiased select-none text-ink">
@@ -412,6 +458,9 @@ export const AppLayout: React.FC = () => {
           onToggleFullscreen={toggleFullscreen}
           onNewTabClick={() => handleNewSession()}
           onHomeClick={() => useTerminalStore.getState().setActiveTab("home")}
+          onNewSessionWithProtocol={handleNewSessionWithProtocol}
+          onOpenProxyManager={() => setProxyModalOpen(true)}
+          onOpenPortForward={() => setForwardModalOpen(true)}
         />
 
         <div className="relative flex-1 overflow-hidden">
@@ -435,41 +484,55 @@ export const AppLayout: React.FC = () => {
             style={{ visibility: isHomeActive ? "hidden" : "visible" }}
             aria-hidden={isHomeActive}
           >
-            {!isFullscreen && activeTab && activeTab.protocol === "ssh" && (
+            {/* 左侧栏：SSH 会话可切换「资源与容器 / 主机列表」，
+                非 SSH 标签页（local_shell / telnet / serial / rdp）则直接展示主机列表，
+                与 FinalShell 一致，随时可双击切换到其它机器。 */}
+            {!isFullscreen && activeTab && (
               <div
-                aria-label="会话侧栏"
+                aria-label={terminalIsSsh ? "会话侧栏" : "主机列表侧栏"}
                 style={{ width: sidebarCollapsed ? 48 : 256, flex: "0 0 auto" }}
                 className="min-w-0 flex flex-col h-full overflow-hidden border-r border-line/10 bg-surface-muted transition-[width] duration-200 ease-out"
               >
                 <div className={`flex shrink-0 min-w-0 overflow-hidden items-center p-1 bg-surface-muted/90 border-b border-line/10 text-[11px] font-semibold gap-0.5 ${sidebarCollapsed ? "flex-col" : ""}`}>
-                  <button
-                    onClick={() => setSidebarView("server")}
-                    aria-label="资源与容器"
-                    aria-pressed={sidebarView === "server"}
-                    className={`flex min-w-0 items-center justify-center gap-1.5 py-2 rounded-md transition ${sidebarCollapsed ? "w-full" : "flex-1"} ${
-                      sidebarView === "server"
-                        ? "bg-accent/15 text-accent font-bold"
-                        : "text-ink-secondary hover:text-ink"
-                    }`}
-                    title="查看服务器资源监控、端口与容器"
-                  >
-                    <ActivityIcon className="h-4 w-4 shrink-0" />
-                    {!sidebarCollapsed && <span className="truncate">资源与容器</span>}
-                  </button>
-                  <button
-                    onClick={() => setSidebarView("tree")}
-                    aria-label="主机列表"
-                    aria-pressed={sidebarView === "tree"}
-                    className={`flex min-w-0 items-center justify-center gap-1.5 py-2 rounded-md transition ${sidebarCollapsed ? "w-full" : "flex-1"} ${
-                      sidebarView === "tree"
-                        ? "bg-accent/15 text-accent font-bold"
-                        : "text-ink-secondary hover:text-ink"
-                    }`}
-                    title="查看主机连接列表与快捷管理"
-                  >
-                    <ServerIcon className="h-4 w-4 shrink-0" />
-                    {!sidebarCollapsed && <span className="truncate">主机列表</span>}
-                  </button>
+                  {terminalIsSsh ? (
+                    <>
+                      <button
+                        onClick={() => setSidebarView("server")}
+                        aria-label="资源与容器"
+                        aria-pressed={sidebarView === "server"}
+                        className={`flex min-w-0 items-center justify-center gap-1.5 py-2 rounded-md transition ${sidebarCollapsed ? "w-full" : "flex-1"} ${
+                          sidebarView === "server"
+                            ? "bg-accent/15 text-accent font-bold"
+                            : "text-ink-secondary hover:text-ink"
+                        }`}
+                        title="查看服务器资源监控、端口与容器"
+                      >
+                        <ActivityIcon className="h-4 w-4 shrink-0" />
+                        {!sidebarCollapsed && <span className="truncate">资源与容器</span>}
+                      </button>
+                      <button
+                        onClick={() => setSidebarView("tree")}
+                        aria-label="主机列表"
+                        aria-pressed={sidebarView === "tree"}
+                        className={`flex min-w-0 items-center justify-center gap-1.5 py-2 rounded-md transition ${sidebarCollapsed ? "w-full" : "flex-1"} ${
+                          sidebarView === "tree"
+                            ? "bg-accent/15 text-accent font-bold"
+                            : "text-ink-secondary hover:text-ink"
+                        }`}
+                        title="查看主机连接列表与快捷管理"
+                      >
+                        <ServerIcon className="h-4 w-4 shrink-0" />
+                        {!sidebarCollapsed && <span className="truncate">主机列表</span>}
+                      </button>
+                    </>
+                  ) : (
+                    !sidebarCollapsed && (
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-2 text-ink-secondary">
+                        <ServerIcon className="h-4 w-4 shrink-0" />
+                        <span className="truncate">主机列表</span>
+                      </span>
+                    )
+                  )}
                   <button
                     type="button"
                     onClick={() => setSidebarCollapsed((value) => !value)}
@@ -485,8 +548,12 @@ export const AppLayout: React.FC = () => {
                 </div>
                 <div className="flex-1 overflow-hidden">
                   {/* 侧栏同样做渲染隔离：监控/进程面板异常不应影响终端会话 */}
-                  <OverlayBoundary resetKey={`${sidebarView}|${activeTab.tabId}`}>
-                    {sidebarView === "server" ? (
+                  <OverlayBoundary
+                    resetKey={
+                      terminalIsSsh ? `${sidebarView}|${activeTab.tabId}` : `tree|${activeTab.tabId}`
+                    }
+                  >
+                    {terminalIsSsh && sidebarView === "server" ? (
                       <ServerSidebar
                         tab={activeTab}
                         iconKey={activeSession?.icon_key}
@@ -511,64 +578,68 @@ export const AppLayout: React.FC = () => {
             )}
 
             <div className="flex-1 flex flex-col overflow-hidden bg-canvas">
-              {/* 快捷命令片段栏 (SSH 模式)；容器工作区打开时一并让位 */}
-              {activeTab && activeTab.protocol !== "serial" && !containerWorkspaceOpen && (
-                <SnippetBar activeTabId={activeTabId} />
-              )}
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
+                {terminalIsSsh && !!activeTab?.connectionId && sessionViewMode === "split" ? (
+                  <>
+                    {/* 上段：终端主视图（默认约 58%，分割条可拖拽） */}
+                    <div
+                      className="relative min-h-0 overflow-hidden"
+                      style={{ flex: `0 0 ${splitRatio * 100}%` }}
+                    >
+                      {/* 终端宿主：所有已打开标签的 xterm 实例常驻挂载，切换标签/视图不重建 */}
+                      <TerminalHost visible={sessionTerminalVisible} style={{ height: "100%" }} />
+                      {monitorOverlay}
+                    </div>
 
-              <div className="relative flex-1 overflow-hidden bg-surface">
-                {/* 终端宿主：所有已打开标签的 xterm 实例常驻挂载，切换标签/视图不重建 */}
-                <TerminalHost
-                  visible={sessionTerminalVisible}
-                  style={{ height: terminalHostHeight }}
-                />
+                    {/* 中段：快捷命令栏 + 命令输入与历史栏（终端与 SFTP 之间） */}
+                    {middleCommandBar}
 
-                {/* 资源监控覆盖层 */}
-                {monitorOpen && terminalIsSsh && !!activeTab?.connectionId && sessionTerminalVisible && (
-                  // 大屏固定深色底：父层先铺深色，避免挂载瞬间闪出白底
-                  <div className="absolute inset-0 z-20 overflow-hidden bg-canvas">
-                    <OverlayBoundary resetKey={`monitor|${activeTab!.connectionId}`}>
-                      <MonitorDashboard
-                        connId={activeTab!.connectionId!}
-                        sessionId={activeTab!.sessionId}
-                        onClose={() => setMonitorOpen(false)}
-                      />
-                    </OverlayBoundary>
-                  </div>
-                )}
+                    {/* 水平拖拽分割条 (FinalShell 经典分界线) */}
+                    <div
+                      onMouseDown={handleSplitMouseDown}
+                      className="group z-10 flex h-2 shrink-0 cursor-row-resize select-none items-center justify-center border-y border-line/25 bg-line/10 transition-colors hover:bg-action"
+                      title="上下拖拽调整终端与 SFTP 占比"
+                    >
+                      <div className="h-1 w-12 rounded-full bg-line/20 transition-colors group-hover:bg-surface" />
+                    </div>
 
-                {/* 全 SFTP 视图 / 上下分屏的下半区（覆盖在终端宿主之上，终端仍保持挂载） */}
-                {terminalIsSsh && !!activeTab?.connectionId && sessionViewMode !== "terminal" && (
-                  <div
-                    className="absolute inset-x-0 bottom-0 z-20 overflow-hidden border-t border-line/15 bg-surface"
-                    style={{ top: sessionViewMode === "split" ? `calc(${splitRatio}% + 8px)` : 0 }}
-                  >
-                    <OverlayBoundary resetKey={`sftp|${activeTab!.connectionId}`}>
-                      <SftpView connId={activeTab!.connectionId!} sessionId={activeTab!.sessionId} />
-                    </OverlayBoundary>
-                  </div>
+                    {/* 下段：SFTP 双栏文件管理器 */}
+                    <div className="relative min-h-0 flex-1 overflow-hidden border-line/15 bg-surface">
+                      <OverlayBoundary resetKey={`sftp|${activeTab.connectionId}`}>
+                        <SftpView connId={activeTab.connectionId!} sessionId={activeTab.sessionId} />
+                      </OverlayBoundary>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="relative min-h-0 flex-1 overflow-hidden">
+                      <TerminalHost visible={sessionTerminalVisible} style={{ height: "100%" }} />
+                      {monitorOverlay}
+
+                      {/* 全 SFTP 视图：覆盖层压在终端之上，终端仍保持挂载 */}
+                      {terminalIsSsh && !!activeTab?.connectionId && sessionViewMode === "sftp" && (
+                        <div className="absolute inset-0 z-20 overflow-hidden bg-surface">
+                          <OverlayBoundary resetKey={`sftp|${activeTab!.connectionId}`}>
+                            <SftpView connId={activeTab!.connectionId!} sessionId={activeTab!.sessionId} />
+                          </OverlayBoundary>
+                        </div>
+                      )}
+                    </div>
+
+                    {middleCommandBar}
+                  </>
                 )}
 
                 {/* 画布级容器工作区：接管整块工作区（容器之间在此「路由」切换） */}
                 {containerWorkspaceOpen && terminalIsSsh && !!activeTab?.connectionId && (
-                  <OverlayBoundary resetKey={`container-ws|${activeTab!.connectionId}`}>
-                    <ContainerWorkspace
-                      connId={activeTab!.connectionId!}
-                      initialContainerId={containerFocusId}
-                      onClose={() => setContainerWorkspaceOpen(false)}
-                    />
-                  </OverlayBoundary>
-                )}
-
-                {/* 水平拖拽分割条 (FinalShell 经典分界线) */}
-                {terminalIsSsh && sessionViewMode === "split" && (
-                  <div
-                    onMouseDown={handleSplitMouseDown}
-                    style={{ top: `${splitRatio}%` }}
-                    className="group absolute inset-x-0 z-30 flex h-2 cursor-row-resize select-none items-center justify-center border-y border-line/25 bg-line/10 transition-colors hover:bg-action"
-                    title="上下拖拽调整终端与 SFTP 占比"
-                  >
-                    <div className="h-1 w-12 rounded-full bg-line/20 transition-colors group-hover:bg-surface" />
+                  <div className="absolute inset-0 z-40 overflow-hidden bg-canvas">
+                    <OverlayBoundary resetKey={`container-ws|${activeTab!.connectionId}`}>
+                      <ContainerWorkspace
+                        connId={activeTab!.connectionId!}
+                        initialContainerId={containerFocusId}
+                        onClose={() => setContainerWorkspaceOpen(false)}
+                      />
+                    </OverlayBoundary>
                   </div>
                 )}
               </div>
@@ -596,13 +667,19 @@ export const AppLayout: React.FC = () => {
                 <span className="text-ink-secondary">|</span>
                 <span className="text-ink font-semibold">
                   当前: {activeTab.sessionName} (
-                  {activeTab.protocol === "serial"
-                    ? "串口"
-                    : sessionViewMode === "sftp"
-                      ? "SFTP 视图"
-                      : sessionViewMode === "split"
-                        ? "分屏 · 终端 + SFTP"
-                        : "终端命令行"}
+                  {activeTab.protocol === "rdp"
+                    ? "Windows 远程桌面"
+                    : activeTab.protocol === "local_shell"
+                      ? "本地终端"
+                      : activeTab.protocol === "telnet"
+                        ? "Telnet"
+                        : activeTab.protocol === "serial"
+                          ? "串口"
+                          : sessionViewMode === "sftp"
+                            ? "SFTP 视图"
+                            : sessionViewMode === "split"
+                              ? "分屏 · 终端 + SFTP"
+                              : "终端命令行"}
                   )
                 </span>
 
@@ -660,6 +737,7 @@ export const AppLayout: React.FC = () => {
           isSessionModalOpen,
           commandPaletteOpen,
           forwardModalOpen,
+          proxyModalOpen,
           importExportOpen,
           portCheckerOpen,
           multiExecOpen,
@@ -691,6 +769,7 @@ export const AppLayout: React.FC = () => {
       />
       <TransferQueueDrawer />
       <RemoteEditorModal />
+      <ProxyManagerModal open={proxyModalOpen} onClose={() => setProxyModalOpen(false)} />
       {forwardModalOpen && (
         <PortForwardModal
           sessionId={activeTab?.sessionId}

@@ -1,9 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { Protocol } from "../types/ipc";
 import { useTerminalStore } from "../stores/terminalStore";
 import { Badge } from "./ui/Surface";
 import { IconButton } from "./ui/Button";
 import { cn } from "./ui/cn";
 import {
+  ChevronDownIcon,
   HomeIcon,
   PlusIcon,
   XIcon,
@@ -17,13 +20,28 @@ interface TerminalTabsProps {
   onHomeClick?: () => void;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  /** 打开指定协议的新建连接弹窗（FinalShell 快捷新建菜单） */
+  onNewSessionWithProtocol?: (protocol?: Protocol) => void;
+  onOpenProxyManager?: () => void;
+  onOpenPortForward?: () => void;
 }
+
+/** 非 SSH 协议的标签角标，便于一眼区分连接类型 */
+const PROTOCOL_BADGE: Partial<Record<Protocol, string>> = {
+  rdp: "RDP",
+  local_shell: "LOCAL",
+  telnet: "TELNET",
+  serial: "COM",
+};
 
 export const TerminalTabs: React.FC<TerminalTabsProps> = ({
   onNewTabClick,
   onHomeClick,
   isFullscreen,
   onToggleFullscreen,
+  onNewSessionWithProtocol,
+  onOpenProxyManager,
+  onOpenPortForward,
 }) => {
   const {
     tabs,
@@ -34,10 +52,52 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
     duplicateTab,
     layoutMode,
     setLayoutMode,
+    openQuickLocalShell,
   } = useTerminalStore();
 
   const isHomeActive = activeTabId === null || activeTabId === "home" || tabs.length === 0;
   const activeTab = tabs.find((t) => t.tabId === activeTabId);
+
+  // 「+」右侧的下拉快捷菜单（FinalShell 风格）
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [plusMenuPos, setPlusMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const plusBtnRef = useRef<HTMLButtonElement>(null);
+
+  const togglePlusMenu = () => {
+    if (!plusMenuOpen) {
+      const rect = plusBtnRef.current?.getBoundingClientRect();
+      if (rect) {
+        setPlusMenuPos({
+          left: Math.max(8, Math.min(rect.left - 40, window.innerWidth - 264)),
+          top: rect.bottom + 4,
+        });
+      }
+    }
+    setPlusMenuOpen((prev) => !prev);
+  };
+
+  useEffect(() => {
+    if (!plusMenuOpen) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-plus-menu]")) return;
+      setPlusMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPlusMenuOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [plusMenuOpen]);
+
+  const runMenuAction = (action: () => void) => {
+    setPlusMenuOpen(false);
+    action();
+  };
 
   // 标签编辑/重命名状态
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
@@ -103,7 +163,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
 
         {tabs.map((tab, index) => {
           const isActive = tab.tabId === activeTabId && !isHomeActive;
-          const isSerial = tab.protocol === "serial";
+          const protocolBadge = PROTOCOL_BADGE[tab.protocol];
           const isConnected = tab.status === "connected";
 
           const statusHint =
@@ -191,9 +251,12 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
                 <span className="max-w-[130px] truncate">{tab.sessionName}</span>
               )}
 
-              {isSerial && (
-                <Badge tone="accent" className="px-1 font-mono text-[9px]">
-                  COM
+              {protocolBadge && (
+                <Badge
+                  tone={tab.protocol === "rdp" ? "accent" : "neutral"}
+                  className="px-1 font-mono text-[9px]"
+                >
+                  {protocolBadge}
                 </Badge>
               )}
 
@@ -214,20 +277,41 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
         })}
 
         {onNewTabClick && (
-          <IconButton
-            label="新建连接"
-            size="sm"
-            className="ml-0.5 h-[22px] w-[22px] shrink-0"
-            onClick={onNewTabClick}
-          >
-            <PlusIcon className="h-3.5 w-3.5" />
-          </IconButton>
+          <span className="ml-0.5 flex shrink-0 items-center">
+            <IconButton
+              label="新建连接"
+              size="sm"
+              className="h-[22px] w-[22px]"
+              onClick={onNewTabClick}
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+            </IconButton>
+            <button
+              ref={plusBtnRef}
+              type="button"
+              onClick={togglePlusMenu}
+              className={cn(
+                "h-[22px] rounded-os-md px-0.5 transition-colors",
+                plusMenuOpen
+                  ? "bg-line/10 text-ink"
+                  : "text-ink-tertiary hover:bg-line/10 hover:text-ink"
+              )}
+              title="快速新建 / 管理"
+              aria-label="快速新建菜单"
+              aria-haspopup="menu"
+              aria-expanded={plusMenuOpen}
+            >
+              <ChevronDownIcon className="h-3 w-3" />
+            </button>
+          </span>
         )}
       </div>
 
       {/* 右侧：视图切换入口（终端 / 分屏 / SFTP）与全屏按钮 */}
       <div className="flex shrink-0 items-center gap-1.5">
-        {activeTab && !isHomeActive && activeTab.protocol !== "serial" && (
+        {activeTab &&
+          !isHomeActive &&
+          (activeTab.protocol === "ssh" || activeTab.protocol === "sftp") && (
           <div className="flex items-center rounded-lg border border-line/10 bg-surface p-0.5 shadow-apple-sm text-xs">
             <button
               onClick={() => setLayoutMode("terminal")}
@@ -289,6 +373,102 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
           </button>
         )}
       </div>
+
+      {/* 「+」快速新建 / 管理菜单 */}
+      {plusMenuOpen &&
+        createPortal(
+          <div
+            data-plus-menu
+            role="menu"
+            aria-label="快速新建菜单"
+            className="fixed z-[120] w-64 rounded-xl border border-line/15 bg-surface py-1 text-xs text-ink shadow-os-lg"
+            style={{ left: plusMenuPos?.left ?? 8, top: plusMenuPos?.top ?? 44 }}
+          >
+            <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
+              快速终端
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+              onClick={() => runMenuAction(() => void openQuickLocalShell("powershell"))}
+            >
+              <span aria-hidden="true">⚡</span>
+              <span>快速打开本地终端 (PowerShell)</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+              onClick={() => runMenuAction(() => void openQuickLocalShell("cmd"))}
+            >
+              <span aria-hidden="true">💻</span>
+              <span>快速打开本地终端 (CMD)</span>
+            </button>
+
+            <div className="my-1 border-t border-line/10" />
+            <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
+              新建连接
+            </div>
+            {(
+              [
+                ["🖥️", "新建 SSH 主机连接...", "ssh"],
+                ["🪟", "新建 Windows 远程桌面 (RDP)...", "rdp"],
+                ["🌐", "新建 Telnet 连接...", "telnet"],
+                ["🔌", "新建串口 (Serial) 连接...", "serial"],
+              ] as Array<[string, string, Protocol]>
+            ).map(([icon, label, protocol]) => (
+              <button
+                key={protocol}
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+                onClick={() =>
+                  runMenuAction(() =>
+                    onNewSessionWithProtocol
+                      ? onNewSessionWithProtocol(protocol)
+                      : onNewTabClick?.()
+                  )
+                }
+              >
+                <span aria-hidden="true">{icon}</span>
+                <span>{label}</span>
+              </button>
+            ))}
+
+            {(onOpenProxyManager || onOpenPortForward) && (
+              <>
+                <div className="my-1 border-t border-line/10" />
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
+                  管理
+                </div>
+              </>
+            )}
+            {onOpenProxyManager && (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+                onClick={() => runMenuAction(onOpenProxyManager)}
+              >
+                <span aria-hidden="true">🛡️</span>
+                <span>代理服务器管理...</span>
+              </button>
+            )}
+            {onOpenPortForward && (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+                onClick={() => runMenuAction(onOpenPortForward)}
+              >
+                <span aria-hidden="true">⇄</span>
+                <span>隧道 / 端口转发管理...</span>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
 
       {/* 标签右键菜单 */}
       {contextMenu && (

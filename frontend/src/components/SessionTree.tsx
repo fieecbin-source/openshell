@@ -43,6 +43,29 @@ function getColorBadge(color?: string | null) {
   }
 }
 
+/** 非 SSH 会话节点的协议角标，便于快速识别连接类型 */
+const PROTOCOL_BADGE: Record<string, { short: string; label: string }> = {
+  rdp: { short: "RDP", label: "Windows 远程桌面" },
+  local_shell: { short: "LOCAL", label: "本地终端" },
+  telnet: { short: "TEL", label: "Telnet" },
+  serial: { short: "COM", label: "串口" },
+  sftp: { short: "SFTP", label: "SFTP" },
+};
+
+/** 会话行下方的地址/参数摘要 */
+function sessionSubtitle(session: Session): string {
+  if (session.protocol === "serial") {
+    return session.protocol_options_json?.port_name || "COM1";
+  }
+  if (session.protocol === "local_shell") {
+    const kind = session.protocol_options_json?.shell_kind || "powershell";
+    return `本地终端 · ${kind}`;
+  }
+  const defaultPort = session.protocol === "rdp" ? 3389 : session.protocol === "telnet" ? 23 : 22;
+  const username = session.username || (session.protocol === "rdp" ? "Administrator" : "root");
+  return `${username}@${session.host || "localhost"}:${session.port || defaultPort}`;
+}
+
 const MenuItem: React.FC<{
   icon: string;
   label: string;
@@ -381,6 +404,14 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
           <div className="min-w-0 truncate">
             <div className="flex items-center gap-1.5 truncate font-semibold text-ink">
               <span>{session.name}</span>
+              {PROTOCOL_BADGE[session.protocol] && (
+                <span
+                  className="shrink-0 rounded bg-line/10 px-1 py-0.5 font-mono text-[9px] font-medium text-ink-secondary"
+                  title={`连接类型：${PROTOCOL_BADGE[session.protocol].label}`}
+                >
+                  {PROTOCOL_BADGE[session.protocol].short}
+                </span>
+              )}
               {getColorBadge(session.color)}
               {session.favorite && <span className="text-[10px] text-state-warning">★</span>}
               {isDirty ? (
@@ -400,9 +431,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
               ) : null}
             </div>
             <div className="truncate font-mono text-[10px] text-ink-secondary">
-              {session.protocol === "serial"
-                ? session.protocol_options_json?.port_name || "COM1"
-                : `${session.username || "root"}@${session.host || "localhost"}:${session.port || 22}`}
+              {sessionSubtitle(session)}
             </div>
           </div>
         </div>
@@ -697,15 +726,18 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   void connect(s);
                 }}
               />
-              <MenuItem
-                icon="📂"
-                label="打开 SFTP 视图"
-                onClick={() => {
-                  const s = contextMenu.session!;
-                  setContextMenu(null);
-                  void openSftp(s);
-                }}
-              />
+              {(contextMenu.session.protocol === "ssh" ||
+                contextMenu.session.protocol === "sftp") && (
+                <MenuItem
+                  icon="📂"
+                  label="打开 SFTP 视图"
+                  onClick={() => {
+                    const s = contextMenu.session!;
+                    setContextMenu(null);
+                    void openSftp(s);
+                  }}
+                />
+              )}
               <MenuItem
                 icon="🗂"
                 label="在新标签打开"

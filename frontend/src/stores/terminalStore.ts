@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import type { CardMode, Protocol, Session, TabStatus } from "../types/ipc";
+import type {
+  CardMode,
+  LocalShellKind,
+  Protocol,
+  RdpLaunchResult,
+  Session,
+  TabStatus,
+} from "../types/ipc";
 import {
   closeConnection,
   closeTerminal,
@@ -11,6 +18,9 @@ import {
   openSerial,
   forwardList,
   forwardStart,
+  launchRdp,
+  writeTerminal,
+  sendSerial,
 } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 
@@ -35,7 +45,53 @@ export interface TerminalTab {
   /** 远端上报的进程退出码；未知时为 null（不再伪造 0） */
   exitCode?: number | null;
   baudRate?: number;
+  /** Windows 远程桌面会话：最近一次 rdp_launch 的结果（进程 PID、临时 .rdp 路径等） */
+  rdpInfo?: RdpLaunchResult | null;
+  /** 本地终端会话：使用的 shell 类型（powershell / cmd / wsl ...） */
+  shellKind?: LocalShellKind | null;
+  /** 连接就绪时间戳（毫秒），供连接详情面板计算实时在线时长 */
+  connectedAt?: number | null;
+  /** 当前自动重连尝试次数 */
+  reconnectAttempt?: number;
 }
+
+/** FinalShell 风格命令历史：最多保留最近 50 条，持久化在 localStorage */
+const COMMAND_HISTORY_KEY = "openshell:cmd_history";
+const COMMAND_HISTORY_LIMIT = 50;
+
+function readCommandHistory(): string[] {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return [];
+    const raw = window.localStorage.getItem(COMMAND_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .slice(0, COMMAND_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeCommandHistory(list: string[]): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(COMMAND_HISTORY_KEY, JSON.stringify(list));
+  } catch {
+    // 存储不可用（隐私模式 / 配额已满）时仅保留内存态历史
+  }
+}
+
+function generateUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** 支持「命令输入栏」直接写入的终端类协议 */
+const COMMAND_TARGET_PROTOCOLS: Protocol[] = ["ssh", "sftp", "local_shell", "telnet", "serial"];
 
 // 后端以 26 位 ULID 校验终端标签 ID，这里生成同格式 ID，
 // 否则打开终端时会被判定为“格式有误”。
@@ -102,12 +158,31 @@ interface TerminalState {
   /** 布局模式放在 store 里，才能被顶栏、标签栏、会话树等多处入口共享 */
   layoutMode: SessionViewMode;
   setLayoutMode: (mode: SessionViewMode) => void;
+  /** 上下分屏中终端区占比（0–1），默认 0.58 */
+  splitRatio: number;
+  setSplitRatio: (ratio: number) => void;
   /** 终端全屏沉浸模式 */
   isFullscreen: boolean;
   setFullscreen: (fullscreen: boolean) => void;
   toggleFullscreen: () => void;
 
+  /** 按协议分发打开会话（ssh / sftp / rdp / local_shell / telnet / serial） */
+  openSessionTab: (session: Session, overrides?: ConnectOverrides) => Promise<string>;
+  /** 兼容旧调用点：等价于 openSessionTab */
   openSession: (session: Session, overrides?: ConnectOverrides) => Promise<string>;
+  /** 秒开临时本地终端（不落库），供标签栏 + 菜单使用 */
+  openQuickLocalShell: (shellKind?: LocalShellKind) => Promise<void>;
+
+  /** FinalShell 命令输入栏历史命令（localStorage 持久化） */
+  commandHistory: string[];
+  addCommandHistory: (cmd: string) => void;
+  clearCommandHistory: () => void;
+  /** 把命令写入当前会话或全部已连接会话 */
+  sendCommandToTabs: (
+    command: string,
+    options?: { allTabs?: boolean; appendCr?: boolean }
+  ) => Promise<void>;
+
   closeTab: (tabId: string) => Promise<void>;
   setActiveTab: (tabId: string) => void;
   switchMode: (tabId: string, mode: CardMode) => Promise<void>;
@@ -126,24 +201,37 @@ interface TerminalState {
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
-  // 连接成功后默认全终端视图（SFTP 按需从顶栏切换），避免一上来就是分屏
-  layoutMode: "terminal",
+  // FinalShell 经典布局：SSH 会话默认「上终端 + 中命令栏 + 下 SFTP」上下分屏
+  layoutMode: "split",
+  splitRatio: 0.58,
   isFullscreen: false,
+  commandHistory: readCommandHistory(),
 
   setLayoutMode: (layoutMode) => set({ layoutMode }),
+  setSplitRatio: (splitRatio) => set({ splitRatio: Math.min(0.85, Math.max(0.15, splitRatio)) }),
   setFullscreen: (isFullscreen) => set({ isFullscreen }),
   toggleFullscreen: () => set((state) => ({ isFullscreen: !state.isFullscreen })),
 
-  openSession: async (session: Session, overrides?: ConnectOverrides) => {
+  openSessionTab: async (session: Session, overrides?: ConnectOverrides) => {
     const tabId = generateId();
     const protocol: Protocol = session.protocol || "ssh";
 
+    const shellKind: LocalShellKind | null =
+      protocol === "local_shell"
+        ? ((session.protocol_options_json as { shell_kind?: LocalShellKind } | null)?.shell_kind ??
+          "powershell")
+        : null;
+
     let cardId: string | undefined;
-    try {
-      const card = await createCard(session.id);
-      cardId = card.card_id;
-    } catch (e) {
-      console.warn("createCard fallback to local tab", e);
+    // 资源卡只对 SSH / SFTP / 串口这类有后端资源视图的会话有意义；
+    // RDP 与临时本地终端不做建卡，避免无谓的后端失败日志。
+    if (protocol === "ssh" || protocol === "sftp" || protocol === "serial") {
+      try {
+        const card = await createCard(session.id);
+        cardId = card.card_id;
+      } catch (e) {
+        console.warn("createCard fallback to local tab", e);
+      }
     }
 
     const newTab: TerminalTab = {
@@ -156,12 +244,61 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       currentMode: "command",
       status: "connecting",
       baudRate: session.protocol_options_json?.baud_rate || 115200,
+      rdpInfo: null,
+      shellKind,
     };
 
     set((state) => ({
       tabs: [...state.tabs, newTab],
       activeTabId: tabId,
     }));
+
+    // 本地终端：没有握手过程，直接标记已连接，由 XtermView 挂载后建立流
+    if (protocol === "local_shell") {
+      const connectionId = "local-" + generateUuid();
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.tabId === tabId ? { ...t, connectionId, status: "connected" as TabStatus } : t
+        ),
+      }));
+      return tabId;
+    }
+
+    // Telnet：同样由 XtermView 挂载后通过 telnet_open 建立流
+    if (protocol === "telnet") {
+      const connectionId = "telnet-" + generateUuid();
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.tabId === tabId ? { ...t, connectionId, status: "connected" as TabStatus } : t
+        ),
+      }));
+      return tabId;
+    }
+
+    // Windows 远程桌面：生成 .rdp 并唤起 mstsc.exe，结果落进 rdpInfo
+    if (protocol === "rdp") {
+      try {
+        const rdpInfo = await launchRdp(session.id);
+        if (!get().tabs.some((item) => item.tabId === tabId)) return tabId;
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? { ...t, rdpInfo, status: "connected" as TabStatus, error: undefined }
+              : t
+          ),
+        }));
+      } catch (err: any) {
+        const errMsg = formatFriendlyError(err);
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? { ...t, status: "error" as TabStatus, rdpInfo: null, error: errMsg }
+              : t
+          ),
+        }));
+      }
+      return tabId;
+    }
 
     if (protocol === "serial") {
       try {
@@ -242,6 +379,82 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
   },
 
+  openSession: async (session: Session, overrides?: ConnectOverrides) =>
+    get().openSessionTab(session, overrides),
+
+  openQuickLocalShell: async (shellKind: LocalShellKind = "powershell") => {
+    const tabId = generateId();
+    const label =
+      shellKind === "cmd"
+        ? "本地终端 (CMD)"
+        : shellKind === "pwsh"
+          ? "本地终端 (PowerShell 7)"
+          : "本地终端 (PowerShell)";
+
+    const tab: TerminalTab = {
+      tabId,
+      // 临时终端不落库，sessionId 用固定前缀标记，XtermView 据此不传 session_id
+      sessionId: "quick-local-" + Date.now(),
+      sessionName: label,
+      protocol: "local_shell",
+      connectionId: "local-" + generateUuid(),
+      currentMode: "command",
+      status: "connected",
+      rdpInfo: null,
+      shellKind,
+    };
+
+    set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tabId }));
+  },
+
+  addCommandHistory: (cmd: string) => {
+    const value = cmd.trim();
+    if (!value) return;
+    set((state) => {
+      const next = [value, ...state.commandHistory.filter((item) => item !== value)].slice(
+        0,
+        COMMAND_HISTORY_LIMIT
+      );
+      writeCommandHistory(next);
+      return { commandHistory: next };
+    });
+  },
+
+  clearCommandHistory: () => {
+    writeCommandHistory([]);
+    set({ commandHistory: [] });
+  },
+
+  sendCommandToTabs: async (command, options) => {
+    const appendCr = options?.appendCr !== false;
+    const payload = appendCr ? `${command}\r` : command;
+    const bytes = new TextEncoder().encode(payload);
+
+    const state = get();
+    const targets = options?.allTabs
+      ? state.tabs.filter(
+          (tab) => tab.status === "connected" && COMMAND_TARGET_PROTOCOLS.includes(tab.protocol)
+        )
+      : state.tabs.filter(
+          (tab) =>
+            tab.tabId === state.activeTabId &&
+            tab.status === "connected" &&
+            COMMAND_TARGET_PROTOCOLS.includes(tab.protocol)
+        );
+
+    for (const tab of targets) {
+      try {
+        if (tab.protocol === "serial") {
+          await sendSerial(tab.cardId || tab.tabId, Array.from(bytes));
+        } else {
+          await writeTerminal(tab.tabId, bytes);
+        }
+      } catch (e) {
+        console.warn(`sendCommandToTabs: 写入 ${tab.tabId} 失败`, e);
+      }
+    }
+  },
+
   switchMode: async (tabId, mode) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
@@ -272,7 +485,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   reconnectTab: async (tabId: string, overrides?: ConnectOverrides) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
-    if (!tab || tab.status === "connecting" || tab.status === "connected") return;
+    if (!tab || tab.status === "connecting") return;
+    // RDP 允许在「已连接」状态下再次唤起 mstsc；其余协议必须先断开才能重连
+    const isRdp = tab.protocol === "rdp";
+    if (!isRdp && tab.status === "connected") return;
 
     set((state) => ({
       tabs: state.tabs.map((t) =>
@@ -291,6 +507,51 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     await pendingTeardown.get(tabId);
     await releaseTab(tabId, tab.connectionId);
     if (!get().tabs.some((item) => item.tabId === tabId)) return;
+
+    // Windows 远程桌面：重新生成 .rdp 并唤起 mstsc.exe
+    if (tab.protocol === "rdp") {
+      try {
+        const rdpInfo = await launchRdp(tab.sessionId);
+        if (!get().tabs.some((item) => item.tabId === tabId)) return;
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? { ...t, rdpInfo, status: "connected" as TabStatus, error: undefined }
+              : t
+          ),
+        }));
+      } catch (err: any) {
+        const message = formatFriendlyError(err);
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? { ...t, status: "error" as TabStatus, rdpInfo: null, error: message }
+              : t
+          ),
+        }));
+      }
+      return;
+    }
+
+    // 本地终端 / Telnet：刷新下行通道标识即可让 XtermView 重新建立流
+    if (tab.protocol === "local_shell" || tab.protocol === "telnet") {
+      const connectionId =
+        (tab.protocol === "local_shell" ? "local-" : "telnet-") + generateUuid();
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.tabId === tabId
+            ? {
+                ...t,
+                connectionId,
+                status: "connected" as TabStatus,
+                error: undefined,
+                exitCode: null,
+              }
+            : t
+        ),
+      }));
+      return;
+    }
 
     if (tab.protocol === "serial") {
       try {
