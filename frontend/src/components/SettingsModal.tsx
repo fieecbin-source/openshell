@@ -232,9 +232,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
             <SettingsIcon className="h-5 w-5 text-accent" />
             <div>
               <h2 id="preferences-title" className="text-sm font-semibold text-ink">系统偏好设置</h2>
-              <p className="text-[11px] text-ink-secondary ">
-                管理终端显示、工作区背景与保险库安全
-              </p>
             </div>
           </div>
           <button
@@ -322,9 +319,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                       <h4 className="font-bold text-xs text-ink ">
                         壁纸不透明度
                       </h4>
-                      <p className="text-[10px] text-ink-tertiary">
-                        拖动调节 0–100%，默认 50%，仅改变壁纸，不影响终端文字
-                      </p>
                     </div>
                   </div>
                   <span className="font-mono text-accent font-bold text-xs px-2.5 py-1 rounded-lg bg-accent/15 border border-accent/25">
@@ -388,9 +382,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                     <h3 className="font-bold text-sm text-ink  flex items-center gap-1.5">
                       <MountainIcon className="h-4 w-4" /> 精选电脑风景桌面壁纸
                     </h3>
-                    <p className="text-[11px] text-ink-secondary  mt-0.5">
-                      点击即可瞬间切换当前终端背景，支持高分辨率自然风光
-                    </p>
                   </div>
                 </div>
 
@@ -429,7 +420,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                           ⬛
                         </div>
                         <span className="font-semibold text-ink text-xs">默认纯色</span>
-                        <span className="text-[10px] text-ink-tertiary">纯黑底色</span>
                       </div>
                       {backgroundId === "" && (
                         <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-action text-white flex items-center justify-center text-xs shadow-md">
@@ -485,9 +475,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                       <h4 className="font-bold text-xs text-ink ">
                         开源自由自定义壁纸
                       </h4>
-                      <p className="text-[10px] text-ink-secondary ">
-                        支持输入任意网络图片 URL、或上传本地高清照片
-                      </p>
                     </div>
                   </div>
                   <input
@@ -623,11 +610,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
           {activeTab === "terminal" && (
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-4 rounded-2xl liquid-glass-card p-4">
-                <div><label htmlFor="terminal-font-weight" className="text-os-xs font-semibold text-ink">文字清晰度</label>
-                  <p className="mt-1 text-os-2xs text-ink-secondary">默认 14px 等宽字体，1.3 倍行高，增强文字对比度。</p></div>
+                <div><label htmlFor="terminal-font-weight" className="text-os-xs font-semibold text-ink">文字清晰度</label></div>
                 <select id="terminal-font-weight" value={fontWeight} onChange={(event) => setFontWeight(Number(event.target.value) as 400 | 500 | 600)}
                   className="rounded-os-md border border-line/20 bg-surface px-3 py-2 text-os-xs text-ink">
-                  <option value={400}>标准 · 400</option><option value={500}>清晰 · 500（默认）</option><option value={600}>加粗 · 600</option>
+                  <option value={400}>标准 · 400</option><option value={500}>清晰 · 500</option><option value={600}>加粗 · 600</option>
                 </select>
               </div>
 
@@ -647,9 +633,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                     onChange={(e) => setFontSize(Number(e.target.value))}
                     className="w-full accent-accent cursor-pointer"
                   />
-                  <p className="text-[10px] text-ink-secondary  mt-1">
-                    在终端内亦可按 Ctrl/Cmd +/-/0 实时缩放
-                  </p>
                 </div>
 
                 <div className="liquid-glass-card p-4 rounded-2xl flex flex-col justify-center">
@@ -731,8 +714,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                     onChange={(e) => setRenderer(e.target.value as "dom" | "webgl")}
                     className="w-full px-3 py-1.5 bg-surface/80  border border-line/10  rounded-xl text-xs text-ink  outline-none"
                   >
-                    <option value="dom">DOM（通用稳定）</option>
-                    <option value="webgl">WebGL（高吞吐硬件加速）</option>
+                    <option value="dom">DOM</option>
+                    <option value="webgl">WebGL</option>
                   </select>
                 </div>
 
@@ -769,8 +752,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                   <span className="font-semibold text-state-success ">
                     {vaultStatus?.state === "unlocked" ? "已解锁 (可安全解密主机口令)" : "未解锁"}
                   </span>
-                  <br />
-                  采用行业级 Argon2id 派生密钥与 AES-256-GCM 硬件加密保护，密码仅在本地解密，服务端永远无法获取。
                 </div>
               </div>
 

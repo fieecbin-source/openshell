@@ -61,7 +61,6 @@ export function TerminalColorSettings() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-os-md font-semibold text-ink">清晰、舒适的浅色终端</h3>
-          <p className="mt-1 text-os-xs text-ink-secondary">选择浅色预设，或单独调整文字和 ANSI 颜色。修改会即时应用并自动保存。</p>
         </div>
         <Button size="sm" onClick={() => void reset()}>恢复清晰默认值</Button>
       </div>
@@ -99,7 +98,6 @@ export function TerminalColorSettings() {
         {BASE_COLORS.map(({ key, label }) => <ColorField key={key} label={label} value={current[key]}
           onChange={(value) => setTerminalColor(key, value)} />)}
       </div>
-      <p className="text-os-2xs text-ink-secondary">终端文字保持独立渲染；背景模糊与折射只作用于玻璃材质。系统自动增强 ANSI 文本对比度。</p>
 
       <details className="border-t border-line/15 pt-3">
         <summary className="cursor-pointer text-os-xs font-medium text-ink">高级 ANSI 颜色 · 16 色</summary>
