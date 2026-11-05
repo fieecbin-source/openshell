@@ -1,4 +1,5 @@
 import { GlassMaterial } from "./ui/GlassMaterial";
+import { cn } from "./ui/cn";
 import React, { useEffect, useState } from "react";
 import type { Protocol, Session, SessionInput } from "../types/ipc";
 import { useVaultStore } from "../stores/vaultStore";
@@ -10,6 +11,7 @@ import { ServerSidebar } from "./ServerSidebar";
 import { TerminalTabs } from "./TerminalTabs";
 import { TerminalHost } from "./TerminalHost";
 import { SessionModal } from "./SessionModal";
+import { ConnectionDetailsPopover } from "./ConnectionDetailsPopover";
 import { VaultUnlockModal } from "./VaultUnlockModal";
 import { TransferQueueDrawer } from "./TransferQueueDrawer";
 import { RemoteEditorModal } from "./RemoteEditorModal";
@@ -50,6 +52,8 @@ export const AppLayout: React.FC = () => {
   const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<Session | null>(null);
   const [initialSessionValues, setInitialSessionValues] = useState<Partial<SessionInput> | undefined>();
+  // 连接详情与诊断面板
+  const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
 
   // 命令面板快捷键与状态
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -154,6 +158,15 @@ export const AppLayout: React.FC = () => {
 
   const activeTab = isHomeActive ? null : tabs.find((t) => t.tabId === activeTabId);
   const activeSession = activeTab ? sessions.find((s) => s.id === activeTab.sessionId) : undefined;
+
+  // 底部状态栏：无活动标签时显示引擎就绪，否则随当前连接状态着色
+  const footerConnectionStatus = activeTab
+    ? activeTab.status === "connected"
+      ? { dot: "bg-emerald-500", text: "已连接" }
+      : activeTab.status === "error" || activeTab.status === "disconnected"
+        ? { dot: "bg-red-500", text: "连接失败" }
+        : { dot: "bg-amber-400 animate-pulse", text: "连接中" }
+    : { dot: "bg-state-success", text: "核心引擎: Ready" };
   const isConnected = activeTab && activeTab.status === "connected" && (activeTab.connectionId || activeTab.protocol === "serial");
 
   // 终端宿主相关派生状态：
@@ -234,6 +247,14 @@ export const AppLayout: React.FC = () => {
     setEditingSession(session);
     setInitialSessionValues(undefined);
     setIsSessionModalOpen(true);
+  };
+
+  /** 标签栏右键「编辑连接配置」：按标签 ID 找到对应会话并打开编辑弹窗 */
+  const handleEditSessionByTab = (tabId: string) => {
+    const tab = tabs.find((item) => item.tabId === tabId);
+    if (!tab) return;
+    const session = sessions.find((item) => item.id === tab.sessionId);
+    if (session) handleEditSession(session);
   };
 
   // 快捷保存当前活动标签为新会话或编辑对应会话 (智能解析 Host/Port/Username)
@@ -461,6 +482,8 @@ export const AppLayout: React.FC = () => {
           onNewSessionWithProtocol={handleNewSessionWithProtocol}
           onOpenProxyManager={() => setProxyModalOpen(true)}
           onOpenPortForward={() => setForwardModalOpen(true)}
+          onOpenConnectionDetails={() => setConnectionDetailsOpen(true)}
+          onEditSessionByTab={handleEditSessionByTab}
         />
 
         <div className="relative flex-1 overflow-hidden">
@@ -587,7 +610,12 @@ export const AppLayout: React.FC = () => {
                       style={{ flex: `0 0 ${splitRatio * 100}%` }}
                     >
                       {/* 终端宿主：所有已打开标签的 xterm 实例常驻挂载，切换标签/视图不重建 */}
-                      <TerminalHost visible={sessionTerminalVisible} style={{ height: "100%" }} />
+                      <TerminalHost
+                        visible={sessionTerminalVisible}
+                        style={{ height: "100%" }}
+                        onEditSession={handleEditSession}
+                        onOpenConnectionDetails={() => setConnectionDetailsOpen(true)}
+                      />
                       {monitorOverlay}
                     </div>
 
@@ -613,7 +641,12 @@ export const AppLayout: React.FC = () => {
                 ) : (
                   <>
                     <div className="relative min-h-0 flex-1 overflow-hidden">
-                      <TerminalHost visible={sessionTerminalVisible} style={{ height: "100%" }} />
+                      <TerminalHost
+                        visible={sessionTerminalVisible}
+                        style={{ height: "100%" }}
+                        onEditSession={handleEditSession}
+                        onOpenConnectionDetails={() => setConnectionDetailsOpen(true)}
+                      />
                       {monitorOverlay}
 
                       {/* 全 SFTP 视图：覆盖层压在终端之上，终端仍保持挂载 */}
@@ -658,14 +691,19 @@ export const AppLayout: React.FC = () => {
         <footer className="relative z-10 flex h-7 shrink-0 items-center justify-between border-t border-line/10 px-3 text-[11px] text-ink-secondary select-none bg-surface/85 backdrop-blur-xl">
           <div className="flex items-center space-x-3">
             <span className="flex items-center space-x-1.5">
-              <span className="h-2 w-2 rounded-full bg-state-success shadow-apple-sm" />
-              <span className="font-medium text-ink-secondary">核心引擎: Ready</span>
+              <span className={cn("h-2 w-2 rounded-full shadow-apple-sm", footerConnectionStatus.dot)} />
+              <span className="font-medium text-ink-secondary">{footerConnectionStatus.text}</span>
             </span>
 
             {activeTab && (
               <>
                 <span className="text-ink-secondary">|</span>
-                <span className="text-ink font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setConnectionDetailsOpen(true)}
+                  className="text-ink font-semibold hover:text-accent transition-colors"
+                  title="查看当前连接详情与诊断信息"
+                >
                   当前: {activeTab.sessionName} (
                   {activeTab.protocol === "rdp"
                     ? "Windows 远程桌面"
@@ -681,7 +719,7 @@ export const AppLayout: React.FC = () => {
                               ? "分屏 · 终端 + SFTP"
                               : "终端命令行"}
                   )
-                </span>
+                </button>
 
                 {/* 快捷保存/编辑活动会话动作 */}
                 <button
@@ -744,6 +782,7 @@ export const AppLayout: React.FC = () => {
           settingsModalOpen,
           syncModalOpen,
           transferQueueOpen,
+          connectionDetailsOpen,
           activeTabId ?? "home",
         ].join("|")}
       >
@@ -788,6 +827,16 @@ export const AppLayout: React.FC = () => {
         isOpen={portCheckerOpen}
         onClose={() => setPortCheckerOpen(false)}
         defaultHost={activeTab?.sessionName ? undefined : "127.0.0.1"}
+      />
+      <ConnectionDetailsPopover
+        open={connectionDetailsOpen}
+        onClose={() => setConnectionDetailsOpen(false)}
+        tab={activeTab ?? null}
+        session={activeSession ?? null}
+        onReconnect={(tabId) => void useTerminalStore.getState().reconnectTab(tabId)}
+        onEditSession={handleEditSession}
+        onOpenPortForward={() => setForwardModalOpen(true)}
+        onOpenProxyManager={() => setProxyModalOpen(true)}
       />
       </OverlayBoundary>
     </div>

@@ -119,6 +119,20 @@ function generateId(): string {
  */
 const pendingTeardown = new Map<string, Promise<void>>();
 
+/** 断线自动重连定时器：按标签 ID 记录，手动重连/关闭标签/连接成功时统一清理 */
+const autoReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearAutoReconnectTimer(tabId: string): void {
+  const timer = autoReconnectTimers.get(tabId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    autoReconnectTimers.delete(tabId);
+  }
+}
+
+/** 支持断线自动重连的协议（RDP 由 mstsc 承载，本地终端无远端连接） */
+const AUTO_RECONNECT_PROTOCOLS: Protocol[] = ["ssh", "sftp", "telnet", "serial"];
+
 function releaseTab(tabId: string, connectionId?: string | null): Promise<void> {
   const task = (async () => {
     await closeTerminal(tabId).catch(() => {});
@@ -189,9 +203,11 @@ interface TerminalState {
   toggleMode: (tabId: string) => Promise<void>;
   reconnectTab: (tabId: string, overrides?: ConnectOverrides) => Promise<void>;
   /**
-   * 标记标签已断开；等待用户按回车，不安排自动重连。
+   * 标记标签已断开；若会话启用了 auto_reconnect，则按指数退避安排自动重连。
    */
   markDisconnected: (tabId: string, reason?: string, exitCode?: number | null) => void;
+  /** 取消该标签的自动重连定时器，并把 reconnecting 状态退回 disconnected */
+  cancelAutoReconnect: (tabId: string) => void;
   updateTabStatus: (tabId: string, status: TabStatus, error?: string) => void;
   renameTab: (tabId: string, newName: string) => void;
   duplicateTab: (tabId: string) => Promise<string | null>;
@@ -246,6 +262,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       baudRate: session.protocol_options_json?.baud_rate || 115200,
       rdpInfo: null,
       shellKind,
+      connectedAt: null,
+      reconnectAttempt: 0,
     };
 
     set((state) => ({
@@ -258,7 +276,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const connectionId = "local-" + generateUuid();
       set((state) => ({
         tabs: state.tabs.map((t) =>
-          t.tabId === tabId ? { ...t, connectionId, status: "connected" as TabStatus } : t
+          t.tabId === tabId
+            ? {
+                ...t,
+                connectionId,
+                status: "connected" as TabStatus,
+                connectedAt: Date.now(),
+                reconnectAttempt: 0,
+              }
+            : t
         ),
       }));
       return tabId;
@@ -269,7 +295,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const connectionId = "telnet-" + generateUuid();
       set((state) => ({
         tabs: state.tabs.map((t) =>
-          t.tabId === tabId ? { ...t, connectionId, status: "connected" as TabStatus } : t
+          t.tabId === tabId
+            ? {
+                ...t,
+                connectionId,
+                status: "connected" as TabStatus,
+                connectedAt: Date.now(),
+                reconnectAttempt: 0,
+              }
+            : t
         ),
       }));
       return tabId;
@@ -283,7 +317,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, rdpInfo, status: "connected" as TabStatus, error: undefined }
+              ? {
+                  ...t,
+                  rdpInfo,
+                  status: "connected" as TabStatus,
+                  error: undefined,
+                  connectedAt: Date.now(),
+                  reconnectAttempt: 0,
+                }
               : t
           ),
         }));
@@ -315,7 +356,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.tabId === tabId ? { ...t, status: "connected" } : t
+            t.tabId === tabId
+              ? {
+                  ...t,
+                  status: "connected",
+                  connectedAt: Date.now(),
+                  reconnectAttempt: 0,
+                }
+              : t
           ),
         }));
 
@@ -350,7 +398,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, connectionId: res.connection_id, status: "connected", error: undefined }
+              ? {
+                  ...t,
+                  connectionId: res.connection_id,
+                  status: "connected",
+                  error: undefined,
+                  connectedAt: Date.now(),
+                  reconnectAttempt: 0,
+                }
               : t
           ),
         }));
@@ -402,6 +457,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       status: "connected",
       rdpInfo: null,
       shellKind,
+      connectedAt: Date.now(),
+      reconnectAttempt: 0,
     };
 
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tabId }));
@@ -490,6 +547,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const isRdp = tab.protocol === "rdp";
     if (!isRdp && tab.status === "connected") return;
 
+    // 手动/自动重连启动时取消尚未触发的下一次退避定时器
+    clearAutoReconnectTimer(tabId);
+
     set((state) => ({
       tabs: state.tabs.map((t) =>
         t.tabId === tabId
@@ -498,6 +558,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               status: "connecting",
               connectionId: null,
               error: undefined,
+              connectedAt: null,
             }
           : t
       ),
@@ -516,7 +577,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, rdpInfo, status: "connected" as TabStatus, error: undefined }
+              ? {
+                  ...t,
+                  rdpInfo,
+                  status: "connected" as TabStatus,
+                  error: undefined,
+                  connectedAt: Date.now(),
+                  reconnectAttempt: 0,
+                }
               : t
           ),
         }));
@@ -546,6 +614,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 status: "connected" as TabStatus,
                 error: undefined,
                 exitCode: null,
+                connectedAt: Date.now(),
+                reconnectAttempt: 0,
               }
             : t
         ),
@@ -570,6 +640,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                   ...t,
                   status: "connected",
                   error: undefined,
+                  connectedAt: Date.now(),
+                  reconnectAttempt: 0,
                 }
               : t
           ),
@@ -597,6 +669,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 status: "connected",
                 error: undefined,
                 exitCode: null,
+                connectedAt: Date.now(),
+                reconnectAttempt: 0,
               }
             : t
         ),
@@ -613,6 +687,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
 
+    clearAutoReconnectTimer(tabId);
+
     set((state) => ({
       tabs: state.tabs.map((t) =>
         t.tabId === tabId
@@ -622,17 +698,88 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               connectionId: null,
               error: reason,
               exitCode: exitCode ?? t.exitCode ?? null,
+              connectedAt: null,
             }
           : t
       ),
     }));
 
     void releaseTab(tabId, tab.connectionId);
+
+    // 被动断开且会话启用 auto_reconnect 时，按退避间隔安排一次自动重连。
+    // sessionStore 动态引入，避免与 sessionStore -> terminalStore 的静态依赖成环。
+    void (async () => {
+      try {
+        const { useSessionStore } = await import("./sessionStore");
+        const session = useSessionStore
+          .getState()
+          .sessions.find((item) => item.id === tab.sessionId);
+        const live = get().tabs.find((t) => t.tabId === tabId);
+        // 等待会话查询期间用户可能已手动重连、取消或关闭标签
+        if (!live || live.status !== "disconnected") return;
+        if (!AUTO_RECONNECT_PROTOCOLS.includes(tab.protocol)) return;
+        if (!session?.auto_reconnect) return;
+
+        const maxAttempts = Math.max(1, session.reconnect_max ?? 5);
+        const attempt = live.reconnectAttempt ?? 0;
+        if (attempt >= maxAttempts) {
+          // 已达到上限：彻底失败，清零计数等待用户手动处理
+          set((state) => ({
+            tabs: state.tabs.map((t) =>
+              t.tabId === tabId ? { ...t, status: "error", reconnectAttempt: 0 } : t
+            ),
+          }));
+          return;
+        }
+
+        const nextAttempt = attempt + 1;
+        const delayMs = Math.min(10000, nextAttempt * 2000);
+
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? {
+                  ...t,
+                  status: "reconnecting",
+                  reconnectAttempt: nextAttempt,
+                  error: reason,
+                  connectedAt: null,
+                }
+              : t
+          ),
+        }));
+
+        clearAutoReconnectTimer(tabId);
+        const timer = setTimeout(() => {
+          autoReconnectTimers.delete(tabId);
+          const current = get().tabs.find((t) => t.tabId === tabId);
+          if (current && current.status === "reconnecting") {
+            void get().reconnectTab(tabId);
+          }
+        }, delayMs);
+        autoReconnectTimers.set(tabId, timer);
+      } catch (e) {
+        console.warn("markDisconnected: schedule auto reconnect failed", e);
+      }
+    })();
+  },
+
+  cancelAutoReconnect: (tabId) => {
+    clearAutoReconnectTimer(tabId);
+    set((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.tabId === tabId && t.status === "reconnecting"
+          ? { ...t, status: "disconnected" }
+          : t
+      ),
+    }));
   },
 
   closeTab: async (tabId: string) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
+
+    clearAutoReconnectTimer(tabId);
 
     // 先移除标签，让仍在连接中的响应立即失效，再异步释放资源。
     set((state) => {
@@ -686,9 +833,23 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   setActiveTab: (tabId: string) => set({ activeTabId: tabId }),
 
   updateTabStatus: (tabId, status, error) => {
+    if (status === "connected") clearAutoReconnectTimer(tabId);
     set((state) => ({
       tabs: state.tabs.map((t) =>
-        t.tabId === tabId ? { ...t, status, error } : t
+        t.tabId === tabId
+          ? {
+              ...t,
+              status,
+              error,
+              connectedAt:
+                status === "connected"
+                  ? t.connectedAt ?? Date.now()
+                  : status === "connecting" || status === "disconnected" || status === "error"
+                    ? null
+                    : t.connectedAt,
+              reconnectAttempt: status === "connected" ? 0 : t.reconnectAttempt,
+            }
+          : t
       ),
     }));
   },

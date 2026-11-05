@@ -1,10 +1,11 @@
 import React, { useCallback } from "react";
-import type { RdpProtocolOptions } from "../types/ipc";
+import type { RdpProtocolOptions, Session } from "../types/ipc";
 import type { TerminalTab } from "../stores/terminalStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { toast } from "../stores/toastStore";
 import {
+  ActivityIcon,
   CopyIcon,
   MonitorIcon,
   PlayIcon,
@@ -15,6 +16,10 @@ import { cn } from "./ui/cn";
 
 interface RdpSessionViewProps {
   tab: TerminalTab;
+  /** 直接打开 SessionModal 编辑当前 RDP 会话配置 */
+  onEditSession?: (session: Session) => void;
+  /** 打开连接详情与诊断面板 */
+  onOpenConnectionDetails?: () => void;
 }
 
 const STATUS_META: Record<
@@ -76,7 +81,11 @@ const BadgePill: React.FC<{ children: React.ReactNode; tone?: "accent" | "muted"
  * 因此标签页内展示的是「启动状态面板」：连接信息、进程 PID、临时 .rdp 路径与显示参数，
  * 并提供一键重新唤起与配置入口。
  */
-export const RdpSessionView: React.FC<RdpSessionViewProps> = ({ tab }) => {
+export const RdpSessionView: React.FC<RdpSessionViewProps> = ({
+  tab,
+  onEditSession,
+  onOpenConnectionDetails,
+}) => {
   const reconnectTab = useTerminalStore((state) => state.reconnectTab);
   const session = useSessionStore((state) =>
     state.sessions.find((item) => item.id === tab.sessionId)
@@ -222,18 +231,34 @@ export const RdpSessionView: React.FC<RdpSessionViewProps> = ({ tab }) => {
 
             <button
               type="button"
-              onClick={() =>
-                toast.info(
-                  "在左侧主机列表右键该会话 → 编辑配置",
-                  "可在连接弹窗的「远程桌面」页调整分辨率、全屏、磁盘映射与剪贴板共享。"
-                )
-              }
+              onClick={() => {
+                if (session && onEditSession) {
+                  onEditSession(session);
+                } else {
+                  toast.info(
+                    "在左侧主机列表右键该会话 → 编辑配置",
+                    "可在连接弹窗的「远程桌面」页调整分辨率、全屏、磁盘映射与剪贴板共享。"
+                  );
+                }
+              }}
               className="inline-flex items-center gap-1.5 rounded-xl border border-line/15 bg-surface px-3.5 py-2 text-xs font-semibold text-ink-secondary shadow-apple-sm transition hover:bg-surface-muted hover:text-ink"
               title="修改该连接的远程桌面配置"
             >
               <SettingsIcon className="h-3.5 w-3.5" />
               <span>修改连接配置</span>
             </button>
+
+            {onOpenConnectionDetails && (
+              <button
+                type="button"
+                onClick={() => onOpenConnectionDetails()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-line/15 bg-surface px-3.5 py-2 text-xs font-semibold text-ink-secondary shadow-apple-sm transition hover:bg-surface-muted hover:text-ink"
+                title="查看连接状态、链路拓扑与诊断信息"
+              >
+                <ActivityIcon className="h-3.5 w-3.5" />
+                <span>查看连接详情</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

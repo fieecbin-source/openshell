@@ -24,6 +24,10 @@ interface TerminalTabsProps {
   onNewSessionWithProtocol?: (protocol?: Protocol) => void;
   onOpenProxyManager?: () => void;
   onOpenPortForward?: () => void;
+  /** 打开当前活动标签的「连接详情与诊断」面板 */
+  onOpenConnectionDetails?: (tabId?: string) => void;
+  /** 按标签 ID 打开对应会话的配置编辑弹窗 */
+  onEditSessionByTab?: (tabId: string) => void;
 }
 
 /** 非 SSH 协议的标签角标，便于一眼区分连接类型 */
@@ -42,6 +46,8 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
   onNewSessionWithProtocol,
   onOpenProxyManager,
   onOpenPortForward,
+  onOpenConnectionDetails,
+  onEditSessionByTab,
 }) => {
   const {
     tabs,
@@ -134,13 +140,42 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
     closeTab(tabId);
   };
 
-  const tabClass = (active: boolean) =>
+  const tabClass = (active: boolean, status?: string) =>
     cn(
       "group relative flex h-[26px] shrink-0 items-center gap-1.5 rounded-os-md px-2 text-os-xs transition-colors duration-os ease-os select-none",
       active
         ? "border border-line/10 bg-surface text-ink shadow-os-sm"
         : "border border-transparent text-ink-secondary hover:bg-line/5 hover:text-ink",
+      // 连接成功：活动标签叠加翠绿底边高亮（复刻 FinalShell 绿色状态标签）
+      status === "connected" && active && "border-b-2 border-b-emerald-500 bg-emerald-500/[0.06]",
+      // 连接失败 / 已断开：醒目的红色警示边框与底色
+      (status === "error" || status === "disconnected") &&
+        cn(
+          "border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/15",
+          active && "border-b-2 border-b-red-500"
+        )
     );
+
+  // 右侧「当前连接状态 · 详情」胶囊的状态配色（复刻 FinalShell 绿/红/黄状态标签）
+  const activeStatusPill = !activeTab || isHomeActive
+    ? null
+    : activeTab.status === "connected"
+      ? {
+          dot: "bg-emerald-500",
+          cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/15",
+          label: "已连接 · 详情",
+        }
+      : activeTab.status === "error" || activeTab.status === "disconnected"
+        ? {
+            dot: "bg-red-500",
+            cls: "border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/15",
+            label: "连接失败 · 详情",
+          }
+        : {
+            dot: "bg-amber-400 animate-pulse",
+            cls: "border-amber-400/30 bg-amber-400/10 text-amber-500 hover:bg-amber-400/15",
+            label: "连接中 · 详情",
+          };
 
   return (
     <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-line/10 bg-surface-muted px-2">
@@ -178,19 +213,15 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
                     : "已断开，按 Enter 重新连接";
 
           let statusDot = (
-            <span className="h-2 w-2 shrink-0 rounded-full bg-state-success shadow-apple-sm" />
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 ring-2 ring-emerald-500/25" />
           );
-          if (tab.status === "connecting") {
+          if (tab.status === "connecting" || tab.status === "reconnecting") {
             statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-state-warning animate-pulse" />
-            );
-          } else if (tab.status === "reconnecting") {
-            statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse" />
+              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse ring-2 ring-amber-400/25" />
             );
           } else if (tab.status === "error" || tab.status === "disconnected") {
             statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-state-danger" />
+              <span className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-red-500/25" />
             );
           }
 
@@ -228,7 +259,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
                   setActiveTab(tab.tabId);
                 }
               }}
-              className={cn(tabClass(isActive), "cursor-pointer")}
+              className={cn(tabClass(isActive, tab.status), "cursor-pointer")}
               title={`${tab.sessionName} (双击重命名，右键更多)`}
             >
               <span title={statusHint}>{statusDot}</span>
@@ -258,6 +289,30 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
                 >
                   {protocolBadge}
                 </Badge>
+              )}
+
+              {tab.status === "reconnecting" && !!tab.reconnectAttempt && (
+                <span
+                  className="shrink-0 rounded-full border border-amber-400/40 bg-amber-400/10 px-1 font-mono text-[9px] font-semibold text-amber-500"
+                  title={`自动重连第 ${tab.reconnectAttempt} 次`}
+                >
+                  重连 {tab.reconnectAttempt}
+                </span>
+              )}
+
+              {(tab.status === "error" || tab.status === "disconnected") && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void useTerminalStore.getState().reconnectTab(tab.tabId);
+                  }}
+                  className="ml-0.5 shrink-0 rounded-[4px] px-1 text-[11px] font-semibold text-red-500 transition-colors hover:bg-red-500/20"
+                  title="重新连接"
+                  aria-label={`重新连接 ${tab.sessionName}`}
+                >
+                  ↻
+                </button>
               )}
 
               <button
@@ -307,8 +362,23 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
         )}
       </div>
 
-      {/* 右侧：视图切换入口（终端 / 分屏 / SFTP）与全屏按钮 */}
+      {/* 右侧：当前连接状态胶囊、视图切换入口（终端 / 分屏 / SFTP）与全屏按钮 */}
       <div className="flex shrink-0 items-center gap-1.5">
+        {activeStatusPill && (
+          <button
+            type="button"
+            onClick={() => onOpenConnectionDetails?.(activeTab?.tabId)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors",
+              activeStatusPill.cls
+            )}
+            title="查看当前连接的详情与诊断信息"
+          >
+            <span className={cn("h-1.5 w-1.5 rounded-full", activeStatusPill.dot)} />
+            {activeStatusPill.label}
+          </button>
+        )}
+
         {activeTab &&
           !isHomeActive &&
           (activeTab.protocol === "ssh" || activeTab.protocol === "sftp") && (
@@ -497,6 +567,45 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
             }}
           >
             复制会话 (新开标签)
+          </button>
+          <button
+            type="button"
+            className="w-full px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+            onClick={() => {
+              const tabId = contextMenu.tabId;
+              setContextMenu(null);
+              onOpenConnectionDetails?.(tabId);
+            }}
+          >
+            查看连接详情
+          </button>
+          {(() => {
+            const tab = tabs.find((t) => t.tabId === contextMenu.tabId);
+            if (!tab || tab.status === "connected" || tab.status === "connecting") return null;
+            return (
+              <button
+                type="button"
+                className="w-full px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+                onClick={() => {
+                  const tabId = contextMenu.tabId;
+                  setContextMenu(null);
+                  void useTerminalStore.getState().reconnectTab(tabId);
+                }}
+              >
+                立即重新连接
+              </button>
+            );
+          })()}
+          <button
+            type="button"
+            className="w-full px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+            onClick={() => {
+              const tabId = contextMenu.tabId;
+              setContextMenu(null);
+              onEditSessionByTab?.(tabId);
+            }}
+          >
+            编辑连接配置
           </button>
           <div className="my-1 border-t border-line/10" />
           <button

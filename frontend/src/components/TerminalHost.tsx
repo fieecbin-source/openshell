@@ -1,4 +1,5 @@
 import React from "react";
+import type { Session } from "../types/ipc";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSerialStore } from "../stores/serialStore";
 import { XtermView } from "./XtermView";
@@ -12,13 +13,22 @@ interface TerminalHostProps {
   visible: boolean;
   /** 终端区高度：分屏模式下由外层传入，其余情况铺满 */
   style?: React.CSSProperties;
+  /** 从 RDP 面板直接打开会话配置编辑弹窗 */
+  onEditSession?: (session: Session) => void;
+  /** 从 RDP 面板打开连接详情与诊断面板 */
+  onOpenConnectionDetails?: () => void;
 }
 
 /**
  * 终端宿主：把所有已打开标签的终端实例常驻挂载，只用可见性控制显隐。
  * 错误信息与重连提示直接在终端内打印，禁止使用模态弹窗/遮罩层阻挡终端视窗。
  */
-export const TerminalHost: React.FC<TerminalHostProps> = ({ visible, style }) => {
+export const TerminalHost: React.FC<TerminalHostProps> = ({
+  visible,
+  style,
+  onEditSession,
+  onOpenConnectionDetails,
+}) => {
   const tabs = useTerminalStore((s) => s.tabs);
   const activeTabId = useTerminalStore((s) => s.activeTabId);
   const viewMode = useSerialStore((s) => s.viewMode);
@@ -42,7 +52,11 @@ export const TerminalHost: React.FC<TerminalHostProps> = ({ visible, style }) =>
             aria-hidden={!slotVisible}
           >
             {tab.protocol === "rdp" ? (
-              <RdpSessionView tab={tab} />
+              <RdpSessionView
+                tab={tab}
+                onEditSession={onEditSession}
+                onOpenConnectionDetails={onOpenConnectionDetails}
+              />
             ) : tab.protocol === "serial" ? (
               <>
                 <SerialControlBar cardId={tab.cardId || tab.tabId} baudRate={tab.baudRate} />
