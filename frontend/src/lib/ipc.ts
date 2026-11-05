@@ -652,6 +652,94 @@ export async function closeSerial(cardId: string): Promise<void> {
   return await invoke<void>("serial_close", { cardId });
 }
 
+// ==========================================
+// Proxy Server Management & New Protocols (RDP / LocalShell / Telnet)
+// ==========================================
+
+export async function proxyListGet(): Promise<import("../types/ipc").ProxyServerConfig[]> {
+  return await invoke<import("../types/ipc").ProxyServerConfig[]>("proxy_list_get");
+}
+
+export async function proxyListSave(
+  proxies: import("../types/ipc").ProxyServerConfig[]
+): Promise<import("../types/ipc").ProxyServerConfig[]> {
+  return await invoke<import("../types/ipc").ProxyServerConfig[]>("proxy_list_save", { proxies });
+}
+
+export async function proxyTest(
+  proxy: import("../types/ipc").ProxyServerConfig
+): Promise<import("../types/ipc").ProxyTestResult> {
+  return await invoke<import("../types/ipc").ProxyTestResult>("proxy_test", { proxy });
+}
+
+export async function launchRdp(
+  sessionId: string,
+  overrides?: {
+    host?: string;
+    port?: number;
+    username?: string;
+    password?: string;
+    fullscreen?: boolean;
+    width?: number;
+    height?: number;
+    drivestoredirect?: boolean;
+  }
+): Promise<import("../types/ipc").RdpLaunchResult> {
+  return await invoke<import("../types/ipc").RdpLaunchResult>("rdp_launch", {
+    sessionId,
+    overrides: overrides || null,
+  });
+}
+
+export async function openLocalShell(
+  tabId: string,
+  cols: number,
+  rows: number,
+  onData: (data: number[]) => void,
+  options?: {
+    sessionId?: string | null;
+    shellKind?: import("../types/ipc").LocalShellKind | null;
+    shellPath?: string | null;
+    workingDir?: string | null;
+    startupCommand?: string | null;
+  }
+): Promise<string> {
+  const channel = new Channel<number[]>();
+  channel.onmessage = onData;
+  return await invoke<string>("local_shell_open", {
+    tabId,
+    cols,
+    rows,
+    onData: channel,
+    options: options || null,
+  });
+}
+
+export async function openTelnet(
+  tabId: string,
+  sessionId: string,
+  cols: number,
+  rows: number,
+  onData: (data: number[]) => void,
+  overrides?: {
+    host?: string;
+    port?: number;
+    username?: string;
+    password?: string;
+  }
+): Promise<string> {
+  const channel = new Channel<number[]>();
+  channel.onmessage = onData;
+  return await invoke<string>("telnet_open", {
+    tabId,
+    sessionId,
+    cols,
+    rows,
+    onData: channel,
+    overrides: overrides || null,
+  });
+}
+
 // AI 终端助手（阶段 1）：模型配置与凭据命令统一由 ai/aiIpc 提供。
 export * from "./ai/aiIpc";
 

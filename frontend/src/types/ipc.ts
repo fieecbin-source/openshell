@@ -1,9 +1,84 @@
-export type Protocol = "ssh" | "sftp" | "telnet" | "serial" | "local_shell";
+export type Protocol = "ssh" | "sftp" | "telnet" | "serial" | "local_shell" | "rdp";
 export type AuthMethod = "password" | "publickey" | "public_key" | "keyboard_interactive" | "agent" | "none";
 export type HostKeyPolicy = "strict" | "accept_new" | "insecure";
 export type GroupKind = "session" | "snippet";
 export type CredentialKind = "password" | "keyboard_interactive" | "passphrase";
 export type SavePolicy = "always" | "ask" | "never";
+
+// ==========================================
+// Proxy Server & Protocol Options Contracts
+// ==========================================
+
+export type ProxyType = "http" | "socks4" | "socks5";
+
+export interface ProxyServerConfig {
+  id: string;
+  name: string;
+  proxy_type: ProxyType;
+  host: string;
+  port: number;
+  username?: string | null;
+  password?: string | null;
+  notes?: string | null;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface ProxyTestResult {
+  ok: boolean;
+  latency_ms: number | null;
+  message: string;
+}
+
+export interface ProxyJumpConfig {
+  session_id: string;
+}
+
+export interface RdpProtocolOptions {
+  fullscreen?: boolean;
+  custom_size?: boolean;
+  width?: number;
+  height?: number;
+  drivestoredirect?: boolean;
+  redirect_clipboard?: boolean;
+  redirect_printers?: boolean;
+  redirect_audio?: "local" | "remote" | "none";
+  domain?: string | null;
+  admin_session?: boolean;
+}
+
+export interface RdpLaunchResult {
+  session_id: string;
+  rdp_file_path: string;
+  pid: number | null;
+  host: string;
+  port: number;
+}
+
+export type LocalShellKind = "powershell" | "pwsh" | "cmd" | "wsl" | "bash" | "zsh" | "custom";
+
+export interface LocalShellProtocolOptions {
+  shell_kind?: LocalShellKind;
+  shell_path?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export interface TelnetProtocolOptions {
+  login_prompt?: string | null;
+  password_prompt?: string | null;
+  auto_login?: boolean;
+  newline_mode?: "crlf" | "lf" | "cr";
+  local_echo?: boolean;
+}
+
+export interface SshProtocolOptions {
+  accelerate?: boolean;
+  exec_channel_enable?: boolean;
+  backspace_key_sequence?: "ascii_del" | "ctrl_h" | "auto";
+  delete_key_sequence?: "vt220" | "ascii_del" | "auto";
+  forwarding_auto_reconnect?: boolean;
+}
 
 /**
  * 标签连接状态：
@@ -79,11 +154,19 @@ export interface SessionInput {
   ssh_key_id?: string | null;
   host_key_policy?: HostKeyPolicy;
   proxy_jump_json?: any | null;
+  proxy_id?: string | null;
   encoding?: string;
+  startup_command?: string | null;
+  working_dir?: string | null;
+  keepalive_sec?: number;
+  auto_reconnect?: boolean;
+  reconnect_max?: number;
+  compression?: boolean;
+  agent_forwarding?: boolean;
+  x11_forwarding?: boolean;
   favorite?: boolean;
   color?: string | null;
   notes?: string | null;
-  keepalive_sec?: number;
   protocol_options_json?: any | null;
 }
 
@@ -100,11 +183,19 @@ export interface SessionPatch {
   ssh_key_id?: string | null;
   host_key_policy?: HostKeyPolicy;
   proxy_jump_json?: any | null;
+  proxy_id?: string | null;
   encoding?: string;
+  startup_command?: string | null;
+  working_dir?: string | null;
+  keepalive_sec?: number;
+  auto_reconnect?: boolean;
+  reconnect_max?: number;
+  compression?: boolean;
+  agent_forwarding?: boolean;
+  x11_forwarding?: boolean;
   favorite?: boolean;
   color?: string | null;
   notes?: string | null;
-  keepalive_sec?: number;
   protocol_options_json?: any | null;
   /** 拖拽排序时使用（稀疏步进，1024 为间隔） */
   sort_order?: number;

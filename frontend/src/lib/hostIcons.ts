@@ -121,8 +121,8 @@ const DETECT_RULES: Array<[RegExp, string]> = [
   [/(database|mysql|postgres|redis|mongo|数据库)/i, "device:database"],
   [/(bastion|jump|跳板|堡垒)/i, "device:bastion"],
   [/(laptop|notebook|笔记本|便携)/i, "device:laptop"],
-  [/(desktop|windows|台式|\bpc\b)/i, "device:desktop"],
-  [/(terminal|命令行|shell)/i, "device:terminal"],
+  [/(desktop|windows|rdp|远程桌面|台式|\bpc\b)/i, "device:desktop"],
+  [/(terminal|命令行|shell|powershell|pwsh|cmd\b|wsl\b|bash\b|zsh\b)/i, "device:terminal"],
 ];
 
 export function detectHostIcon(input: {
@@ -132,6 +132,8 @@ export function detectHostIcon(input: {
   protocol?: Protocol;
 }): string {
   if (input.protocol === "serial") return DEFAULT_HOST_ICON_KEY;
+  if (input.protocol === "rdp") return "device:desktop";
+  if (input.protocol === "local_shell") return "device:terminal";
   const haystack = [input.name, input.host, input.username].filter(Boolean).join(" ");
   if (!haystack) return "device:server";
   const match = DETECT_RULES.find(([pattern]) => pattern.test(haystack));

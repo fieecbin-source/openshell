@@ -2,14 +2,24 @@ import React, { useState, useEffect } from "react";
 import type {
   AuthMethod,
   HostKeyPolicy,
+  LocalShellKind,
+  LocalShellProtocolOptions,
+  PortForwardRule,
+  PortForwardRuleInput,
+  PortForwardType,
   Protocol,
+  ProxyServerConfig,
+  RdpProtocolOptions,
   SerialDataBits,
   SerialFlowControl,
   SerialParity,
   SerialStopBits,
   Session,
   SessionInput,
+  SocksAuth,
   SshKey,
+  SshProtocolOptions,
+  TelnetProtocolOptions,
 } from "../types/ipc";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSerialStore } from "../stores/serialStore";
@@ -19,8 +29,10 @@ import {
   deleteSshKey,
   listSshKeys,
 } from "../lib/ipc";
+import * as ipcModule from "../lib/ipc";
 import { formatFriendlyError, parseIpcError } from "../lib/errors";
 import { SshKeyImportModal } from "./SshKeyImportModal";
+import { ProxyManagerModal } from "./ProxyManagerModal";
 import { Button, IconButton } from "./ui/Button";
 import { Select } from "./ui/Field";
 import { KeyRound, Trash2 } from "lucide-react";
@@ -31,7 +43,31 @@ import {
   normalizeHostIconKey,
   detectHostIcon,
 } from "../lib/hostIcons";
-import { XIcon, KeyIcon, PlugIcon, PlayIcon, TriangleAlertIcon } from "./ui/icons";
+import {
+  XIcon,
+  KeyIcon,
+  PlugIcon,
+  PlayIcon,
+  TriangleAlertIcon,
+  MonitorIcon,
+  TerminalIcon,
+  GlobeIcon,
+  ServerIcon,
+  PlusIcon,
+  PencilIcon,
+  TrashIcon,
+} from "./ui/icons";
+
+function getIpcFn<K extends keyof typeof ipcModule>(
+  key: K
+): (typeof ipcModule)[K] | undefined {
+  try {
+    const fn = ipcModule[key];
+    return typeof fn === "function" ? fn : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 interface SessionModalProps {
   isOpen: boolean;
@@ -42,6 +78,37 @@ interface SessionModalProps {
 }
 
 const COMMON_BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+
+const RDP_RESOLUTION_PRESETS: Array<{ label: string; width: number; height: number }> = [
+  { label: "1920 × 1080 (FHD)", width: 1920, height: 1080 },
+  { label: "1600 × 900 (HD+)", width: 1600, height: 900 },
+  { label: "1440 × 900", width: 1440, height: 900 },
+  { label: "1366 × 768", width: 1366, height: 768 },
+  { label: "1280 × 720 (HD)", width: 1280, height: 720 },
+];
+
+const ENCODING_OPTIONS = [
+  { value: "utf-8", label: "UTF-8 (默认推荐)" },
+  { value: "gbk", label: "GBK (简体中文 Windows)" },
+  { value: "gb18030", label: "GB18030" },
+  { value: "big5", label: "Big5 (繁体中文)" },
+  { value: "shift_jis", label: "Shift_JIS (日文)" },
+  { value: "iso-8859-1", label: "ISO-8859-1 (Latin-1)" },
+];
+
+const SHELL_KIND_OPTIONS: Array<{ value: LocalShellKind; label: string }> = [
+  { value: "powershell", label: "Windows PowerShell (powershell.exe)" },
+  { value: "pwsh", label: "PowerShell 7+ (pwsh)" },
+  { value: "cmd", label: "命令提示符 (cmd.exe)" },
+  { value: "wsl", label: "WSL Linux 子系统 (wsl.exe)" },
+  { value: "bash", label: "Bash (/bin/bash)" },
+  { value: "zsh", label: "Zsh (/bin/zsh)" },
+  { value: "custom", label: "自定义可执行程序 (Custom)" },
+];
+
+interface PendingTunnelRule extends PortForwardRuleInput {
+  tempId: string;
+}
 
 interface VaultInlineUnlockProps {
   uninitialized: boolean;
@@ -107,7 +174,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     checkStatus: refreshVaultStatus,
   } = useVaultStore();
 
-  const [activeTab, setActiveTab] = useState<"general" | "advanced" | "icon">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "advanced" | "tunnel" | "icon">("general");
 
   const [protocol, setProtocol] = useState<Protocol>("ssh");
   const [name, setName] = useState("");
@@ -115,17 +182,32 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [groupId, setGroupId] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
-  // SSH Fields
+  // 通用网络与代理字段
   const [host, setHost] = useState("");
-  // 端口/用户名为空时按默认值处理（22 / root），输入框本身不预填，保持界面干净
   const [port, setPort] = useState(0);
   const [username, setUsername] = useState("");
   const [authMethod, setAuthMethod] = useState<AuthMethod>("password");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [proxyId, setProxyId] = useState<string>("");
+  const [proxies, setProxies] = useState<ProxyServerConfig[]>([]);
+  const [proxyManagerOpen, setProxyManagerOpen] = useState(false);
+
+  // SSH 高级与终端字段
   const [hostKeyPolicy, setHostKeyPolicy] = useState<HostKeyPolicy>("strict");
   const [keepaliveSec, setKeepaliveSec] = useState<number>(30);
   const [jumpHostSessionId, setJumpHostSessionId] = useState<string>("");
+  const [encoding, setEncoding] = useState<string>("utf-8");
+  const [startupCommand, setStartupCommand] = useState<string>("");
+  const [workingDir, setWorkingDir] = useState<string>("");
+  const [autoReconnect, setAutoReconnect] = useState(false);
+  const [compression, setCompression] = useState(false);
+  const [agentForwarding, setAgentForwarding] = useState(false);
+  const [x11Forwarding, setX11Forwarding] = useState(false);
+  const [execChannelEnable, setExecChannelEnable] = useState(true);
+  const [sshAccelerate, setSshAccelerate] = useState(false);
+  const [backspaceSeq, setBackspaceSeq] = useState<"ascii_del" | "ctrl_h" | "auto">("auto");
+  const [deleteSeq, setDeleteSeq] = useState<"vt220" | "ascii_del" | "auto">("auto");
 
   // 已保存的私钥仅按名称选择；导入在独立弹窗中完成。
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
@@ -134,7 +216,29 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
   const [keyImportOpen, setKeyImportOpen] = useState(false);
 
-  // Serial Fields
+  // RDP 字段
+  const [rdpDomain, setRdpDomain] = useState("");
+  const [rdpFullscreen, setRdpFullscreen] = useState(true);
+  const [rdpWidth, setRdpWidth] = useState(1920);
+  const [rdpHeight, setRdpHeight] = useState(1080);
+  const [rdpDrivesRedirect, setRdpDrivesRedirect] = useState(true);
+  const [rdpClipboard, setRdpClipboard] = useState(true);
+  const [rdpPrinters, setRdpPrinters] = useState(false);
+  const [rdpAudio, setRdpAudio] = useState<"local" | "remote" | "none">("local");
+  const [rdpAdminSession, setRdpAdminSession] = useState(false);
+
+  // LocalShell 字段
+  const [shellKind, setShellKind] = useState<LocalShellKind>("powershell");
+  const [shellPath, setShellPath] = useState("");
+
+  // Telnet 字段
+  const [telnetAutoLogin, setTelnetAutoLogin] = useState(false);
+  const [telnetLoginPrompt, setTelnetLoginPrompt] = useState("login:");
+  const [telnetPasswordPrompt, setTelnetPasswordPrompt] = useState("Password:");
+  const [telnetNewlineMode, setTelnetNewlineMode] = useState<"crlf" | "lf" | "cr">("crlf");
+  const [telnetLocalEcho, setTelnetLocalEcho] = useState(false);
+
+  // Serial 字段
   const [serialPort, setSerialPort] = useState("COM1");
   const [baudRate, setBaudRate] = useState(115200);
   const [customBaud, setCustomBaud] = useState(false);
@@ -144,7 +248,20 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [flowControl, setFlowControl] = useState<SerialFlowControl>("none");
   const [dtrOnOpen, setDtrOnOpen] = useState(true);
   const [rtsOnOpen, setRtsOnOpen] = useState(true);
-  const [autoReconnect, setAutoReconnect] = useState(false);
+
+  // SSH 内嵌隧道 / 端口转发状态
+  const [existingTunnels, setExistingTunnels] = useState<PortForwardRule[]>([]);
+  const [pendingTunnels, setPendingTunnels] = useState<PendingTunnelRule[]>([]);
+  const [editingTunnelId, setEditingTunnelId] = useState<string | null>(null);
+  const [tunnelName, setTunnelName] = useState("");
+  const [tunnelType, setTunnelType] = useState<PortForwardType>("local");
+  const [tunnelBindHost, setTunnelBindHost] = useState("127.0.0.1");
+  const [tunnelBindPort, setTunnelBindPort] = useState<number>(8080);
+  const [tunnelDestHost, setTunnelDestHost] = useState("127.0.0.1");
+  const [tunnelDestPort, setTunnelDestPort] = useState<number>(80);
+  const [tunnelAutoStart, setTunnelAutoStart] = useState(true);
+  const [tunnelSocksAuth, setTunnelSocksAuth] = useState<SocksAuth>("none");
+  const [tunnelMsg, setTunnelMsg] = useState<string | null>(null);
 
   // Vault Inline State
   const [vaultPassword, setVaultPassword] = useState("");
@@ -160,6 +277,56 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const selectIcon = (key: string) => {
     setIconKey(key);
+  };
+
+  const loadProxiesList = async () => {
+    try {
+      const fn = getIpcFn("proxyListGet");
+      if (fn) {
+        const list = await fn();
+        if (Array.isArray(list)) {
+          setProxies(list);
+          return;
+        }
+      }
+    } catch {
+      // fallback to localStorage if available
+    }
+    try {
+      const raw = localStorage.getItem("openshell_proxy_list_fallback_v1");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setProxies(parsed);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const loadSessionTunnels = async (sid: string) => {
+    try {
+      const fn = getIpcFn("forwardList");
+      if (!fn) return;
+      const list = await fn(sid);
+      if (Array.isArray(list)) {
+        setExistingTunnels(list);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const resetTunnelForm = () => {
+    setEditingTunnelId(null);
+    setTunnelName("");
+    setTunnelType("local");
+    setTunnelBindHost("127.0.0.1");
+    setTunnelBindPort(8080);
+    setTunnelDestHost("127.0.0.1");
+    setTunnelDestPort(80);
+    setTunnelAutoStart(true);
+    setTunnelSocksAuth("none");
+    setTunnelMsg(null);
   };
 
   const loadKeys = async (preferId?: string) => {
@@ -205,20 +372,37 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadPorts();
+      void loadProxiesList();
     }
   }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
+      setActiveTab("general");
+      resetTunnelForm();
+      setPendingTunnels([]);
+      setExistingTunnels([]);
+
       if (editingSession) {
+        const proto = editingSession.protocol || "ssh";
         setName(editingSession.name);
         setIconKey(normalizeHostIconKey(editingSession.icon_key));
         setGroupId(editingSession.group_id || "");
-        setProtocol(editingSession.protocol || "ssh");
+        setProtocol(proto);
         setNotes(editingSession.notes || "");
+        setProxyId(editingSession.proxy_id || "");
+        setEncoding(editingSession.encoding || "utf-8");
+        setStartupCommand(editingSession.startup_command || "");
+        setWorkingDir(editingSession.working_dir || "");
+        setAutoReconnect(editingSession.auto_reconnect ?? false);
+        setCompression(editingSession.compression ?? false);
+        setAgentForwarding(editingSession.agent_forwarding ?? false);
+        setX11Forwarding(editingSession.x11_forwarding ?? false);
+        setPassword("");
 
-        if (editingSession.protocol === "serial") {
-          const opts = editingSession.protocol_options_json || {};
+        const opts = editingSession.protocol_options_json || {};
+
+        if (proto === "serial") {
           setSerialPort(opts.port_name || "COM1");
           setBaudRate(opts.baud_rate || 115200);
           setDataBits(opts.data_bits || "eight");
@@ -229,7 +413,36 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           setRtsOnOpen(opts.rts_on_open !== false);
           setAutoReconnect(opts.auto_reconnect || false);
           setCustomBaud(!COMMON_BAUD_RATES.includes(opts.baud_rate || 115200));
+        } else if (proto === "rdp") {
+          const rdpOpts = opts as RdpProtocolOptions;
+          setHost(editingSession.host || "");
+          setPort(editingSession.port || 3389);
+          setUsername(editingSession.username || "Administrator");
+          setRdpDomain(rdpOpts.domain || "");
+          setRdpFullscreen(rdpOpts.fullscreen !== false && !rdpOpts.custom_size);
+          setRdpWidth(rdpOpts.width || 1920);
+          setRdpHeight(rdpOpts.height || 1080);
+          setRdpDrivesRedirect(rdpOpts.drivestoredirect !== false);
+          setRdpClipboard(rdpOpts.redirect_clipboard !== false);
+          setRdpPrinters(rdpOpts.redirect_printers ?? false);
+          setRdpAudio(rdpOpts.redirect_audio || "local");
+          setRdpAdminSession(rdpOpts.admin_session ?? false);
+        } else if (proto === "local_shell") {
+          const localOpts = opts as LocalShellProtocolOptions;
+          setShellKind(localOpts.shell_kind || "powershell");
+          setShellPath(localOpts.shell_path || "");
+        } else if (proto === "telnet") {
+          const telnetOpts = opts as TelnetProtocolOptions;
+          setHost(editingSession.host || "");
+          setPort(editingSession.port || 23);
+          setUsername(editingSession.username || "");
+          setTelnetAutoLogin(telnetOpts.auto_login ?? false);
+          setTelnetLoginPrompt(telnetOpts.login_prompt || "login:");
+          setTelnetPasswordPrompt(telnetOpts.password_prompt || "Password:");
+          setTelnetNewlineMode(telnetOpts.newline_mode || "crlf");
+          setTelnetLocalEcho(telnetOpts.local_echo ?? false);
         } else {
+          const sshOpts = opts as SshProtocolOptions;
           setHost(editingSession.host || "");
           setPort(editingSession.port || 22);
           setUsername(editingSession.username || "");
@@ -237,23 +450,25 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           setHostKeyPolicy(editingSession.host_key_policy || "strict");
           const keyId = editingSession.ssh_key_id || "";
           setSelectedKeyId(keyId);
-          loadKeys(keyId);
+          void loadKeys(keyId);
           setKeepaliveSec(editingSession.keepalive_sec || 30);
-          setPassword("");
-
-          if (editingSession.proxy_jump_json?.session_id) {
-            setJumpHostSessionId(editingSession.proxy_jump_json.session_id);
-          } else {
-            setJumpHostSessionId("");
-          }
+          setJumpHostSessionId(editingSession.proxy_jump_json?.session_id || "");
+          setExecChannelEnable(sshOpts.exec_channel_enable !== false);
+          setSshAccelerate(sshOpts.accelerate ?? false);
+          setBackspaceSeq(sshOpts.backspace_key_sequence || "auto");
+          setDeleteSeq(sshOpts.delete_key_sequence || "auto");
+          void loadSessionTunnels(editingSession.id);
         }
       } else {
         // 智能解析从快速连接传入的 initialValues
+        const initProto: Protocol = initialValues?.protocol || "ssh";
         const parsedName = initialValues?.name || "";
         let parsedHost = initialValues?.host || "";
-        // 不预填默认值：解析不到就留空，保存时再回落到 22 / root
-        let parsedPort = initialValues?.port || 0;
-        let parsedUser = initialValues?.username || "";
+        let parsedPort =
+          initialValues?.port ??
+          (initProto === "rdp" ? 3389 : initProto === "telnet" ? 23 : 0);
+        let parsedUser =
+          initialValues?.username ?? (initProto === "rdp" ? "Administrator" : "");
 
         if (parsedName && !parsedHost && parsedName.includes("@")) {
           const [u, rest] = parsedName.split("@");
@@ -270,7 +485,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setName(parsedName);
         setIconKey(normalizeHostIconKey(initialValues?.icon_key));
         setGroupId(initialValues?.group_id || "");
-        setProtocol(initialValues?.protocol || "ssh");
+        setProtocol(initProto);
         setNotes(initialValues?.notes || "");
         setHost(parsedHost);
         setPort(parsedPort);
@@ -279,11 +494,46 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setHostKeyPolicy(initialValues?.host_key_policy || "strict");
         const keyId = initialValues?.ssh_key_id || "";
         setSelectedKeyId(keyId);
-        loadKeys(keyId);
+        void loadKeys(keyId);
         setPassword("");
-        setJumpHostSessionId("");
-        setKeepaliveSec(30);
+        setProxyId(initialValues?.proxy_id || "");
+        setJumpHostSessionId(initialValues?.proxy_jump_json?.session_id || "");
+        setKeepaliveSec(initialValues?.keepalive_sec || 30);
+        setEncoding(initialValues?.encoding || "utf-8");
+        setStartupCommand(initialValues?.startup_command || "");
+        setWorkingDir(initialValues?.working_dir || "");
+        setAutoReconnect(initialValues?.auto_reconnect ?? false);
+        setCompression(initialValues?.compression ?? false);
+        setAgentForwarding(initialValues?.agent_forwarding ?? false);
+        setX11Forwarding(initialValues?.x11_forwarding ?? false);
+        setExecChannelEnable(true);
+        setSshAccelerate(false);
+        setBackspaceSeq("auto");
+        setDeleteSeq("auto");
 
+        // RDP 默认值
+        setRdpDomain("");
+        setRdpFullscreen(true);
+        setRdpWidth(1920);
+        setRdpHeight(1080);
+        setRdpDrivesRedirect(true);
+        setRdpClipboard(true);
+        setRdpPrinters(false);
+        setRdpAudio("local");
+        setRdpAdminSession(false);
+
+        // LocalShell 默认值
+        setShellKind("powershell");
+        setShellPath("");
+
+        // Telnet 默认值
+        setTelnetAutoLogin(false);
+        setTelnetLoginPrompt("login:");
+        setTelnetPasswordPrompt("Password:");
+        setTelnetNewlineMode("crlf");
+        setTelnetLocalEcho(false);
+
+        // Serial 默认值
         setSerialPort(ports[0]?.name || "COM1");
         setBaudRate(115200);
         setDataBits("eight");
@@ -292,7 +542,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setFlowControl("none");
         setDtrOnOpen(true);
         setRtsOnOpen(true);
-        setAutoReconnect(false);
         setCustomBaud(false);
       }
       setError(null);
@@ -306,6 +555,19 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const isVaultLocked = vaultStatus && vaultStatus.state !== "unlocked";
   const isVaultUninitialized = vaultStatus?.state === "uninitialized";
+
+  const handleProtocolSwitch = (nextProto: Protocol) => {
+    setProtocol(nextProto);
+    setError(null);
+    if (nextProto === "rdp") {
+      if (port === 0 || port === 22 || port === 23) setPort(3389);
+      if (!username) setUsername("Administrator");
+    } else if (nextProto === "telnet") {
+      if (port === 0 || port === 22 || port === 3389) setPort(23);
+    } else if (nextProto === "ssh") {
+      if (port === 3389 || port === 23) setPort(0);
+    }
+  };
 
   const handleInlineVaultUnlock = async (e?: React.FormEvent | React.MouseEvent) => {
     e?.preventDefault();
@@ -328,6 +590,123 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const isPublicKeyAuth = (m?: string) => m === "publickey" || m === "public_key";
 
+  // 处理内嵌隧道新增/更新
+  const handleSaveEmbeddedTunnel = async () => {
+    const trimmedName =
+      tunnelName.trim() ||
+      `${tunnelType.toUpperCase()}-${tunnelBindPort}${tunnelType !== "dynamic" ? `->${tunnelDestPort}` : ""
+      }`;
+    const input: PortForwardRuleInput = {
+      session_id: editingSession?.id || null,
+      name: trimmedName,
+      rule_type: tunnelType,
+      bind_host: tunnelBindHost.trim() || "127.0.0.1",
+      bind_port: Number(tunnelBindPort) || 8080,
+      dest_host: tunnelType === "dynamic" ? null : tunnelDestHost.trim() || "127.0.0.1",
+      dest_port: tunnelType === "dynamic" ? null : Number(tunnelDestPort) || 80,
+      auto_start: tunnelAutoStart,
+      auto_reconnect: true,
+      socks_auth: tunnelSocksAuth,
+      expose_warning_ack: true,
+    };
+
+    try {
+      if (editingSession) {
+        if (editingTunnelId) {
+          const updateFn = getIpcFn("forwardUpdate");
+          if (updateFn) {
+            await updateFn(editingTunnelId, input);
+          }
+        } else {
+          const createFn = getIpcFn("forwardCreate");
+          if (createFn) {
+            await createFn(input);
+          }
+        }
+        await loadSessionTunnels(editingSession.id);
+      } else {
+        if (editingTunnelId) {
+          setPendingTunnels((prev) =>
+            prev.map((item) =>
+              item.tempId === editingTunnelId
+                ? { ...input, tempId: editingTunnelId }
+                : item
+            )
+          );
+        } else {
+          setPendingTunnels((prev) => [
+            ...prev,
+            { ...input, tempId: `temp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` },
+          ]);
+        }
+      }
+      resetTunnelForm();
+    } catch (err) {
+      setTunnelMsg(formatFriendlyError(err));
+    }
+  };
+
+  const handleEditEmbeddedTunnel = (
+    rule: PortForwardRule | PendingTunnelRule,
+    isExisting: boolean
+  ) => {
+    const id = isExisting ? (rule as PortForwardRule).id : (rule as PendingTunnelRule).tempId;
+    setEditingTunnelId(id);
+    setTunnelName(rule.name || "");
+    setTunnelType((rule.rule_type as PortForwardType) || "local");
+    setTunnelBindHost(rule.bind_host || "127.0.0.1");
+    setTunnelBindPort(rule.bind_port || 8080);
+    setTunnelDestHost(rule.dest_host || "127.0.0.1");
+    setTunnelDestPort(rule.dest_port || 80);
+    setTunnelAutoStart(rule.auto_start ?? true);
+    setTunnelSocksAuth((rule.socks_auth as SocksAuth) || "none");
+  };
+
+  const handleDeleteEmbeddedTunnel = async (id: string, isExisting: boolean) => {
+    try {
+      if (isExisting && editingSession) {
+        const delFn = getIpcFn("forwardDelete");
+        if (delFn) {
+          await delFn(id);
+        }
+        await loadSessionTunnels(editingSession.id);
+      } else {
+        setPendingTunnels((prev) => prev.filter((item) => item.tempId !== id));
+      }
+      if (editingTunnelId === id) {
+        resetTunnelForm();
+      }
+    } catch (err) {
+      setTunnelMsg(formatFriendlyError(err));
+    }
+  };
+
+  const savePasswordCredentialIfNeeded = async (
+    sessionName: string,
+    user: string
+  ): Promise<string | null> => {
+    const fallbackCredId = editingSession?.credential_id || null;
+    if (!password) return fallbackCredId;
+    if (isVaultLocked) {
+      throw new Error("主保险库尚未解锁，请在下方输入主密码快速解锁后再加密保存密码");
+    }
+    try {
+      const cred = await createCredential(
+        `${sessionName} (${user || "user"})`,
+        "password",
+        password,
+        user || undefined
+      );
+      return cred.id;
+    } catch (credErr: any) {
+      if (parseIpcError(credErr).code === "VAULT_LOCKED") {
+        await refreshVaultStatus();
+        setActiveTab("general");
+      }
+      throw new Error(`保存密码凭据失败：${formatFriendlyError(credErr)}`);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -336,20 +715,38 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     if (!sessionName) {
       if (protocol === "ssh") {
         sessionName = host.trim() ? `${username || "root"}@${host.trim()}` : "未命名 SSH 会话";
+      } else if (protocol === "rdp") {
+        const rdpPort = port > 0 ? port : 3389;
+        sessionName = host.trim()
+          ? `${username || "Administrator"}@${host.trim()}:${rdpPort}`
+          : "未命名远程桌面";
+      } else if (protocol === "local_shell") {
+        const shellLabel =
+          SHELL_KIND_OPTIONS.find((item) => item.value === shellKind)?.label.split(" (")[0] ||
+          "本地终端";
+        sessionName = shellLabel;
+      } else if (protocol === "telnet") {
+        const tPort = port > 0 ? port : 23;
+        sessionName = host.trim() ? `Telnet-${host.trim()}:${tPort}` : "未命名 Telnet 会话";
       } else {
         sessionName = serialPort.trim() ? `Serial-${serialPort.trim()}` : "未命名串口会话";
       }
     }
 
-    if (protocol === "ssh") {
+    if (protocol === "ssh" || protocol === "rdp" || protocol === "telnet") {
       if (!host.trim()) {
         setError("请输入主机地址 (IP 或域名)");
-        setActiveTab("general");
+        if (protocol === "ssh") setActiveTab("general");
         return;
       }
     } else if (protocol === "serial") {
       if (!serialPort.trim()) {
         setError("请选择或输入串口设备名称");
+        return;
+      }
+    } else if (protocol === "local_shell") {
+      if (shellKind === "custom" && !shellPath.trim()) {
+        setError("请输入自定义 Shell 可执行文件路径");
         return;
       }
     }
@@ -361,11 +758,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
     try {
       const effectiveGroupId = groupId && groupId.trim() ? groupId.trim() : null;
+      const effectiveIconKey = iconKey === DEFAULT_HOST_ICON_KEY ? null : iconKey;
+      const effectiveNotes = notes && notes.trim() ? notes.trim() : null;
+      const effectiveProxyId = proxyId && proxyId.trim() ? proxyId.trim() : null;
 
       if (protocol === "ssh") {
         let credentialId = editingSession?.credential_id || null;
 
-        // 如果设置了密码并且认证方式是密码
         if (authMethod === "password") {
           if (password) {
             if (isVaultLocked) {
@@ -374,26 +773,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               setIsSubmitting(false);
               return;
             }
-            try {
-              const cred = await createCredential(
-                `${sessionName} (${username || "root"})`,
-                "password",
-                password,
-                username || "root"
-              );
-              credentialId = cred.id;
-            } catch (credErr: any) {
-              console.warn("保存凭据失败", credErr);
-              // 前端状态可能没跟上自动锁定：先把真实状态拉回来，解锁卡片才会出现
-              if (parseIpcError(credErr).code === "VAULT_LOCKED") {
-                await refreshVaultStatus();
-                setActiveTab("general");
-              }
-              throw new Error(`保存密码凭据失败：${formatFriendlyError(credErr)}`);
-            }
+            credentialId = await savePasswordCredentialIfNeeded(
+              sessionName,
+              username.trim() || "root"
+            );
           }
-        } else if (isPublicKeyAuth(authMethod)) {
-          // 公钥认证时清理残留密码凭据，避免外键和凭据不一致
+        } else if (isPublicKeyAuth(authMethod) || authMethod === "agent") {
           credentialId = null;
         }
 
@@ -414,45 +799,169 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           }
         }
 
-        const effectiveAuthMethod: AuthMethod = isPublicKeyAuth(authMethod) ? "public_key" : (authMethod as AuthMethod);
+        const effectiveAuthMethod: AuthMethod = isPublicKeyAuth(authMethod)
+          ? "public_key"
+          : (authMethod as AuthMethod);
+
+        const sshOptions: SshProtocolOptions = {
+          exec_channel_enable: execChannelEnable,
+          accelerate: sshAccelerate,
+          backspace_key_sequence: backspaceSeq,
+          delete_key_sequence: deleteSeq,
+          forwarding_auto_reconnect: true,
+        };
+
+        const sshPayload = {
+          name: sessionName,
+          group_id: effectiveGroupId,
+          protocol: "ssh" as const,
+          host: host.trim(),
+          port: effectivePort,
+          username: username.trim() || "root",
+          auth_method: effectiveAuthMethod,
+          credential_id: credentialId,
+          ssh_key_id: effectiveKeyId,
+          host_key_policy: hostKeyPolicy,
+          proxy_jump_json: proxyJumpJson,
+          proxy_id: effectiveProxyId,
+          encoding: encoding || "utf-8",
+          startup_command: startupCommand.trim() ? startupCommand.trim() : null,
+          working_dir: workingDir.trim() ? workingDir.trim() : null,
+          keepalive_sec: keepaliveSec,
+          auto_reconnect: autoReconnect,
+          compression,
+          agent_forwarding: agentForwarding,
+          x11_forwarding: x11Forwarding,
+          color: null,
+          icon_key: effectiveIconKey,
+          notes: effectiveNotes,
+          protocol_options_json: sshOptions,
+        };
 
         if (editingSession) {
-          savedSession = await updateSession(editingSession.id, {
-            name: sessionName,
-            group_id: effectiveGroupId,
-            protocol: "ssh",
-            host: host.trim(),
-            port: effectivePort,
-            username: username.trim() || "root",
-            auth_method: effectiveAuthMethod,
-            credential_id: credentialId,
-            ssh_key_id: effectiveKeyId,
-            host_key_policy: hostKeyPolicy,
-            proxy_jump_json: proxyJumpJson,
-            color: null,
-            icon_key: iconKey === DEFAULT_HOST_ICON_KEY ? null : iconKey,
-            notes: notes && notes.trim() ? notes.trim() : null,
-            keepalive_sec: keepaliveSec,
-          });
+          savedSession = await updateSession(editingSession.id, sshPayload);
         } else {
-          const input: SessionInput = {
-            name: sessionName,
-            group_id: effectiveGroupId,
-            protocol: "ssh",
-            host: host.trim(),
-            port: effectivePort,
-            username: username.trim() || "root",
-            auth_method: effectiveAuthMethod,
-            credential_id: credentialId,
-            ssh_key_id: effectiveKeyId,
-            host_key_policy: hostKeyPolicy,
-            proxy_jump_json: proxyJumpJson,
-            color: null,
-            icon_key: iconKey === DEFAULT_HOST_ICON_KEY ? null : iconKey,
-            notes: notes && notes.trim() ? notes.trim() : null,
-            keepalive_sec: keepaliveSec,
-          };
-          savedSession = await createSession(input);
+          savedSession = await createSession(sshPayload);
+          if (savedSession && pendingTunnels.length > 0) {
+            const createTunnelFn = getIpcFn("forwardCreate");
+            if (createTunnelFn) {
+              for (const rule of pendingTunnels) {
+                const { tempId: _unused, ...ruleInput } = rule;
+                try {
+                  await createTunnelFn({
+                    ...ruleInput,
+                    session_id: savedSession.id,
+                  });
+                } catch (e) {
+                  console.warn("创建内嵌隧道规则失败:", e);
+                }
+              }
+            }
+          }
+        }
+      } else if (protocol === "rdp") {
+        const effectiveUser = username.trim() || "Administrator";
+        const credentialId = await savePasswordCredentialIfNeeded(sessionName, effectiveUser);
+        const effectivePort = port > 0 && port <= 65535 ? port : 3389;
+        const rdpOptions: RdpProtocolOptions = {
+          fullscreen: rdpFullscreen,
+          custom_size: !rdpFullscreen,
+          width: Number(rdpWidth) || 1920,
+          height: Number(rdpHeight) || 1080,
+          drivestoredirect: rdpDrivesRedirect,
+          redirect_clipboard: rdpClipboard,
+          redirect_printers: rdpPrinters,
+          redirect_audio: rdpAudio,
+          domain: rdpDomain.trim() ? rdpDomain.trim() : null,
+          admin_session: rdpAdminSession,
+        };
+
+        const rdpPayload = {
+          name: sessionName,
+          group_id: effectiveGroupId,
+          protocol: "rdp" as const,
+          host: host.trim(),
+          port: effectivePort,
+          username: effectiveUser,
+          auth_method: "password" as const,
+          credential_id: credentialId,
+          proxy_id: effectiveProxyId,
+          color: null,
+          icon_key: effectiveIconKey,
+          notes: effectiveNotes,
+          protocol_options_json: rdpOptions,
+        };
+
+        if (editingSession) {
+          savedSession = await updateSession(editingSession.id, rdpPayload);
+        } else {
+          savedSession = await createSession(rdpPayload);
+        }
+      } else if (protocol === "local_shell") {
+        const localOptions: LocalShellProtocolOptions = {
+          shell_kind: shellKind,
+          shell_path: shellKind === "custom" && shellPath.trim() ? shellPath.trim() : null,
+        };
+
+        const localPayload = {
+          name: sessionName,
+          group_id: effectiveGroupId,
+          protocol: "local_shell" as const,
+          host: null,
+          port: null,
+          username: null,
+          auth_method: "none" as const,
+          encoding: encoding || "utf-8",
+          startup_command: startupCommand.trim() ? startupCommand.trim() : null,
+          working_dir: workingDir.trim() ? workingDir.trim() : null,
+          color: null,
+          icon_key: effectiveIconKey,
+          notes: effectiveNotes,
+          protocol_options_json: localOptions,
+        };
+
+        if (editingSession) {
+          savedSession = await updateSession(editingSession.id, localPayload);
+        } else {
+          savedSession = await createSession(localPayload);
+        }
+      } else if (protocol === "telnet") {
+        const effectiveUser = username.trim();
+        const credentialId = await savePasswordCredentialIfNeeded(
+          sessionName,
+          effectiveUser || "telnet"
+        );
+        const effectivePort = port > 0 && port <= 65535 ? port : 23;
+        const telnetOptions: TelnetProtocolOptions = {
+          auto_login: telnetAutoLogin,
+          login_prompt: telnetLoginPrompt || "login:",
+          password_prompt: telnetPasswordPrompt || "Password:",
+          newline_mode: telnetNewlineMode,
+          local_echo: telnetLocalEcho,
+        };
+
+        const telnetPayload = {
+          name: sessionName,
+          group_id: effectiveGroupId,
+          protocol: "telnet" as const,
+          host: host.trim(),
+          port: effectivePort,
+          username: effectiveUser ? effectiveUser : null,
+          auth_method: (credentialId ? "password" : "none") as AuthMethod,
+          credential_id: credentialId,
+          proxy_id: effectiveProxyId,
+          encoding: encoding || "utf-8",
+          auto_reconnect: autoReconnect,
+          color: null,
+          icon_key: effectiveIconKey,
+          notes: effectiveNotes,
+          protocol_options_json: telnetOptions,
+        };
+
+        if (editingSession) {
+          savedSession = await updateSession(editingSession.id, telnetPayload);
+        } else {
+          savedSession = await createSession(telnetPayload);
         }
       } else if (protocol === "serial") {
         const serialOptions = {
@@ -471,25 +980,20 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           reconnect_interval_ms: 1500,
         };
 
+        const serialPayload = {
+          name: sessionName,
+          group_id: effectiveGroupId,
+          protocol: "serial" as const,
+          color: null,
+          icon_key: effectiveIconKey,
+          notes: effectiveNotes,
+          protocol_options_json: serialOptions,
+        };
+
         if (editingSession) {
-          savedSession = await updateSession(editingSession.id, {
-            name: sessionName,
-            group_id: effectiveGroupId,
-            protocol: "serial",
-            color: null,
-            notes: notes && notes.trim() ? notes.trim() : null,
-            protocol_options_json: serialOptions,
-          });
+          savedSession = await updateSession(editingSession.id, serialPayload);
         } else {
-          const input: SessionInput = {
-            name: sessionName,
-            group_id: effectiveGroupId,
-            protocol: "serial",
-            color: null,
-            notes: notes && notes.trim() ? notes.trim() : null,
-            protocol_options_json: serialOptions,
-          };
-          savedSession = await createSession(input);
+          savedSession = await createSession(serialPayload);
         }
       }
 
@@ -511,47 +1015,53 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const candidateJumpHosts = sessions.filter(
     (s) => s.protocol === "ssh" && (!editingSession || s.id !== editingSession.id)
   );
+  const totalTunnelCount = editingSession ? existingTunnels.length : pendingTunnels.length;
+
+  const renderProxySelectRow = () => (
+    <div>
+      <label className="block text-xs font-semibold text-ink-secondary mb-1">
+        代理服务器 (HTTP / SOCKS4 / SOCKS5)
+      </label>
+      <div className="flex items-center gap-2">
+        <select
+          value={proxyId}
+          onChange={(e) => setProxyId(e.target.value)}
+          aria-label="代理服务器"
+          className="flex-1 rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+        >
+          <option value="">不使用代理 (直连)</option>
+          {proxies.map((p) => (
+            <option key={p.id} value={p.id}>
+              [{p.proxy_type.toUpperCase()}] {p.name} ({p.host}:{p.port})
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => setProxyManagerOpen(true)}
+          className="shrink-0 rounded-xl border border-line/20 bg-surface px-3 py-2 text-xs font-semibold text-ink-secondary hover:bg-surface-muted hover:text-ink transition"
+        >
+          管理代理...
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-2xl rounded-2xl border border-line/10 bg-surface p-6 shadow-2xl flex flex-col max-h-[92vh] text-ink transition-all">
-        {/* 顶部标题与协议切换 */}
-        <div className="mb-4 flex items-center justify-between border-b border-line/15 pb-3.5 shrink-0">
-          <div className="flex items-center gap-3">
-            <HostIcon iconKey={iconKey} protocol={protocol} className="h-8 w-8" />
-            <h3 className="text-base font-semibold text-ink tracking-tight">
-              {editingSession ? "编辑会话配置" : "新建连接会话"}
-            </h3>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* 协议类型切换 (Apple Capsule Segment) */}
-            <div className="flex bg-line/5 p-0.5 rounded-lg border border-line/15 text-xs">
-              <button
-                type="button"
-                onClick={() => setProtocol("ssh")}
-                className={`px-3 py-1 rounded-md font-medium transition ${
-                  protocol === "ssh"
-                    ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                    : "text-ink-secondary hover:text-ink"
-                }`}
-              >
-                SSH 主机
-              </button>
-              <button
-                type="button"
-                onClick={() => setProtocol("serial")}
-                className={`px-3 py-1 rounded-md font-medium transition ${
-                  protocol === "serial"
-                    ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                    : "text-ink-secondary hover:text-ink"
-                }`}
-              >
-                串口 (Serial)
-              </button>
+        {/* 顶部标题与 5 协议完整并列切换栏 */}
+        <div className="mb-4 flex flex-col gap-3 border-b border-line/15 pb-3.5 shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <HostIcon iconKey={iconKey} protocol={protocol} className="h-8 w-8" />
+              <h3 className="text-base font-semibold text-ink tracking-tight">
+                {editingSession ? "编辑会话配置" : "新建连接会话"}
+              </h3>
             </div>
 
             <button
+              type="button"
               onClick={onClose}
               className="text-ink-tertiary hover:text-ink-secondary p-1.5 rounded-full hover:bg-line/5 transition"
               title="关闭"
@@ -559,39 +1069,120 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <XIcon className="h-4 w-4" />
             </button>
           </div>
+
+          {/* 5 种协议完整并列切换 (SSH / RDP / LocalShell / Telnet / Serial) */}
+          <div className="grid grid-cols-5 gap-1 bg-line/5 p-1 rounded-xl border border-line/15 text-xs">
+            <button
+              type="button"
+              onClick={() => handleProtocolSwitch("ssh")}
+              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "ssh"
+                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
+                  : "text-ink-secondary hover:text-ink"
+                }`}
+            >
+              <ServerIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">SSH 主机</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleProtocolSwitch("rdp")}
+              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "rdp"
+                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
+                  : "text-ink-secondary hover:text-ink"
+                }`}
+            >
+              <MonitorIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">远程桌面 (RDP)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleProtocolSwitch("local_shell")}
+              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "local_shell"
+                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
+                  : "text-ink-secondary hover:text-ink"
+                }`}
+            >
+              <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">本地终端</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleProtocolSwitch("telnet")}
+              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "telnet"
+                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
+                  : "text-ink-secondary hover:text-ink"
+                }`}
+            >
+              <GlobeIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Telnet</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleProtocolSwitch("serial")}
+              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "serial"
+                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
+                  : "text-ink-secondary hover:text-ink"
+                }`}
+            >
+              <PlugIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">串口 (Serial)</span>
+            </button>
+          </div>
         </div>
 
-        {/* SSH 模式下的标签页导航 */}
+        {/* SSH 模式下的内部子标签导航（常规 / 高级与跳板机 / 隧道 / 图标） */}
         {protocol === "ssh" && (
-          <div role="tablist" aria-label="会话设置分类"
-            className="flex items-center gap-1 border-b border-line/15 mb-4 shrink-0 text-xs overflow-x-auto">
+          <div
+            role="tablist"
+            aria-label="会话设置分类"
+            className="flex items-center gap-1 border-b border-line/15 mb-4 shrink-0 text-xs overflow-x-auto"
+          >
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === "general"}
               onClick={() => setActiveTab("general")}
-              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${
-                activeTab === "general"
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "general"
                   ? "border-accent text-accent font-bold"
                   : "border-transparent text-ink-secondary hover:text-ink"
-              }`}
+                }`}
             >
-              基础连接与凭据
+              常规与认证
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === "advanced"}
               onClick={() => setActiveTab("advanced")}
-              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${
-                activeTab === "advanced"
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "advanced"
                   ? "border-accent text-accent font-bold"
                   : "border-transparent text-ink-secondary hover:text-ink"
-              }`}
+                }`}
             >
               <span>高级与跳板机</span>
-              {jumpHostSessionId && (
+              {(jumpHostSessionId || proxyId) && (
                 <span className="h-1.5 w-1.5 rounded-full bg-state-warning" />
+              )}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "tunnel"}
+              onClick={() => setActiveTab("tunnel")}
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "tunnel"
+                  ? "border-accent text-accent font-bold"
+                  : "border-transparent text-ink-secondary hover:text-ink"
+                }`}
+            >
+              <span>隧道 / 端口转发</span>
+              {totalTunnelCount > 0 && (
+                <span className="rounded-full bg-accent/15 px-1.5 py-0.2 text-[10px] font-bold text-accent">
+                  {totalTunnelCount}
+                </span>
               )}
             </button>
             <button
@@ -599,11 +1190,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               role="tab"
               aria-selected={activeTab === "icon"}
               onClick={() => setActiveTab("icon")}
-              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${
-                activeTab === "icon"
+              className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "icon"
                   ? "border-accent text-accent font-bold"
                   : "border-transparent text-ink-secondary hover:text-ink"
-              }`}
+                }`}
             >
               图标
             </button>
@@ -615,7 +1205,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           onSubmit={handleSubmit}
           className="space-y-4 flex-1 min-h-0 overflow-y-auto pr-1"
         >
-          {/* ================= SSH 基础连接与主要凭据 ================= */}
+          {/* ================= 1. SSH 常规与认证 ================= */}
           {protocol === "ssh" && activeTab === "general" && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -628,6 +1218,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    placeholder="留空自动按 user@host 生成"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   />
                 </div>
@@ -662,6 +1253,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
                     autoFocus
+                    placeholder="例如 192.168.1.100"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
                   />
                 </div>
@@ -674,6 +1266,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="number"
                     value={port > 0 ? port : ""}
                     onChange={(e) => setPort(e.target.value === "" ? 0 : Number(e.target.value))}
+                    placeholder="22"
                     min={1}
                     max={65535}
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
@@ -689,25 +1282,25 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
+                  placeholder="默认 root"
                   className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink placeholder-ink-tertiary focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
                 />
               </div>
 
-              {/* 核心认证区 (平铺展示密码与公钥管理) */}
+              {/* 核心认证区 */}
               <div className="pt-2 border-t border-line/15">
                 <label className="block text-xs font-semibold text-ink-secondary mb-2">
                   认证方式与安全凭据
                 </label>
 
-                <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
                   <button
                     type="button"
                     onClick={() => setAuthMethod("password")}
-                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${
-                      authMethod === "password"
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${authMethod === "password"
                         ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
                         : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
-                    }`}
+                      }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
                       <span>🔑 密码认证</span>
@@ -722,11 +1315,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         setSelectedKeyId(sshKeys[0].id);
                       }
                     }}
-                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${
-                      isPublicKeyAuth(authMethod)
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${isPublicKeyAuth(authMethod)
                         ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
                         : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
-                    }`}
+                      }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
                       <span>🛡️ 公钥连接</span>
@@ -736,14 +1328,26 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setAuthMethod("keyboard_interactive")}
-                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${
-                      authMethod === "keyboard_interactive"
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${authMethod === "keyboard_interactive"
                         ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
                         : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
-                    }`}
+                      }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
                       <span>💬 交互式验证</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAuthMethod("agent")}
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${authMethod === "agent"
+                        ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
+                        : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
+                      }`}
+                  >
+                    <div className="font-bold flex items-center gap-1.5">
+                      <span>🔐 SSH Agent</span>
                     </div>
                   </button>
                 </div>
@@ -759,6 +1363,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         type={showPassword ? "text" : "password"}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
+                        placeholder={editingSession?.credential_id ? "已保存密码（留空保持不变）" : "输入连接密码"}
                         className="w-full rounded-lg border border-line/15 bg-surface px-3 py-2 pr-10 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
                       />
                       <button
@@ -771,7 +1376,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       </button>
                     </div>
 
-                    {/* 保险库未解锁 / 未初始化提示卡片 */}
                     {isVaultLocked && password && (
                       <VaultInlineUnlock
                         uninitialized={!!isVaultUninitialized}
@@ -792,56 +1396,122 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         <Select
                           aria-label="已保存的私钥"
                           value={selectedKeyId}
-                          onChange={(e) => { setSelectedKeyId(e.target.value); setKeyMsg(null); }}
+                          onChange={(e) => {
+                            setSelectedKeyId(e.target.value);
+                            setKeyMsg(null);
+                          }}
                         >
-                          <option value="">{sshKeys.length ? "请选择私钥" : "暂无已保存的私钥"}</option>
-                          {sshKeys.map((key) => <option key={key.id} value={key.id}>{key.name}</option>)}
+                          <option value="">
+                            {sshKeys.length ? "请选择私钥" : "暂无已保存的私钥"}
+                          </option>
+                          {sshKeys.map((key) => (
+                            <option key={key.id} value={key.id}>
+                              {key.name}
+                            </option>
+                          ))}
                         </Select>
                       </div>
                       <Button onClick={() => setKeyImportOpen(true)}>导入私钥</Button>
                       {selectedKeyId && (
-                        <IconButton label="移除选中的私钥配置" onClick={() => {
-                          const key = sshKeys.find((item) => item.id === selectedKeyId);
-                          if (key) handleDeleteKey(key);
-                        }}><Trash2 className="h-4 w-4" /></IconButton>
+                        <IconButton
+                          label="移除选中的私钥配置"
+                          onClick={() => {
+                            const key = sshKeys.find((item) => item.id === selectedKeyId);
+                            if (key) handleDeleteKey(key);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </IconButton>
                       )}
                     </div>
                     {selectedKey && (
-                      <div role="status" aria-label="当前私钥" className="flex min-w-0 items-center gap-2.5 rounded-xl bg-action/5 px-4 py-3 text-accent">
+                      <div
+                        role="status"
+                        aria-label="当前私钥"
+                        className="flex min-w-0 items-center gap-2.5 rounded-xl bg-action/5 px-4 py-3 text-accent"
+                      >
                         <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
                         <span className="truncate text-sm font-semibold" title={selectedKey.name}>
                           {selectedKey.name}
                         </span>
                       </div>
                     )}
-                    {keyMsg && <p role="status" className="text-xs text-ink-secondary">{keyMsg}</p>}
+                    {keyMsg && (
+                      <p role="status" className="text-xs text-ink-secondary">
+                        {keyMsg}
+                      </p>
+                    )}
                   </div>
                 )}
+              </div>
+
+              {/* 代理服务器与跳板机（常规页直接可配） */}
+              <div className="pt-2 border-t border-line/15 space-y-3">
+                {renderProxySelectRow()}
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    跳板机 (ProxyJump)
+                  </label>
+                  <select
+                    value={jumpHostSessionId}
+                    aria-label="跳板机"
+                    onChange={(e) => setJumpHostSessionId(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                  >
+                    <option value="">不使用跳板机</option>
+                    {candidateJumpHosts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
           )}
 
-          {/* ================= SSH 高级配置 & 跳板机 ================= */}
+          {/* ================= 2. SSH 高级与终端 / 跳板机 ================= */}
           {protocol === "ssh" && activeTab === "advanced" && (
             <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  跳板机
-                </label>
-                <select
-                  value={jumpHostSessionId}
-                  disabled
-                  onChange={(e) => setJumpHostSessionId(e.target.value)}
-                  className="w-full cursor-not-allowed rounded-xl border border-line/15 bg-line/5 px-3 py-2 text-xs text-ink-secondary focus:outline-none"
-                >
-                  <option value="">不使用跳板机</option>
-                  {candidateJumpHosts.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    跳板机 (ProxyJump)
+                  </label>
+                  <select
+                    value={jumpHostSessionId}
+                    onChange={(e) => setJumpHostSessionId(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                  >
+                    <option value="">不使用跳板机</option>
+                    {candidateJumpHosts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        经由 {s.name} ({s.username || "root"}@{s.host}:{s.port || 22})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    字符编码 (Encoding)
+                  </label>
+                  <select
+                    value={encoding}
+                    onChange={(e) => setEncoding(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                  >
+                    {ENCODING_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
+
+              {renderProxySelectRow()}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -861,7 +1531,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    保活间隔（秒）
+                    保活心跳间隔（秒）
                   </label>
                   <input
                     type="number"
@@ -869,8 +1539,139 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     onChange={(e) => setKeepaliveSec(Number(e.target.value))}
                     min={5}
                     max={600}
-                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
                   />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    默认工作目录 (Working Directory)
+                  </label>
+                  <input
+                    type="text"
+                    value={workingDir}
+                    onChange={(e) => setWorkingDir(e.target.value)}
+                    placeholder="例如 /var/www 或 ~/project"
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs font-mono text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    登录后自动执行命令 (Startup Command)
+                  </label>
+                  <input
+                    type="text"
+                    value={startupCommand}
+                    onChange={(e) => setStartupCommand(e.target.value)}
+                    placeholder="例如 tmux attach || tmux new"
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs font-mono text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    退格键序列 (Backspace)
+                  </label>
+                  <select
+                    value={backspaceSeq}
+                    onChange={(e) =>
+                      setBackspaceSeq(e.target.value as "ascii_del" | "ctrl_h" | "auto")
+                    }
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none transition"
+                  >
+                    <option value="auto">自动匹配 (Auto)</option>
+                    <option value="ascii_del">ASCII DEL (0x7F)</option>
+                    <option value="ctrl_h">Ctrl+H (0x08)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    Delete 键序列
+                  </label>
+                  <select
+                    value={deleteSeq}
+                    onChange={(e) =>
+                      setDeleteSeq(e.target.value as "vt220" | "ascii_del" | "auto")
+                    }
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none transition"
+                  >
+                    <option value="auto">自动匹配 (Auto)</option>
+                    <option value="vt220">VT220 (ESC [ 3 ~)</option>
+                    <option value="ascii_del">ASCII DEL (0x7F)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3">
+                <div className="mb-2 text-xs font-semibold text-ink-secondary">
+                  SSH 高级通道与特性开关
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs text-ink-secondary">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoReconnect}
+                      onChange={(e) => setAutoReconnect(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>断线自动重连</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={compression}
+                      onChange={(e) => setCompression(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>SSH 数据压缩</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={agentForwarding}
+                      onChange={(e) => setAgentForwarding(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>Agent 认证转发</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={x11Forwarding}
+                      onChange={(e) => setX11Forwarding(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>X11 图形转发</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={execChannelEnable}
+                      onChange={(e) => setExecChannelEnable(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>启用监控 Exec 通道</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sshAccelerate}
+                      onChange={(e) => setSshAccelerate(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>网络传输加速标记</span>
+                  </label>
                 </div>
               </div>
 
@@ -879,7 +1680,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   备注说明
                 </label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
@@ -888,9 +1689,869 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             </div>
           )}
 
-          {/* ================= SSH 主机图标 ================= */}
+          {/* ================= 3. SSH 隧道 / 端口转发 Tab ================= */}
+          {protocol === "ssh" && activeTab === "tunnel" && (
+            <div className="space-y-4">
+              {tunnelMsg && (
+                <div className="rounded-xl border border-state-danger/30 bg-state-danger/10 px-3 py-2 text-xs text-state-danger">
+                  {tunnelMsg}
+                </div>
+              )}
+
+              {/* 内嵌新增/编辑规则表单 */}
+              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-ink">
+                    {editingTunnelId ? "编辑隧道转发规则" : "添加隧道转发规则 (-L / -R / -D)"}
+                  </span>
+                  {editingTunnelId && (
+                    <button
+                      type="button"
+                      onClick={resetTunnelForm}
+                      className="text-[11px] text-accent hover:underline"
+                    >
+                      取消编辑
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { value: "local", label: "本地转发 (-L)" },
+                      { value: "remote", label: "远端转发 (-R)" },
+                      { value: "dynamic", label: "动态 SOCKS5 (-D)" },
+                    ] as Array<{ value: PortForwardType; label: string }>
+                  ).map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => setTunnelType(item.value)}
+                      className={`rounded-lg border py-1.5 text-xs font-semibold transition ${tunnelType === item.value
+                          ? "border-accent bg-action/10 text-accent"
+                          : "border-line/15 bg-surface text-ink-secondary hover:text-ink"
+                        }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                      规则名称
+                    </label>
+                    <input
+                      type="text"
+                      value={tunnelName}
+                      onChange={(e) => setTunnelName(e.target.value)}
+                      placeholder="如 MySQL 映射"
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                      {tunnelType === "remote" ? "远端绑定地址" : "本地绑定地址"}
+                    </label>
+                    <input
+                      type="text"
+                      value={tunnelBindHost}
+                      onChange={(e) => setTunnelBindHost(e.target.value)}
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                      {tunnelType === "remote" ? "远端监听端口" : "本地监听端口"}
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={tunnelBindPort}
+                      onChange={(e) => setTunnelBindPort(Number(e.target.value))}
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {tunnelType !== "dynamic" && (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                        {tunnelType === "remote" ? "本机目标地址" : "远端目标地址"}
+                      </label>
+                      <input
+                        type="text"
+                        value={tunnelDestHost}
+                        onChange={(e) => setTunnelDestHost(e.target.value)}
+                        className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                        {tunnelType === "remote" ? "本机目标端口" : "远端目标端口"}
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={tunnelDestPort}
+                        onChange={(e) => setTunnelDestPort(Number(e.target.value))}
+                        className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-ink-secondary">
+                    <input
+                      type="checkbox"
+                      checked={tunnelAutoStart}
+                      onChange={(e) => setTunnelAutoStart(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>随 SSH 连接自动启动此隧道</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveEmbeddedTunnel()}
+                    className="inline-flex items-center gap-1 rounded-lg bg-action px-3 py-1.5 text-xs font-semibold text-white shadow-apple-sm hover:bg-action/90 transition"
+                  >
+                    <PlusIcon className="h-3.5 w-3.5" />
+                    <span>{editingTunnelId ? "更新规则" : "添加至列表"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 已绑定的隧道列表 */}
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-ink-secondary">
+                  当前会话绑定的隧道规则 ({totalTunnelCount})
+                </div>
+
+                {totalTunnelCount === 0 ? (
+                  <div className="rounded-xl border border-dashed border-line/20 py-6 text-center text-xs text-ink-tertiary">
+                    尚未配置端口转发规则，可在上方添加本地 (-L)、远端 (-R) 或动态 (-D) 隧道
+                  </div>
+                ) : editingSession ? (
+                  existingTunnels.map((rule) => (
+                    <div
+                      key={rule.id}
+                      className="flex items-center justify-between rounded-xl border border-line/15 bg-surface p-2.5 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-ink">{rule.name}</span>
+                          <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent uppercase">
+                            {rule.rule_type}
+                          </span>
+                          {rule.auto_start && (
+                            <span className="rounded bg-line/10 px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                              自动启动
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[11px] text-ink-secondary">
+                          {rule.bind_host}:{rule.bind_port}
+                          {rule.rule_type !== "dynamic"
+                            ? ` → ${rule.dest_host}:${rule.dest_port}`
+                            : " (SOCKS5)"}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleEditEmbeddedTunnel(rule, true)}
+                          className="rounded-lg p-1.5 text-ink-tertiary hover:bg-line/10 hover:text-ink"
+                          title="编辑隧道"
+                        >
+                          <PencilIcon className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteEmbeddedTunnel(rule.id, true)}
+                          className="rounded-lg p-1.5 text-ink-tertiary hover:bg-state-danger/10 hover:text-state-danger"
+                          title="删除隧道"
+                        >
+                          <TrashIcon className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  pendingTunnels.map((rule) => (
+                    <div
+                      key={rule.tempId}
+                      className="flex items-center justify-between rounded-xl border border-line/15 bg-surface p-2.5 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-ink">{rule.name}</span>
+                          <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent uppercase">
+                            {rule.rule_type}
+                          </span>
+                          <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-500">
+                            待保存创建
+                          </span>
+                        </div>
+                        <div className="mt-0.5 font-mono text-[11px] text-ink-secondary">
+                          {rule.bind_host}:{rule.bind_port}
+                          {rule.rule_type !== "dynamic"
+                            ? ` → ${rule.dest_host}:${rule.dest_port}`
+                            : " (SOCKS5)"}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleEditEmbeddedTunnel(rule, false)}
+                          className="rounded-lg p-1.5 text-ink-tertiary hover:bg-line/10 hover:text-ink"
+                          title="编辑隧道"
+                        >
+                          <PencilIcon className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteEmbeddedTunnel(rule.tempId, false)}
+                          className="rounded-lg p-1.5 text-ink-tertiary hover:bg-state-danger/10 hover:text-state-danger"
+                          title="删除隧道"
+                        >
+                          <TrashIcon className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ================= 4. SSH 主机图标 ================= */}
           {protocol === "ssh" && activeTab === "icon" && (
-            <HostIconPicker value={iconKey} onChange={selectIcon} onAutoDetect={applyAutoIcon} radioName="icon-tab-host-icon" />
+            <HostIconPicker
+              value={iconKey}
+              onChange={selectIcon}
+              onAutoDetect={applyAutoIcon}
+              radioName="icon-tab-host-icon"
+            />
+          )}
+
+          {/* ================= Windows 远程桌面配置区 (RDP) ================= */}
+          {protocol === "rdp" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    连接名称
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="留空按 Administrator@host:3389 生成"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    所属分组
+                  </label>
+                  <select
+                    value={groupId}
+                    onChange={(e) => setGroupId(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  >
+                    <option value="">无分组</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        📁 {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    主机地址 (IP / 域名) *
+                  </label>
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="例如 192.168.1.50"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    RDP 端口
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={port > 0 ? port : 3389}
+                    onChange={(e) => setPort(Number(e.target.value) || 3389)}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    用户名
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Administrator"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    登录密码
+                  </label>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={editingSession?.credential_id ? "已保存密码（留空不变）" : "输入 Windows 密码"}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    Windows 域 (Domain，可选)
+                  </label>
+                  <input
+                    type="text"
+                    value={rdpDomain}
+                    onChange={(e) => setRdpDomain(e.target.value)}
+                    placeholder="WORKGROUP / 留空"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {isVaultLocked && password && (
+                <VaultInlineUnlock
+                  uninitialized={!!isVaultUninitialized}
+                  password={vaultPassword}
+                  onPasswordChange={setVaultPassword}
+                  busy={unlockingVault}
+                  error={vaultUnlockError}
+                  onSubmit={handleInlineVaultUnlock}
+                />
+              )}
+
+              {/* 显示与分辨率 */}
+              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-ink-secondary">
+                    显示模式与分辨率
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setRdpFullscreen(true)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${rdpFullscreen
+                          ? "bg-action text-white border-accent font-semibold"
+                          : "bg-surface text-ink-secondary border-line/15"
+                        }`}
+                    >
+                      全屏模式 (Fullscreen)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRdpFullscreen(false)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${!rdpFullscreen
+                          ? "bg-action text-white border-accent font-semibold"
+                          : "bg-surface text-ink-secondary border-line/15"
+                        }`}
+                    >
+                      窗口自定义尺寸
+                    </button>
+                  </div>
+                </div>
+
+                {!rdpFullscreen && (
+                  <div className="space-y-2.5 pt-1">
+                    <div className="flex flex-wrap gap-1.5">
+                      {RDP_RESOLUTION_PRESETS.map((preset) => {
+                        const active =
+                          rdpWidth === preset.width && rdpHeight === preset.height;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setRdpWidth(preset.width);
+                              setRdpHeight(preset.height);
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-mono border transition ${active
+                                ? "border-accent bg-action/10 text-accent font-bold"
+                                : "border-line/15 bg-surface text-ink-secondary hover:text-ink"
+                              }`}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
+                          窗口宽度 (Width px)
+                        </label>
+                        <input
+                          type="number"
+                          min={640}
+                          max={7680}
+                          value={rdpWidth}
+                          onChange={(e) => setRdpWidth(Number(e.target.value))}
+                          className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
+                          窗口高度 (Height px)
+                        </label>
+                        <input
+                          type="number"
+                          min={480}
+                          max={4320}
+                          value={rdpHeight}
+                          onChange={(e) => setRdpHeight(Number(e.target.value))}
+                          className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 本地资源重定向与高级选项 */}
+              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3.5 space-y-3">
+                <div className="text-xs font-semibold text-ink-secondary">
+                  本地资源重定向
+                </div>
+                <div className="grid grid-cols-2 gap-2.5 text-xs text-ink-secondary">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={rdpDrivesRedirect}
+                      onChange={(e) => setRdpDrivesRedirect(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>映射本地磁盘驱动器 (drivestoredirect)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={rdpClipboard}
+                      onChange={(e) => setRdpClipboard(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>共享剪贴板 (redirect_clipboard)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={rdpPrinters}
+                      onChange={(e) => setRdpPrinters(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>重定向本地打印机</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={rdpAdminSession}
+                      onChange={(e) => setRdpAdminSession(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>管理员控制台会话 (/admin)</span>
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    远程音频重定向
+                  </label>
+                  <select
+                    value={rdpAudio}
+                    onChange={(e) =>
+                      setRdpAudio(e.target.value as "local" | "remote" | "none")
+                    }
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink"
+                  >
+                    <option value="local">在本机播放声音 (Local)</option>
+                    <option value="remote">在远程电脑播放 (Remote)</option>
+                    <option value="none">不播放声音 / 静音 (None)</option>
+                  </select>
+                </div>
+              </div>
+
+              {renderProxySelectRow()}
+
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  备注说明
+                </label>
+                <textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink"
+                />
+              </div>
+
+              <HostIconPicker
+                value={iconKey}
+                onChange={selectIcon}
+                onAutoDetect={applyAutoIcon}
+                radioName="rdp-host-icon"
+                compact
+              />
+            </div>
+          )}
+
+          {/* ================= 本地终端配置区 (LocalShell) ================= */}
+          {protocol === "local_shell" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    终端显示名称
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="例如：PowerShell 终端 / 本地开发环境"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    所属分组
+                  </label>
+                  <select
+                    value={groupId}
+                    onChange={(e) => setGroupId(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  >
+                    <option value="">无分组</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        📁 {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  Shell 类型 (Shell Kind)
+                </label>
+                <select
+                  value={shellKind}
+                  onChange={(e) => setShellKind(e.target.value as LocalShellKind)}
+                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none"
+                >
+                  {SHELL_KIND_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {shellKind === "custom" && (
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    自定义可执行文件路径 (Shell Path) *
+                  </label>
+                  <input
+                    type="text"
+                    value={shellPath}
+                    onChange={(e) => setShellPath(e.target.value)}
+                    placeholder="例如 C:\Program Files\Git\bin\bash.exe 或 /usr/local/bin/fish"
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    初始工作目录 (Working Directory)
+                  </label>
+                  <input
+                    type="text"
+                    value={workingDir}
+                    onChange={(e) => setWorkingDir(e.target.value)}
+                    placeholder="留空使用用户主目录"
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    字符编码 (Encoding)
+                  </label>
+                  <select
+                    value={encoding}
+                    onChange={(e) => setEncoding(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none"
+                  >
+                    {ENCODING_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  启动后自动执行命令 (Startup Command)
+                </label>
+                <input
+                  type="text"
+                  value={startupCommand}
+                  onChange={(e) => setStartupCommand(e.target.value)}
+                  placeholder="例如 conda activate dev"
+                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  备注说明
+                </label>
+                <textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ================= Telnet 主机配置区 (Telnet) ================= */}
+          {protocol === "telnet" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    会话名称
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="留空按 Telnet-host:23 生成"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    所属分组
+                  </label>
+                  <select
+                    value={groupId}
+                    onChange={(e) => setGroupId(e.target.value)}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  >
+                    <option value="">无分组</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        📁 {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    主机地址 (IP / 域名) *
+                  </label>
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="例如 192.168.1.1"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    Telnet 端口
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={port > 0 ? port : 23}
+                    onChange={(e) => setPort(Number(e.target.value) || 23)}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    登录用户名 (可选)
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="自动登录用户名"
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                    登录密码 (可选)
+                  </label>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={editingSession?.credential_id ? "已保存密码（留空不变）" : "自动登录密码"}
+                    className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {isVaultLocked && password && (
+                <VaultInlineUnlock
+                  uninitialized={!!isVaultUninitialized}
+                  password={vaultPassword}
+                  onPasswordChange={setVaultPassword}
+                  busy={unlockingVault}
+                  error={vaultUnlockError}
+                  onSubmit={handleInlineVaultUnlock}
+                />
+              )}
+
+              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center gap-4 text-xs text-ink-secondary">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={telnetAutoLogin}
+                      onChange={(e) => setTelnetAutoLogin(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>启用自动登录匹配 (auto_login)</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={telnetLocalEcho}
+                      onChange={(e) => setTelnetLocalEcho(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                    />
+                    <span>本地回显 (local_echo)</span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
+                      登录提示符匹配 (Login Prompt)
+                    </label>
+                    <input
+                      type="text"
+                      value={telnetLoginPrompt}
+                      onChange={(e) => setTelnetLoginPrompt(e.target.value)}
+                      placeholder="login:"
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
+                      密码提示符匹配 (Password Prompt)
+                    </label>
+                    <input
+                      type="text"
+                      value={telnetPasswordPrompt}
+                      onChange={(e) => setTelnetPasswordPrompt(e.target.value)}
+                      placeholder="Password:"
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
+                      发送换行模式 (Newline Mode)
+                    </label>
+                    <select
+                      value={telnetNewlineMode}
+                      onChange={(e) =>
+                        setTelnetNewlineMode(e.target.value as "crlf" | "lf" | "cr")
+                      }
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
+                    >
+                      <option value="crlf">CRLF (\r\n)</option>
+                      <option value="lf">LF (\n)</option>
+                      <option value="cr">CR (\r)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
+                      字符编码 (Encoding)
+                    </label>
+                    <select
+                      value={encoding}
+                      onChange={(e) => setEncoding(e.target.value)}
+                      className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink"
+                    >
+                      {ENCODING_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {renderProxySelectRow()}
+
+              <div>
+                <label className="block text-xs font-semibold text-ink-secondary mb-1">
+                  备注说明
+                </label>
+                <textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink"
+                />
+              </div>
+            </div>
           )}
 
           {/* ================= 串口配置区 (Serial) ================= */}
@@ -963,11 +2624,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         key={rate}
                         type="button"
                         onClick={() => setBaudRate(rate)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-mono border transition ${
-                          baudRate === rate
+                        className={`px-2.5 py-1 rounded-lg text-xs font-mono border transition ${baudRate === rate
                             ? "bg-action text-white border-accent font-bold shadow-apple-sm"
                             : "bg-surface-muted text-ink-secondary border-line/15 hover:border-line/25 hover:bg-line/5"
-                        }`}
+                          }`}
                       >
                         {rate}
                       </button>
@@ -1065,7 +2725,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               </div>
             </div>
           )}
-
         </form>
 
         {/* 错误提示固定在底部操作栏上方：不随表单滚动，保证一定能看到 */}
@@ -1094,10 +2753,35 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               selectedKey ? (
                 <span>公钥连接</span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 text-state-warning"><TriangleAlertIcon className="h-3.5 w-3.5" />尚未选择私钥</span>
+                <span className="inline-flex items-center gap-1.5 text-state-warning">
+                  <TriangleAlertIcon className="h-3.5 w-3.5" />
+                  尚未选择私钥
+                </span>
               )
+            ) : protocol === "rdp" ? (
+              <span className="inline-flex items-center gap-1.5">
+                <MonitorIcon className="h-3.5 w-3.5" />
+                Windows 远程桌面 (RDP)
+              </span>
+            ) : protocol === "local_shell" ? (
+              <span className="inline-flex items-center gap-1.5">
+                <TerminalIcon className="h-3.5 w-3.5" />
+                本地终端会话
+              </span>
+            ) : protocol === "telnet" ? (
+              <span className="inline-flex items-center gap-1.5">
+                <GlobeIcon className="h-3.5 w-3.5" />
+                Telnet 会话
+              </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5">{protocol === "ssh" ? <KeyIcon className="h-3.5 w-3.5" /> : <PlugIcon className="h-3.5 w-3.5" />}{protocol === "ssh" ? "密码认证" : "串口会话"}</span>
+              <span className="inline-flex items-center gap-1.5">
+                {protocol === "ssh" ? (
+                  <KeyIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <PlugIcon className="h-3.5 w-3.5" />
+                )}
+                {protocol === "ssh" ? "密码认证" : "串口会话"}
+              </span>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
@@ -1126,35 +2810,57 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                 className="flex items-center gap-1.5 rounded-xl bg-action px-5 py-2 text-xs font-semibold text-white shadow-apple-md hover:bg-action transition disabled:opacity-50"
               >
                 <PlayIcon className="h-3.5 w-3.5" />
-                <span>{isSubmitting && connectAfterSave ? "保存并连接中..." : "保存并立即连接"}</span>
+                <span>
+                  {isSubmitting && connectAfterSave ? "保存并连接中..." : "保存并立即连接"}
+                </span>
               </button>
             )}
           </div>
         </div>
       </div>
+
       {keyImportOpen && (
         <SshKeyImportModal
-          onClose={() => { setKeyImportOpen(false); setVaultPassword(""); setVaultUnlockError(null); }}
+          onClose={() => {
+            setKeyImportOpen(false);
+            setVaultPassword("");
+            setVaultUnlockError(null);
+          }}
           onSaved={(key) => {
-            setSshKeys((keys) => keys.some((item) => item.id === key.id)
-              ? keys.map((item) => item.id === key.id ? key : item)
-              : [...keys, key]);
+            setSshKeys((keys) =>
+              keys.some((item) => item.id === key.id)
+                ? keys.map((item) => (item.id === key.id ? key : item))
+                : [...keys, key]
+            );
             setSelectedKeyId(key.id);
             setKeyMsg(null);
             setKeyImportOpen(false);
           }}
-          vaultUnlock={isVaultLocked ? (
-            <VaultInlineUnlock
-              uninitialized={!!isVaultUninitialized}
-              password={vaultPassword}
-              onPasswordChange={setVaultPassword}
-              busy={unlockingVault}
-              error={vaultUnlockError}
-              onSubmit={handleInlineVaultUnlock}
-            />
-          ) : null}
+          vaultUnlock={
+            isVaultLocked ? (
+              <VaultInlineUnlock
+                uninitialized={!!isVaultUninitialized}
+                password={vaultPassword}
+                onPasswordChange={setVaultPassword}
+                busy={unlockingVault}
+                error={vaultUnlockError}
+                onSubmit={handleInlineVaultUnlock}
+              />
+            ) : null
+          }
         />
       )}
+
+      <ProxyManagerModal
+        open={proxyManagerOpen}
+        onClose={() => setProxyManagerOpen(false)}
+        onChanged={(nextProxies) => {
+          setProxies(nextProxies);
+          if (proxyId && !nextProxies.some((p) => p.id === proxyId)) {
+            setProxyId("");
+          }
+        }}
+      />
     </div>
   );
 };

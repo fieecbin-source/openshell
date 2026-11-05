@@ -9,7 +9,12 @@ export function HostIcon({ iconKey, protocol, className, title }: {
   className?: string;
   title?: string;
 }) {
-  const key = normalizeHostIconKey(iconKey);
+  const isUnset = !iconKey || iconKey === "server" || iconKey === "none" || iconKey === DEFAULT_HOST_ICON_KEY;
+  const key = isUnset && protocol === "rdp"
+    ? "device:desktop"
+    : isUnset && protocol === "local_shell"
+      ? "device:terminal"
+      : normalizeHostIconKey(iconKey);
   const system = HOST_ICONS.find((item) => item.key === key);
   // 串口会话在未显式选择图标时仍使用串口图形，而不是默认的 Linux 图标
   const serial = protocol === "serial" && (!iconKey || iconKey === "server" || iconKey === "none");
