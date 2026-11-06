@@ -204,11 +204,7 @@ export const CommandInputBar: React.FC<CommandInputBarProps> = ({
           setHistoryIndex(null);
         }}
         onKeyDown={handleKeyDown}
-        placeholder={
-          hasTarget
-            ? "输入命令发送到当前会话（Enter 发送，↑/↓ 浏览历史）..."
-            : "当前没有可用的已连接终端会话"
-        }
+        aria-label="命令"
         disabled={!hasTarget}
         className="min-w-0 flex-1 rounded-lg border border-line/15 bg-surface px-2.5 py-1 font-mono text-[11px] text-ink placeholder-ink-tertiary transition focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 disabled:opacity-60"
       />
@@ -323,7 +319,7 @@ export const CommandInputBar: React.FC<CommandInputBarProps> = ({
             <div className="max-h-64 overflow-y-auto py-1">
               {commandHistory.length === 0 ? (
                 <p className="px-3 py-6 text-center text-[11px] text-ink-tertiary">
-                  暂无历史命令，发送一次命令后会自动记录
+                  暂无历史命令
                 </p>
               ) : (
                 commandHistory.map((item, index) => (

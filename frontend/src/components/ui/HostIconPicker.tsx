@@ -45,7 +45,7 @@ export function HostIconPicker({
     <div className="mb-2 flex items-center gap-1.5 rounded-xl border border-line/15 bg-surface-muted/50 px-2.5 py-1.5 focus-within:border-accent/40">
       <SearchIcon className="h-3.5 w-3.5 shrink-0 text-ink-tertiary" />
       <input value={query} onChange={(event) => setQuery(event.target.value)}
-        aria-label="搜索图标" placeholder="搜索系统、发行版或设备类型"
+        aria-label="搜索图标"
         className="w-full min-w-0 bg-transparent text-xs text-ink placeholder:text-ink-tertiary outline-none" />
       {query && (
         <button type="button" aria-label="清空图标搜索" onClick={() => setQuery("")}
@@ -77,7 +77,7 @@ export function HostIconPicker({
       </div>
       {filtered.length === 0 && (
         <p className="py-6 text-center text-[11px] text-ink-tertiary">
-          没有匹配的图标，试试“router”“Ubuntu”或“数据库”。
+          未找到图标
         </p>
       )}
     </div>

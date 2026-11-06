@@ -45,7 +45,6 @@ export const AboutModal: React.FC<AboutModalProps> = ({ open, onClose }) => {
       open={open}
       onClose={onClose}
       title="关于 OpenShell"
-      description="无限速 · 功能简约 · 跨平台 · 开源免费"
       widthClassName="w-full max-w-[460px]"
     >
       <div className="space-y-4">
@@ -63,9 +62,7 @@ export const AboutModal: React.FC<AboutModalProps> = ({ open, onClose }) => {
                 v{version}
               </span>
             </div>
-            <p className="mt-0.5 text-xs text-ink-secondary">
-              企业级轻量跨平台 SSH / SFTP 终端客户端
-            </p>
+
           </div>
         </div>
 
@@ -98,7 +95,6 @@ export const AboutModal: React.FC<AboutModalProps> = ({ open, onClose }) => {
               checked={autoCheck}
               onChange={(val) => patchConfig({ auto_check: val })}
               label="启动时自动检查更新"
-              hint="关闭后仅在手动点击「检查更新」时连接检测"
             />
           </div>
         </div>

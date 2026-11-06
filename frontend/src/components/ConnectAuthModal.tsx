@@ -131,14 +131,12 @@ export const ConnectAuthModal: React.FC<ConnectAuthModalProps> = ({ tab, onClose
               <Field
                 label="私钥口令"
                 htmlFor="connect-auth-passphrase"
-                hint="若私钥已加密，请输入口令；也可以在会话的「公钥连接」中重新导入并保存。"
               >
                 <Input
                   id="connect-auth-passphrase"
                   type="password"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="私钥未加密时留空"
                   autoComplete="off"
                   autoFocus
                 />
@@ -150,7 +148,6 @@ export const ConnectAuthModal: React.FC<ConnectAuthModalProps> = ({ tab, onClose
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="输入服务器登录密码（支持任意长度）"
                   autoComplete="current-password"
                   autoFocus
                 />

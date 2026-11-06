@@ -64,7 +64,7 @@ export const RemoteEditorModal: React.FC = () => {
           onChange={(e) => updateEditorContent(e.target.value)}
           rows={20}
           spellCheck={false}
-          placeholder="输入文件内容…"
+          aria-label="文件内容"
           className="min-h-0 flex-1 !resize-none bg-surface-muted font-mono text-os-xs leading-relaxed"
         />
       </div>

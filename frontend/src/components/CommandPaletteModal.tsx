@@ -332,7 +332,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="搜索会话、执行操作，或输入 root@192.168.1.1 快速连接"
+            aria-label="搜索会话或操作"
             className="w-full bg-transparent text-os-sm text-ink placeholder:text-ink-tertiary focus:outline-none"
           />
           <kbd className="shrink-0 rounded-[5px] border border-line/10 bg-surface-muted px-1.5 py-px font-mono text-os-2xs text-ink-tertiary">

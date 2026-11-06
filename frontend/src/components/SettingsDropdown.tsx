@@ -31,11 +31,11 @@ export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
   }, [open]);
 
   const items = [
-    { icon: LayersIcon, label: "终端背景与壁纸", hint: "背景图片、透明度与模糊", action: () => onOpenSettings("wallpaper") },
-    { icon: TerminalIcon, label: "终端显示偏好", hint: "字体、光标与渲染引擎", action: () => onOpenSettings("terminal") },
-    { icon: PaletteIcon, label: "终端颜色调整", hint: "浅色主题、文字与 ANSI 配色", action: () => onOpenSettings("colors") },
-    { icon: LockIcon, label: "安全与主密码", hint: "管理主保险库密码", action: () => onOpenSettings("security") },
-    { icon: GlobeIcon, label: "账号与云同步", hint: "自建服务端与多端同步", action: onOpenSync },
+    { icon: LayersIcon, label: "终端背景与壁纸", action: () => onOpenSettings("wallpaper") },
+    { icon: TerminalIcon, label: "终端显示偏好", action: () => onOpenSettings("terminal") },
+    { icon: PaletteIcon, label: "终端颜色调整", action: () => onOpenSettings("colors") },
+    { icon: LockIcon, label: "安全与主密码", action: () => onOpenSettings("security") },
+    { icon: GlobeIcon, label: "账号与云同步", action: onOpenSync },
     ...(shouldShowBadge(updateState) ? [{ icon: RefreshIcon, label: "发现新版本", action: onCheckUpdate }] : []),
     { icon: InfoIcon, label: "关于 OpenShell", action: onOpenAbout },
   ];
@@ -86,7 +86,7 @@ export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
         >
           <GlassMaterial />
           <div className="px-3 pb-2 pt-1.5 text-os-2xs font-medium text-ink-tertiary">系统偏好设置</div>
-          {items.map(({ icon: Icon, label, hint, action }, index) => (
+          {items.map(({ icon: Icon, label, action }, index) => (
             <React.Fragment key={label}>
               {index === 5 && <div role="separator" className="my-1.5 border-t border-line/10" />}
               <button
@@ -98,7 +98,6 @@ export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
                 <Icon className="h-4 w-4 shrink-0 text-ink-tertiary" />
                 <span>
                   <span className="block text-os-xs font-medium text-ink">{label}</span>
-                  {hint && <span className="mt-0.5 block text-os-2xs text-ink-tertiary">{hint}</span>}
                 </span>
               </button>
             </React.Fragment>

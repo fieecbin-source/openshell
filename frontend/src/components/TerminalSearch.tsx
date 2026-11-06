@@ -50,7 +50,7 @@ export const TerminalSearch: React.FC<TerminalSearchProps> = ({ searchAddon, onC
         <input
           type="text"
           autoFocus
-          placeholder="搜索终端内容..."
+          aria-label="搜索终端内容"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {

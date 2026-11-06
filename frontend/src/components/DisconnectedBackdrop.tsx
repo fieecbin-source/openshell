@@ -69,9 +69,7 @@ export const DisconnectedBackdrop: React.FC<DisconnectedBackdropProps> = ({
           </p>
         )}
 
-        <p className="mb-6 mt-3 max-w-[300px] text-os-xs leading-relaxed text-ink-tertiary">
-          终端输出与视图状态已保留。检查网络或重新插上设备后，可一键恢复连接。
-        </p>
+
 
         <Button
           variant="primary"
