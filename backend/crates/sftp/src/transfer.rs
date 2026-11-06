@@ -10,10 +10,20 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{Mutex, RwLock};
 
-const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB 分块传输
+/// 单块传输大小：512 KiB。
+///
+/// 大分块可以把「一次 SFTP READ/WRITE 请求 + 一次网络往返」的等待放大到 512 KiB 的有效载荷，
+/// 从而在高延迟链路上消除 64 KiB 串行等待造成的「伪限速」现象（复刻 FinalShell `L0`/`CK` 的大块打包策略）。
+const CHUNK_SIZE: usize = 512 * 1024;
+
+/// 文件流异步读写缓冲区大小：1 MiB。
+///
+/// 与 512 KiB 分块配合，保证每次实际 IO 都是大块提交，且始终只常驻固定大小缓冲，
+/// 不会因为文件体积增长而放大内存占用。注意：这里**只做缓冲，不做任何限速**。
+const IO_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// 单个传输句柄状态。
 struct ActiveTransfer {
@@ -36,7 +46,7 @@ impl TransferManager {
     pub fn new(concurrency: usize) -> Self {
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
-            concurrency_limit: Arc::new(Mutex::new(concurrency.clamp(1, 4))),
+            concurrency_limit: Arc::new(Mutex::new(concurrency.clamp(1, 8))),
         }
     }
 
@@ -58,6 +68,15 @@ impl TransferManager {
     pub async fn pause(&self, task_id: &str) -> DomainResult<()> {
         let mut tasks = self.tasks.write().await;
         if let Some(active) = tasks.get_mut(task_id) {
+            if !matches!(
+                active.task.state,
+                TransferState::Queued | TransferState::Running | TransferState::Paused
+            ) {
+                return Err(DomainError::new(
+                    ErrorCode::Validation,
+                    "transfer is already finished",
+                ));
+            }
             active.paused.store(true, Ordering::SeqCst);
             active.task.state = TransferState::Paused;
             active.task.speed_bps = 0;
@@ -68,10 +87,37 @@ impl TransferManager {
         }
     }
 
+    /// 恢复同一任务的打开文件和当前位置，不创建按长度猜测的新任务。
+    pub async fn resume(&self, task_id: &str) -> DomainResult<()> {
+        let mut tasks = self.tasks.write().await;
+        let active = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| DomainError::not_found("transfer task not found"))?;
+        if active.task.state != TransferState::Paused {
+            return Err(DomainError::new(
+                ErrorCode::Validation,
+                "transfer is not paused",
+            ));
+        }
+        active.paused.store(false, Ordering::SeqCst);
+        active.task.state = TransferState::Running;
+        active.task.updated_at = now_ms();
+        Ok(())
+    }
+
     /// 取消任务。
     pub async fn cancel(&self, task_id: &str) -> DomainResult<()> {
         let mut tasks = self.tasks.write().await;
         if let Some(active) = tasks.get_mut(task_id) {
+            if matches!(
+                active.task.state,
+                TransferState::Completed | TransferState::Failed | TransferState::Cancelled
+            ) {
+                return Err(DomainError::new(
+                    ErrorCode::Validation,
+                    "transfer is already finished",
+                ));
+            }
             active.cancelled.store(true, Ordering::SeqCst);
             active.task.state = TransferState::Cancelled;
             active.task.speed_bps = 0;
@@ -82,13 +128,13 @@ impl TransferManager {
         }
     }
 
-    /// 启动上传任务（支持断点续传）。
+    /// 新上传一律从零覆盖；旧 resume=true 请求也安全重传。
     pub async fn start_upload(
         &self,
         session_id: SessionId,
         local_path: String,
         remote_path: String,
-        resume: bool,
+        _resume: bool,
         sftp: Arc<SftpClient>,
     ) -> DomainResult<String> {
         let local_file_path = Path::new(&local_path);
@@ -140,7 +186,6 @@ impl TransferManager {
                 &local_path,
                 &remote_path,
                 total_bytes,
-                resume,
                 sftp,
                 cancelled,
                 paused,
@@ -151,35 +196,20 @@ impl TransferManager {
 
             let mut tasks = tasks_clone.write().await;
             if let Some(active) = tasks.get_mut(&task_id_clone) {
-                active.task.speed_bps = 0;
-                active.task.updated_at = now_ms();
-                match res {
-                    Ok(_) => {
-                        if active.task.state != TransferState::Cancelled
-                            && active.task.state != TransferState::Paused
-                        {
-                            active.task.state = TransferState::Completed;
-                            active.task.transferred_bytes = total_bytes;
-                        }
-                    }
-                    Err(e) => {
-                        active.task.state = TransferState::Failed;
-                        active.task.error_message = Some(e.message.clone());
-                    }
-                }
+                finish_transfer(active, res);
             }
         });
 
         Ok(task_id)
     }
 
-    /// 启动下载任务（支持断点续传）。
+    /// 新下载一律从零覆盖；继续暂停任务使用 resume。
     pub async fn start_download(
         &self,
         session_id: SessionId,
         remote_path: String,
         local_path: String,
-        resume: bool,
+        _resume: bool,
         sftp: Arc<SftpClient>,
     ) -> DomainResult<String> {
         let stat = sftp.stat(&remote_path).await?;
@@ -228,7 +258,6 @@ impl TransferManager {
                 &remote_path,
                 &local_path,
                 total_bytes,
-                resume,
                 sftp,
                 cancelled,
                 paused,
@@ -239,26 +268,37 @@ impl TransferManager {
 
             let mut tasks = tasks_clone.write().await;
             if let Some(active) = tasks.get_mut(&task_id_clone) {
-                active.task.speed_bps = 0;
-                active.task.updated_at = now_ms();
-                match res {
-                    Ok(_) => {
-                        if active.task.state != TransferState::Cancelled
-                            && active.task.state != TransferState::Paused
-                        {
-                            active.task.state = TransferState::Completed;
-                            active.task.transferred_bytes = total_bytes;
-                        }
-                    }
-                    Err(e) => {
-                        active.task.state = TransferState::Failed;
-                        active.task.error_message = Some(e.message.clone());
-                    }
-                }
+                finish_transfer(active, res);
             }
         });
 
         Ok(task_id)
+    }
+}
+
+fn finish_transfer(active: &mut ActiveTransfer, result: DomainResult<()>) {
+    active.task.speed_bps = 0;
+    active.task.updated_at = now_ms();
+    if active.cancelled.load(Ordering::SeqCst) {
+        active.task.state = TransferState::Cancelled;
+    } else if let Err(error) = result {
+        active.task.state = TransferState::Failed;
+        active.task.error_message = Some(error.message);
+    } else {
+        active.task.state = TransferState::Completed;
+        active.task.transferred_bytes = active.task.total_bytes;
+    }
+}
+
+async fn wait_until_running(cancelled: &AtomicBool, paused: &AtomicBool) -> bool {
+    loop {
+        if cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        if !paused.load(Ordering::SeqCst) {
+            return true;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     }
 }
 
@@ -268,74 +308,61 @@ async fn execute_upload(
     local_path: &str,
     remote_path: &str,
     total_bytes: u64,
-    resume: bool,
     sftp: Arc<SftpClient>,
     cancelled: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     current_speed: Arc<AtomicU64>,
     tasks: Arc<RwLock<HashMap<String, ActiveTransfer>>>,
 ) -> DomainResult<()> {
-    let mut local_file = tokio::fs::File::open(local_path)
+    if !wait_until_running(&cancelled, &paused).await {
+        return Ok(());
+    }
+    let local_file = tokio::fs::File::open(local_path)
         .await
         .map_err(|e| DomainError::new(ErrorCode::Io, format!("cannot open local file: {e}")))?;
 
-    // 断点续传检查：如果远端文件存在且开启续传
-    let mut offset = 0u64;
-    if resume {
-        if let Ok(stat) = sftp.stat(remote_path).await {
-            if stat.size > 0 && stat.size <= total_bytes {
-                offset = stat.size;
-            }
-        }
-    }
-
-    let flags = if offset > 0 {
-        OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND
-    } else {
-        OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE
-    };
-
     let session = sftp.session();
-    let mut remote_file = session
-        .open_with_flags(remote_path, flags)
+    let remote_file = session
+        .open_with_flags(
+            remote_path,
+            OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+        )
         .await
         .map_err(|e| DomainError::new(ErrorCode::Io, format!("cannot open remote file: {e}")))?;
 
-    if offset > 0 {
-        local_file
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(|e| DomainError::new(ErrorCode::Io, format!("seek local file failed: {e}")))?;
-    }
+    // 1 MiB 读缓冲 + 1 MiB 写缓冲：全速流水线，无任何人为限速。
+    let mut local_file = BufReader::with_capacity(IO_BUFFER_SIZE, local_file);
+    let mut remote_file = BufWriter::with_capacity(IO_BUFFER_SIZE, remote_file);
 
     {
         let mut locked = tasks.write().await;
         if let Some(active) = locked.get_mut(task_id) {
-            active.task.state = TransferState::Running;
-            active.task.transferred_bytes = offset;
+            if active.task.state == TransferState::Queued {
+                active.task.state = TransferState::Running;
+            }
         }
     }
 
     let mut buffer = vec![0u8; CHUNK_SIZE];
-    let mut transferred = offset;
+    let mut transferred = 0;
     let mut last_time = tokio::time::Instant::now();
     let mut bytes_since_last = 0u64;
 
     while transferred < total_bytes {
-        if cancelled.load(Ordering::SeqCst) {
+        if !wait_until_running(&cancelled, &paused).await {
             return Ok(());
         }
-        if paused.load(Ordering::SeqCst) {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            continue;
-        }
 
+        let remaining = (total_bytes - transferred).min(CHUNK_SIZE as u64) as usize;
         let n = local_file
-            .read(&mut buffer)
+            .read(&mut buffer[..remaining])
             .await
             .map_err(|e| DomainError::new(ErrorCode::Io, format!("read local failed: {e}")))?;
         if n == 0 {
-            break;
+            return Err(DomainError::new(
+                ErrorCode::Io,
+                "unexpected EOF reading local file",
+            ));
         }
 
         remote_file
@@ -356,13 +383,20 @@ async fn execute_upload(
             let mut locked = tasks.write().await;
             if let Some(active) = locked.get_mut(task_id) {
                 active.task.transferred_bytes = transferred;
-                active.task.speed_bps = speed;
+                if active.task.state == TransferState::Running {
+                    active.task.speed_bps = speed;
+                }
                 active.task.updated_at = now_ms();
             }
         }
     }
 
-    let _ = remote_file.flush().await;
+    // 缓冲必须显式 flush：BufWriter 的 Drop 不会写出残留数据，
+    // 且 flush 失败意味着尾部数据未能提交，必须向上返回错误而不是静默忽略。
+    remote_file
+        .flush()
+        .await
+        .map_err(|e| DomainError::new(ErrorCode::Io, format!("flush remote failed: {e}")))?;
     Ok(())
 }
 
@@ -372,81 +406,67 @@ async fn execute_download(
     remote_path: &str,
     local_path: &str,
     total_bytes: u64,
-    resume: bool,
     sftp: Arc<SftpClient>,
     cancelled: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     current_speed: Arc<AtomicU64>,
     tasks: Arc<RwLock<HashMap<String, ActiveTransfer>>>,
 ) -> DomainResult<()> {
-    let mut offset = 0u64;
-    if resume {
-        if let Ok(metadata) = tokio::fs::metadata(local_path).await {
-            if metadata.len() > 0 && metadata.len() <= total_bytes {
-                offset = metadata.len();
-            }
-        }
+    if !wait_until_running(&cancelled, &paused).await {
+        return Ok(());
     }
 
-    let mut local_file = if offset > 0 {
-        tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(true)
-            .open(local_path)
-            .await
-            .map_err(|e| {
-                DomainError::new(ErrorCode::Io, format!("open local append failed: {e}"))
-            })?
-    } else {
-        tokio::fs::File::create(local_path)
-            .await
-            .map_err(|e| DomainError::new(ErrorCode::Io, format!("create local failed: {e}")))?
-    };
-
     let session = sftp.session();
-    let mut remote_file = session
+    let remote_file = session
         .open(remote_path)
         .await
         .map_err(|e| DomainError::new(ErrorCode::Io, format!("open remote file failed: {e}")))?;
 
-    if offset > 0 {
-        remote_file
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(|e| {
-                DomainError::new(ErrorCode::Io, format!("seek remote file failed: {e}"))
+    if let Some(parent) = Path::new(local_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                DomainError::new(ErrorCode::Io, format!("create local directory failed: {e}"))
             })?;
+        }
     }
+
+    let local_file = tokio::fs::File::create(local_path)
+        .await
+        .map_err(|e| DomainError::new(ErrorCode::Io, format!("create local failed: {e}")))?;
+
+    // 1 MiB 读缓冲 + 1 MiB 写缓冲：全速流水线，无任何人为限速。
+    let mut remote_file = BufReader::with_capacity(IO_BUFFER_SIZE, remote_file);
+    let mut local_file = BufWriter::with_capacity(IO_BUFFER_SIZE, local_file);
 
     {
         let mut locked = tasks.write().await;
         if let Some(active) = locked.get_mut(task_id) {
-            active.task.state = TransferState::Running;
-            active.task.transferred_bytes = offset;
+            if active.task.state == TransferState::Queued {
+                active.task.state = TransferState::Running;
+            }
         }
     }
 
     let mut buffer = vec![0u8; CHUNK_SIZE];
-    let mut transferred = offset;
+    let mut transferred = 0;
     let mut last_time = tokio::time::Instant::now();
     let mut bytes_since_last = 0u64;
 
     while transferred < total_bytes {
-        if cancelled.load(Ordering::SeqCst) {
+        if !wait_until_running(&cancelled, &paused).await {
             return Ok(());
         }
-        if paused.load(Ordering::SeqCst) {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            continue;
-        }
 
+        let remaining = (total_bytes - transferred).min(CHUNK_SIZE as u64) as usize;
         let n = remote_file
-            .read(&mut buffer)
+            .read(&mut buffer[..remaining])
             .await
             .map_err(|e| DomainError::new(ErrorCode::Io, format!("read remote failed: {e}")))?;
         if n == 0 {
-            break;
+            return Err(DomainError::new(
+                ErrorCode::Io,
+                "unexpected EOF reading remote file",
+            ));
         }
 
         local_file
@@ -467,13 +487,20 @@ async fn execute_download(
             let mut locked = tasks.write().await;
             if let Some(active) = locked.get_mut(task_id) {
                 active.task.transferred_bytes = transferred;
-                active.task.speed_bps = speed;
+                if active.task.state == TransferState::Running {
+                    active.task.speed_bps = speed;
+                }
                 active.task.updated_at = now_ms();
             }
         }
     }
 
-    let _ = local_file.flush().await;
+    // 缓冲必须显式 flush：BufWriter 的 Drop 不会写出残留数据，
+    // 且 flush 失败意味着尾部数据未能落盘，必须向上返回错误而不是静默忽略。
+    local_file
+        .flush()
+        .await
+        .map_err(|e| DomainError::new(ErrorCode::Io, format!("flush local failed: {e}")))?;
     Ok(())
 }
 
@@ -493,8 +520,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_streaming_chunked_pipeline_memory_bounded() {
-        // 验证 64 KiB 分块大小常量与流式模拟
-        assert_eq!(CHUNK_SIZE, 64 * 1024);
+        // 验证 512 KiB 分块大小常量与流式模拟
+        assert_eq!(CHUNK_SIZE, 512 * 1024);
+        // 读写缓冲固定 1 MiB，与分块大小配合，不随文件体积增长
+        assert_eq!(IO_BUFFER_SIZE, 1024 * 1024);
 
         // 模拟 16 MB 虚拟大文件流式管道（16 * 1024 * 1024 bytes）
         let virtual_total = 16 * 1024 * 1024usize;
@@ -508,7 +537,11 @@ mod tests {
         }
 
         assert_eq!(transferred, virtual_total);
-        // 关键指标：工作内存始终仅持有单块 64 KiB 缓冲区，绝不常驻全量大文件
-        assert_eq!(chunk_buf.len(), 64 * 1024);
+        // 关键指标：工作内存始终仅持有单块 512 KiB 缓冲区，绝不常驻全量大文件
+        assert_eq!(chunk_buf.len(), 512 * 1024);
     }
 }
+
+#[cfg(test)]
+#[path = "transfer_tests.rs"]
+mod regression_tests;
