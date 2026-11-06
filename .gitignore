@@ -90,3 +90,8 @@ bin/
 .codebuddy/
 .trae/
 skills-lock.json
+
+# Local audit evidence and multi-agent coordination (keep on disk, out of releases)
+/audit/
+/multi-agent/
+/VERIFICATION_REPORT.md
