@@ -4,6 +4,30 @@ use openshell_serial::{
 };
 
 #[tokio::test]
+async fn native_open_failure_does_not_register_a_mock_session() {
+    let service = SerialService::new();
+    let config = SerialProfileConfig {
+        port_name: "openshell-nonexistent-serial-port".into(),
+        baud_rate: 57600,
+        data_bits: DataBits::Seven,
+        stop_bits: StopBits::Two,
+        parity: Parity::Even,
+        flow_control: FlowControl::Software,
+        ..Default::default()
+    };
+    assert!(service
+        .open("missing-device", &config, false)
+        .await
+        .is_err());
+    assert!(!service.is_open("missing-device").await);
+    assert!(service.get_mock("missing-device").await.is_none());
+    assert!(matches!(
+        service.write("missing-device", b"x").await,
+        Err(SerialError::NotConnected)
+    ));
+}
+
+#[tokio::test]
 async fn test_mock_serial_basic_rw() {
     let mut backend = MockSerialBackend::new();
     let config = SerialProfileConfig {
