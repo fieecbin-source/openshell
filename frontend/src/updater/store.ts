@@ -33,6 +33,7 @@ const SETTING_KEYS = {
   fallbackSource: "update.fallback_source",
   mirrorPrefix: "update.mirror_prefix",
   backupKeep: "update.backup_keep",
+  backupKeepLegacy: "update.backupKeep",
 } as const;
 
 interface UpdaterStore {
@@ -61,7 +62,7 @@ interface UpdaterStore {
   openLogDir: () => Promise<void>;
   openBackupDir: () => Promise<void>;
   openDownloadDir: () => Promise<void>;
-  backupNow: () => Promise<void>;
+  backupNow: () => Promise<BackupInfo>;
   listBackups: () => Promise<BackupInfo[]>;
 }
 
@@ -73,15 +74,17 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
     set((prev) => ({ state: reduce(prev.state, event) }));
 
   const loadConfig = async (): Promise<UpdateConfig> => {
-    const [autoCheck, interval, channel, fallback, mirror, keep] = await Promise.all([
+    const [autoCheck, interval, channel, fallback, mirror, keepCanonical, keepLegacy] = await Promise.all([
       settingsGet("user", SETTING_KEYS.autoCheck),
       settingsGet("user", SETTING_KEYS.intervalHours),
       settingsGet("user", SETTING_KEYS.channel),
       settingsGet("user", SETTING_KEYS.fallbackSource),
       settingsGet("user", SETTING_KEYS.mirrorPrefix),
       settingsGet("user", SETTING_KEYS.backupKeep),
+      settingsGet("user", SETTING_KEYS.backupKeepLegacy),
     ]);
     const value = (record: { value_json?: unknown } | null) => record?.value_json;
+    const keepRaw = value(keepCanonical) ?? value(keepLegacy);
     return {
       ...DEFAULT_UPDATE_CONFIG,
       auto_check:
@@ -96,7 +99,7 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
       fallback_source: (value(fallback) as string) || null,
       mirror_prefix: (value(mirror) as string) || null,
       backup_keep:
-        typeof value(keep) === "number" ? Number(value(keep)) : DEFAULT_UPDATE_CONFIG.backup_keep,
+        typeof keepRaw === "number" ? Number(keepRaw) : DEFAULT_UPDATE_CONFIG.backup_keep,
     };
   };
 
@@ -311,9 +314,10 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
       await api.openDownloadDir().catch((err) => console.error("open download dir failed", err));
     },
 
-    backupNow: async () => {
-      await api.backupNow("manual").catch((err) => console.error("backup now failed", err));
+    backupNow: async (): Promise<BackupInfo> => {
+      const info = await api.backupNow("manual");
       await get().refreshRuntime();
+      return info;
     },
 
     listBackups: async () => await api.listBackups().catch(() => []),

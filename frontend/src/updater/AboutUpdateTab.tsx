@@ -3,6 +3,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { UPDATE_COPY, formatMoment } from "./copy";
 import { currentResult, shouldShowBadge } from "./state";
 import { useUpdaterStore } from "./store";
+import { formatFriendlyError } from "../lib/errors";
 
 const INTERVAL_OPTIONS = [1, 3, 6, 12, 24];
 
@@ -33,7 +34,11 @@ export const AboutUpdateTab: React.FC = () => {
     openReleasePage,
   } = useUpdaterStore();
 
-  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  const [backupResult, setBackupResult] = useState<{
+    tone: "success" | "danger";
+    text: string;
+  } | null>(null);
+  const [backupInProgress, setBackupInProgress] = useState(false);
 
   // 打开该页时刷新一次运行时状态，保证「上次检查时间」是最新的
   const refreshRuntime = useUpdaterStore((s) => s.refreshRuntime);
@@ -169,7 +174,6 @@ export const AboutUpdateTab: React.FC = () => {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[12px] font-medium text-[#1d1d1f]">{UPDATE_COPY.about.autoCheck}</p>
-              <p className="text-[10px] leading-relaxed text-[#86868b]">{UPDATE_COPY.about.autoCheckHint}</p>
             </div>
             <button
               onClick={() => void patchConfig({ auto_check: !config.auto_check })}
@@ -229,11 +233,6 @@ export const AboutUpdateTab: React.FC = () => {
                 </button>
               </div>
             </div>
-            <p className="text-[10px] leading-relaxed text-[#86868b]">
-              {config.channel === "stable"
-                ? UPDATE_COPY.about.channelStableHint
-                : UPDATE_COPY.about.channelBetaHint}
-            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -243,11 +242,10 @@ export const AboutUpdateTab: React.FC = () => {
             <input
               type="url"
               value={config.fallback_source ?? ""}
-              placeholder="https://"
+              aria-label={UPDATE_COPY.about.fallbackSource}
               onChange={(e) => void patchConfig({ fallback_source: e.target.value || null })}
               className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition placeholder:text-[#c7c7cc] focus:border-[#0071e3]/50"
             />
-            <p className="text-[10px] leading-relaxed text-[#86868b]">{UPDATE_COPY.about.fallbackSourceHint}</p>
           </div>
 
           <div className="space-y-1.5">
@@ -255,11 +253,10 @@ export const AboutUpdateTab: React.FC = () => {
             <input
               type="url"
               value={config.mirror_prefix ?? ""}
-              placeholder="https://"
+              aria-label={UPDATE_COPY.about.mirror}
               onChange={(e) => void patchConfig({ mirror_prefix: e.target.value || null })}
               className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-[11px] text-[#1d1d1f] shadow-apple-sm outline-none transition placeholder:text-[#c7c7cc] focus:border-[#0071e3]/50"
             />
-            <p className="text-[10px] leading-relaxed text-[#86868b]">{UPDATE_COPY.about.mirrorHint}</p>
           </div>
         </Card>
 
@@ -274,14 +271,28 @@ export const AboutUpdateTab: React.FC = () => {
               {UPDATE_COPY.actions.openLogs}
             </button>
             <button
-              onClick={() =>
-                void backupNow()
-                  .then(() => setBackupMsg(runtime?.backups_dir ?? null))
-                  .catch((err) => console.error("backup failed", err))
-              }
-              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98]"
+              disabled={backupInProgress}
+              onClick={async () => {
+                setBackupInProgress(true);
+                setBackupResult(null);
+                try {
+                  const info = await backupNow();
+                  setBackupResult({
+                    tone: "success",
+                    text: `备份成功：${info?.file_name ?? "已生成快照"} (${info?.path ?? runtime?.backups_dir ?? ""})`,
+                  });
+                } catch (err: any) {
+                  setBackupResult({
+                    tone: "danger",
+                    text: `备份失败：${formatFriendlyError(err)}`,
+                  });
+                } finally {
+                  setBackupInProgress(false);
+                }
+              }}
+              className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98] disabled:opacity-50"
             >
-              {UPDATE_COPY.actions.backupNow}
+              {backupInProgress ? "备份中..." : UPDATE_COPY.actions.backupNow}
             </button>
             <button
               onClick={() => void openBackupDir()}
@@ -290,14 +301,21 @@ export const AboutUpdateTab: React.FC = () => {
               {UPDATE_COPY.actions.openBackups}
             </button>
           </div>
-          <p className="text-[10px] leading-relaxed text-[#86868b]">{UPDATE_COPY.about.backupsHint}</p>
           <p className="text-[10px] text-[#86868b]">
             {UPDATE_COPY.about.skipped}:{" "}
             <span className="font-mono">
               {runtime?.skipped_versions?.length ? runtime.skipped_versions.join(", ") : UPDATE_COPY.about.none}
             </span>
           </p>
-          {backupMsg && <p className="font-mono text-[10px] text-[#1a7f37]">{backupMsg}</p>}
+          {backupResult && (
+            <p
+              className={`font-mono text-[10px] ${
+                backupResult.tone === "success" ? "text-[#1a7f37]" : "text-[#d70015]"
+              }`}
+            >
+              {backupResult.text}
+            </p>
+          )}
         </Card>
       </div>
     </div>
