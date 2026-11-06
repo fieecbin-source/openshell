@@ -84,6 +84,10 @@ impl crate::provider::LlmProvider for AnthropicProvider {
         AiWireKind::AnthropicMessages
     }
 
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -114,10 +118,18 @@ impl crate::provider::LlmProvider for AnthropicProvider {
                 };
                 let chunk = match item {
                     Ok(chunk) => chunk,
-                    Err(_) => break,
+                    Err(error) => {
+                        yield StreamEvent::Error(http_error::classify_reqwest(&error).code);
+                        break;
+                    },
                 };
 
                 for event in decoder.push(chunk.as_ref()) {
+                    if event.event.as_deref() == Some("error") {
+                        yield StreamEvent::Error(crate::error::AiErrorCode::Server);
+                        finished = true;
+                        break;
+                    }
                     if cancel.is_cancelled() {
                         finished = true;
                         break;
@@ -128,8 +140,15 @@ impl crate::provider::LlmProvider for AnthropicProvider {
                                 yield item;
                             }
                         }
-                        Ok(None) => {}
-                        Err(_) => {
+                        Ok(None) => {
+                            if serde_json::from_str::<Value>(&event.data).ok().and_then(|value| value.get("type").cloned()) == Some(Value::String("message_stop".into())) {
+                                yield StreamEvent::Done;
+                                finished = true;
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            yield StreamEvent::Error(error.code);
                             finished = true;
                             break;
                         }
@@ -261,7 +280,7 @@ impl AnthropicStreamState {
         }
         let value: Value = match serde_json::from_str(trimmed) {
             Ok(value) => value,
-            Err(_) => return Ok(None),
+            Err(_) => return Err(AiError::parse("模型响应格式无效")),
         };
 
         let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");

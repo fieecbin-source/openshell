@@ -80,6 +80,10 @@ impl crate::provider::LlmProvider for GeminiProvider {
         AiWireKind::GeminiGenerateContent
     }
 
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -110,22 +114,37 @@ impl crate::provider::LlmProvider for GeminiProvider {
                 };
                 let chunk = match item {
                     Ok(chunk) => chunk,
-                    Err(_) => break,
+                    Err(error) => {
+                        yield StreamEvent::Error(http_error::classify_reqwest(&error).code);
+                        break;
+                    },
                 };
 
                 for event in decoder.push(chunk.as_ref()) {
+                    if event.event.as_deref() == Some("error") {
+                        yield StreamEvent::Error(crate::error::AiErrorCode::Server);
+                        finished = true;
+                        break;
+                    }
                     if cancel.is_cancelled() {
                         finished = true;
                         break;
                     }
                     match state.parse(&event.data) {
                         Ok(Some(events)) => {
+                            let terminal = events.iter().any(|event| matches!(event, StreamEvent::Finish(_)));
                             for item in events {
                                 yield item;
                             }
+                            if terminal {
+                                yield StreamEvent::Done;
+                                finished = true;
+                                break;
+                            }
                         }
                         Ok(None) => {}
-                        Err(_) => {
+                        Err(error) => {
+                            yield StreamEvent::Error(error.code);
                             finished = true;
                             break;
                         }
@@ -315,7 +334,7 @@ impl GeminiStreamState {
         }
         let value: Value = match serde_json::from_str(trimmed) {
             Ok(value) => value,
-            Err(_) => return Ok(None),
+            Err(_) => return Err(AiError::parse("模型响应格式无效")),
         };
         if value.get("error").is_some_and(|error| !error.is_null()) {
             return Err(http_error::classify_stream_error(&value.to_string()));

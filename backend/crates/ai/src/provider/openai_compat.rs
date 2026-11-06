@@ -74,6 +74,10 @@ impl crate::provider::LlmProvider for OpenAiCompatProvider {
         AiWireKind::OpenAiChat
     }
 
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -103,11 +107,20 @@ impl crate::provider::LlmProvider for OpenAiCompatProvider {
                 };
                 let chunk = match item {
                     Ok(chunk) => chunk,
-                    Err(_) => break,
+                    Err(error) => {
+                        yield StreamEvent::Error(http_error::classify_reqwest(&error).code);
+                        break;
+                    },
                 };
 
                 for event in decoder.push(chunk.as_ref()) {
+                    if event.event.as_deref() == Some("error") {
+                        yield StreamEvent::Error(crate::error::AiErrorCode::Server);
+                        finished = true;
+                        break;
+                    }
                     if event.is_done() {
+                        yield StreamEvent::Done;
                         finished = true;
                         break;
                     }
@@ -122,8 +135,8 @@ impl crate::provider::LlmProvider for OpenAiCompatProvider {
                             }
                         }
                         Ok(None) => {}
-                        // 流中夹带的错误无法通过事件通道回传，直接结束。
-                        Err(_) => {
+                        Err(error) => {
+                            yield StreamEvent::Error(error.code);
                             finished = true;
                             break;
                         }
@@ -223,7 +236,7 @@ fn serialize_message(message: &ChatMessage) -> Value {
 
 /// 解析单个 `data:` 负载。
 ///
-/// - 返回 `Ok(None)` 表示 `[DONE]`、空负载或无法识别的 JSON（容错）。
+/// - 返回 `Ok(None)` 表示 `[DONE]`、空负载或没有可消费事件的有效 JSON。
 /// - 返回 `Err` 表示流中夹带了错误事件，调用方应终止流。
 pub fn parse_stream_chunk(data: &str) -> Result<Option<Vec<StreamEvent>>, AiError> {
     let trimmed = data.trim();
@@ -232,7 +245,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<Option<Vec<StreamEvent>>, AiErro
     }
     let value: Value = match serde_json::from_str(trimmed) {
         Ok(value) => value,
-        Err(_) => return Ok(None),
+        Err(_) => return Err(AiError::parse("模型响应格式无效")),
     };
     if value.get("error").is_some_and(|error| !error.is_null()) {
         return Err(http_error::classify_stream_error(&value.to_string()));
@@ -463,10 +476,10 @@ mod tests {
     }
 
     #[test]
-    fn ignores_done_empty_and_malformed_chunks() {
+    fn ignores_empty_events_but_rejects_malformed_chunks() {
         assert!(parse_stream_chunk("[DONE]").unwrap().is_none());
         assert!(parse_stream_chunk("   ").unwrap().is_none());
-        assert!(parse_stream_chunk("{not json").unwrap().is_none());
+        assert!(parse_stream_chunk("{not json").is_err());
         assert!(parse_stream_chunk(r#"{"choices":[{"delta":{}}]}"#)
             .unwrap()
             .is_none());

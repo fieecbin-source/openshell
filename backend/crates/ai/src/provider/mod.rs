@@ -44,10 +44,14 @@ pub trait LlmProvider: Send + Sync {
     /// 当前适配器使用的线格式。
     fn wire(&self) -> AiWireKind;
 
+    fn timeout(&self) -> Duration {
+        DEFAULT_TIMEOUT
+    }
+
     /// 发起流式补全。
     ///
     /// 请求建立阶段（连接 / 首包）的错误以 `Err` 返回；
-    /// 流建立后的中断通过结束流表达（事件通道不承载错误）。
+    /// 流建立后的错误和协议结束标记由事件通道传回。
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -60,18 +64,38 @@ pub trait LlmProvider: Send + Sync {
         request: CompletionRequest,
         cancel: CancellationToken,
     ) -> Result<CompletionResponse, AiError> {
-        let mut stream = self.stream(request, cancel.clone()).await?;
-        let mut accumulator = StreamAccumulator::new();
-        while let Some(event) = stream.next().await {
-            if cancel.is_cancelled() {
-                return Err(http_error::cancelled());
+        let operation = async {
+            let mut stream = self.stream(request, cancel.clone()).await?;
+            let mut accumulator = StreamAccumulator::new();
+            let mut completed = false;
+            while let Some(event) = stream.next().await {
+                match event {
+                    StreamEvent::Error(code) => {
+                        return Err(AiError::new(code, "模型响应失败，请重试"))
+                    }
+                    StreamEvent::Done => completed = true,
+                    event => accumulator.push(event),
+                }
             }
-            accumulator.push(event);
+            let response = accumulator.finish();
+            if !completed
+                || response.finish_reason.is_none()
+                || (response.text.trim().is_empty() && response.tool_calls.is_empty())
+                || response.tool_calls.iter().any(|call| {
+                    call.name.is_empty()
+                        || call.arguments.get("_parse_error")
+                            == Some(&serde_json::Value::Bool(true))
+                })
+            {
+                return Err(AiError::parse("模型响应为空或未正常结束"));
+            }
+            Ok(response)
+        };
+        tokio::select! {
+            biased;
+            _ = wait_for_cancel(&cancel) => Err(http_error::cancelled()),
+            result = tokio::time::timeout(self.timeout(), operation) => result.map_err(|_| http_error::timeout())?,
         }
-        if cancel.is_cancelled() {
-            return Err(http_error::cancelled());
-        }
-        Ok(accumulator.finish())
     }
 }
 
@@ -147,6 +171,7 @@ pub(crate) fn validate_api_key(api_key: &str) -> Result<(), AiError> {
 pub(crate) fn default_client(timeout: Duration) -> Result<reqwest::Client, AiError> {
     reqwest::Client::builder()
         .connect_timeout(timeout)
+        .timeout(timeout)
         .user_agent(concat!("OpenShell/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| AiError::internal("初始化模型服务 HTTP 客户端失败"))
@@ -287,6 +312,7 @@ mod tests {
                 StreamEvent::TextDelta("你好".into()),
                 StreamEvent::TextDelta("，世界".into()),
                 StreamEvent::Finish("stop".into()),
+                StreamEvent::Done,
             ];
             Ok(Box::pin(futures_util::stream::iter(events)))
         }

@@ -175,6 +175,9 @@ pub enum StreamEvent {
     },
     /// 结束原因（`stop` / `length` / `tool_calls` 等）。
     Finish(String),
+    /// A protocol terminal marker, distinct from a reported finish reason.
+    Done,
+    Error(crate::error::AiErrorCode),
 }
 
 /// 一次性补全结果（测试连接与非流式调用使用）。
@@ -238,6 +241,7 @@ impl StreamAccumulator {
                 self.response.output_tokens = output_tokens;
             }
             StreamEvent::Finish(reason) => self.response.finish_reason = Some(reason),
+            StreamEvent::Done | StreamEvent::Error(_) => {}
         }
     }
 
