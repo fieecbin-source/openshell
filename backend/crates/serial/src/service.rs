@@ -64,10 +64,10 @@ impl SerialService {
         backend: Box<dyn SerialBackend>,
         mock: Option<MockSerialBackend>,
     ) {
-        self.sessions
-            .lock()
-            .await
-            .insert(card_id.to_string(), Arc::new(Mutex::new(SessionEntry::new(backend, mock))));
+        self.sessions.lock().await.insert(
+            card_id.to_string(),
+            Arc::new(Mutex::new(SessionEntry::new(backend, mock))),
+        );
     }
 
     /// 打开指定卡片的串口连接

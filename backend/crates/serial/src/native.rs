@@ -146,7 +146,10 @@ mod tests {
                     "synthetic idle",
                 ));
             };
-            assert!(chunk.len() <= buf.len(), "test chunk must fit the read buffer");
+            assert!(
+                chunk.len() <= buf.len(),
+                "test chunk must fit the read buffer"
+            );
             buf[..chunk.len()].copy_from_slice(&chunk);
             self.chunks.remove(0);
             Ok(chunk.len())
