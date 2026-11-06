@@ -40,8 +40,18 @@ const FORBIDDEN_CONTENT = [
   /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   /TAURI_SIGNING_PRIVATE_KEY\s*=/,
   /CLOUDFLARE_API_TOKEN\s*=/,
-  /(api[_-]?key|secret|password)\s*[:=]\s*["'][^"']{16,}["']/i,
 ];
+
+function hasSecretLiteral(text) {
+  // Consume complete strings before looking inside them, so a UI label cannot become a key.
+  const tokens = /(?<secret>(?:\b(?:api[_-]?key|secret|password)\b|"(?:api[_-]?key|secret|password)"|'(?:api[_-]?key|secret|password)')\s*[:=]\s*(?:"(?:\\.|[^"\\\r\n]){16,}"|'(?:\\.|[^'\\\r\n]){16,}'|`(?:\\.|[^`\\\r\n]){16,}`))|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gi;
+  for (const match of text.matchAll(tokens)) {
+    if (match.groups.secret) return true;
+    const literal = match[0].slice(1, -1).replace(/\\(["'`\\])/g, "$1");
+    if (hasSecretLiteral(literal)) return true;
+  }
+  return false;
+}
 
 /** 这些文件天然是二进制，跳过文本正则扫描（仍会检查路径，并额外抽字符串查指纹）。 */
 const SKIP_CONTENT = /\.(exe|msi|dmg|AppImage|deb|png|ico|icns|woff2?|ttf|zip|gz|rpm)$/i;
@@ -159,11 +169,8 @@ for (const target of targets) {
 
     if (!skipText) {
       const text = readFileSync(file, "utf8");
-      for (const rule of FORBIDDEN_CONTENT) {
-        if (rule.test(text)) {
-          problems.push(`${rel}：疑似包含密钥或私钥内容`);
-          break;
-        }
+      if (FORBIDDEN_CONTENT.some((rule) => rule.test(text)) || hasSecretLiteral(text)) {
+        problems.push(`${rel}：疑似包含密钥或私钥内容`);
       }
       if (localMarkers.size > 0) {
         for (const [marker, source] of localMarkers) {
