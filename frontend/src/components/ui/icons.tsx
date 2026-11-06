@@ -1,5 +1,5 @@
 import type { SVGProps } from "react";
-import { Activity, ArrowUpDown, Bot, Box, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clock, Cloud, Command, Copy, Cpu, Database, Download, Ellipsis, ExternalLink, Eye, EyeOff, File, Filter, Folder, FolderOpen, FolderPlus, Gauge, Globe, HardDrive, History, Home, Image, Info, Key, Layers, LayoutGrid, Link, List, Lock, LockOpen, LogOut, Maximize, MemoryStick, Minimize2, Monitor, Mountain, Network, Palette, PanelLeft, Pause, Pencil, Play, Plug, Plus, Power, RefreshCw, Rows2, Save, Search, Send, Server, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquareTerminal, Star, Sun, Trash, TriangleAlert, Upload, Wifi, WifiOff, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowUpDown, Bot, Box, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clock, Cloud, Command, Copy, Cpu, Database, Download, Ellipsis, ExternalLink, Eye, EyeOff, File, Filter, Folder, FolderOpen, FolderPlus, Gauge, Globe, HardDrive, History, Home, Image, Info, Key, Layers, LayoutGrid, Link, List, Lock, LockOpen, LogOut, Maximize, MemoryStick, Minimize2, Monitor, Mountain, Network, Palette, PanelLeft, Pause, Pencil, Play, Plug, Plus, Power, RefreshCw, Rows2, Save, Search, Send, Server, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquareTerminal, Star, Sun, Trash, TriangleAlert, Upload, Wifi, WifiOff, X, Zap, type LucideIcon } from "lucide-react";
 
 export type IconProps = SVGProps<SVGSVGElement>;
 
@@ -84,3 +84,4 @@ export const SlidersIcon = stockIcon(SlidersHorizontal);
 export const ImageIcon = stockIcon(Image);
 export const MountainIcon = stockIcon(Mountain);
 export const MonitorIcon = stockIcon(Monitor);
+export const ZapIcon = stockIcon(Zap);

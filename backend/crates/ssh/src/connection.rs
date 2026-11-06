@@ -30,6 +30,7 @@ pub struct ConnectOptions {
     pub timeout_sec: u64,
     pub compression: bool,
     pub agent_forwarding: bool,
+    pub x11_forwarding: Option<Arc<crate::x11::X11Forward>>,
 }
 
 pub struct SshConnection {
@@ -38,6 +39,7 @@ pub struct SshConnection {
     handle: Arc<Mutex<russh::client::Handle<OpenShellClientHandler>>>,
     remote_routes: crate::handler::RemoteRoutes,
     agent_forwarding: bool,
+    x11_forwarding: Option<Arc<crate::x11::X11Forward>>,
     /// 连接被判定关闭（远端断开 / 保活失联）时置为 true
     closed_tx: Arc<tokio::sync::watch::Sender<bool>>,
     _health_task: Option<JoinHandle<()>>,
@@ -96,8 +98,15 @@ impl SshConnection {
         ));
 
         // 交互式终端立即发送小包，避免 Nagle 合并按键数据带来的等待。
+        //
+        // 同时显式放大 SSH 通道流控窗口：russh 默认 window_size = 2 MiB、
+        // maximum_packet_size = 32 KiB，SFTP 大批量传输时会被逐窗口等待拖慢。
+        // 4 MiB 窗口 + 64 KiB 单包容忍更高的带宽时延积，配合 512 KiB 分块
+        // 才能真正跑满链路带宽（对应 FinalShell `Bg` 加速模块与 `CK` 大包策略）。
         let config = Arc::new(russh::client::Config {
             nodelay: true,
+            window_size: 4 * 1024 * 1024,
+            maximum_packet_size: 65536,
             preferred: russh::Preferred {
                 compression: std::borrow::Cow::Owned(if opts.compression {
                     vec![russh::compression::ZLIB, russh::compression::NONE]
@@ -109,8 +118,12 @@ impl SshConnection {
             ..Default::default()
         });
         let addr = format!("{}:{}", host_clean, opts.port);
+        let (closed_tx, _closed_rx) = tokio::sync::watch::channel(false);
+        let closed_tx = Arc::new(closed_tx);
         let mut handler = OpenShellClientHandler::new(verifier);
+        handler.closed_tx = Some(closed_tx.clone());
         handler.agent_forwarding = opts.agent_forwarding;
+        handler.x11_forwarding = opts.x11_forwarding.clone();
         // 主机密钥校验发生在握手阶段，russh 只返回通用错误；通过共享槽位把具体原因取回来。
         let host_key_error = handler.host_key_error_slot();
         let remote_routes = handler.remote_routes.clone();
@@ -464,10 +477,12 @@ impl SshConnection {
                 }
             }
             AuthMethod::Agent => {
-                return Err(DomainError::new(
-                    ErrorCode::AuthMethodUnsupported,
-                    "尚未配置本地 SSH-Agent 转发代理",
-                ));
+                tokio::time::timeout(
+                    AUTH_STEP_TIMEOUT,
+                    crate::agent::authenticate(&mut handle, &opts.username),
+                )
+                .await
+                .map_err(|_| DomainError::new(ErrorCode::Timeout, "SSH Agent 认证超时"))??;
             }
         }
 
@@ -483,11 +498,10 @@ impl SshConnection {
         //  - 即使关闭 keepalive，也每 30 秒轮询 `is_closed()` 做断线探测；
         //  - 连续 keepalive 失败达到 `keepalive_max_miss` 才判定失联（容忍偶发丢包）；
         //  - 任务结束时通过 watch 通道广播「连接已关闭」，由连接服务发事件并清表。
-        let (closed_tx, _closed_rx) = tokio::sync::watch::channel(false);
-        let closed_tx = Arc::new(closed_tx);
         let health_handle = {
             let handle_clone = Arc::clone(&handle_arc);
             let closed_tx = Arc::clone(&closed_tx);
+            let routes = remote_routes.clone();
             let keepalive_sec = opts.keepalive_sec;
             let max_miss = opts.keepalive_max_miss.max(1);
             tokio::spawn(async move {
@@ -527,7 +541,8 @@ impl SshConnection {
                     }
                 }
                 // watch 会保存最后一次值，订阅者即使晚于此处订阅也不会漏掉通知
-                let _ = closed_tx.send(true);
+                crate::handler::cancel_all_remote_routes(&routes).await;
+                closed_tx.send_replace(true);
             })
         };
 
@@ -537,6 +552,7 @@ impl SshConnection {
             handle: handle_arc,
             remote_routes,
             agent_forwarding: opts.agent_forwarding,
+            x11_forwarding: opts.x11_forwarding,
             closed_tx,
             _health_task: Some(health_handle),
         })
@@ -544,10 +560,32 @@ impl SshConnection {
 
     pub async fn open_shell(&self, size: TermSize) -> DomainResult<Box<dyn ByteStream>> {
         let handle = self.handle.lock().await;
-        let channel = handle
+        let mut channel = handle
             .channel_open_session()
             .await
             .map_err(map_russh_error)?;
+        if let Some(x11) = &self.x11_forwarding {
+            channel
+                .request_x11(
+                    true,
+                    false,
+                    "MIT-MAGIC-COOKIE-1",
+                    x11.request_cookie(),
+                    x11.screen,
+                )
+                .await
+                .map_err(map_russh_error)?;
+            match tokio::time::timeout(Duration::from_secs(10), channel.wait()).await {
+                Ok(Some(ChannelMsg::Success)) => {}
+                _ => {
+                    let _ = channel.close().await;
+                    return Err(DomainError::new(
+                        ErrorCode::Unsupported,
+                        "服务器拒绝或未响应 X11 转发请求",
+                    ));
+                }
+            }
+        }
         // want_reply = true：让 PTY 请求的成败可见。
         // 旧实现传 false，服务器拒绝 PTY（例如 sshd 关闭了 tty 分配）时被静默忽略，
         // 之后终端表现为「能输入但没有任何回显」，极难排查。
@@ -657,6 +695,7 @@ impl SshConnection {
         dest_port: u16,
     ) -> DomainResult<u32> {
         let key = (bind_host.to_string(), bind_port as u32);
+        let (cancel, _keep_alive) = tokio::sync::watch::channel(false);
         {
             let mut routes = self.remote_routes.lock().await;
             if routes.contains_key(&key) {
@@ -665,7 +704,13 @@ impl SshConnection {
                     "remote address already forwarded",
                 ));
             }
-            routes.insert(key.clone(), (dest_host, dest_port));
+            routes.insert(
+                key.clone(),
+                crate::handler::RemoteRoute {
+                    dest: (dest_host, dest_port),
+                    cancel,
+                },
+            );
         }
         let result = self
             .handle
@@ -682,8 +727,8 @@ impl SshConnection {
                 };
                 if port != bind_port as u32 {
                     let mut routes = self.remote_routes.lock().await;
-                    if let Some(dest) = routes.remove(&key) {
-                        routes.insert((bind_host.to_string(), port), dest);
+                    if let Some(route) = routes.remove(&key) {
+                        routes.insert((bind_host.to_string(), port), route);
                     }
                 }
                 Ok(port)
@@ -696,11 +741,17 @@ impl SshConnection {
     }
 
     pub async fn stop_remote_forward(&self, bind_host: &str, bind_port: u16) -> DomainResult<()> {
-        // Revoke the local route even when the server refuses or loses the cancellation reply.
-        self.remote_routes
+        // Revoke the local route even when the server refuses or loses the cancellation reply,
+        // and cancel its established relays first: “停止”必须立即结束该路由的隧道，
+        // 而不是等服务端回执后再继续转发。
+        if let Some(route) = self
+            .remote_routes
             .lock()
             .await
-            .remove(&(bind_host.to_string(), bind_port as u32));
+            .remove(&(bind_host.to_string(), bind_port as u32))
+        {
+            route.cancel.send_replace(true);
+        }
         self.handle
             .lock()
             .await
@@ -737,6 +788,8 @@ impl SshConnection {
     }
 
     pub async fn close(&self) -> DomainResult<()> {
+        self.closed_tx.send_replace(true);
+        crate::handler::cancel_all_remote_routes(&self.remote_routes).await;
         let handle = self.handle.lock().await;
         let _ = handle
             .disconnect(russh::Disconnect::ByApplication, "closed by user", "en")

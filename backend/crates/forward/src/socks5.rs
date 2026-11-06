@@ -80,7 +80,6 @@ pub async fn handle_socks5_handshake(
                 .read_exact(&mut ubuf)
                 .await
                 .map_err(|e| DomainError::new(ErrorCode::Io, format!("read user failed: {e}")))?;
-            let user = String::from_utf8_lossy(&ubuf).to_string();
 
             let plen =
                 stream.read_u8().await.map_err(|e| {
@@ -91,13 +90,12 @@ pub async fn handle_socks5_handshake(
                 .read_exact(&mut pbuf)
                 .await
                 .map_err(|e| DomainError::new(ErrorCode::Io, format!("read pass failed: {e}")))?;
-            let pass = String::from_utf8_lossy(&pbuf).to_string();
 
             // 只有同时配置了期望用户名与口令才可能通过校验。
             // 缺少任一项时必须拒绝：否则「配置了认证」的动态转发会对任意凭据放行，
             // 配合 0.0.0.0 监听就等价于一个无需认证的开放代理。
             let matched = match (expected_user, expected_pass) {
-                (Some(eu), Some(ep)) => user == eu && pass == ep,
+                (Some(eu), Some(ep)) => ubuf == eu.as_bytes() && pbuf == ep.as_bytes(),
                 _ => false,
             };
 
@@ -189,14 +187,6 @@ pub async fn handle_socks5_handshake(
         .await
         .map_err(|e| DomainError::new(ErrorCode::Io, format!("read target port failed: {e}")))?;
 
-    // 回送成功响应：0x05, 0x00, 0x00, 0x01, BND.ADDR(0), BND.PORT(0)
-    stream
-        .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-        .await
-        .map_err(|e| {
-            DomainError::new(ErrorCode::Io, format!("write socks5 success failed: {e}"))
-        })?;
-
     Ok((target_host, target_port))
 }
 
@@ -204,6 +194,38 @@ pub async fn handle_socks5_handshake(
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn parsing_request_does_not_claim_connect_success() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        let parsed = tokio::spawn(async move {
+            let target = handle_socks5_handshake(&mut server, SocksAuth::None, None, None)
+                .await
+                .unwrap();
+            (server, target)
+        });
+        client.write_all(&[5, 1, 0]).await.unwrap();
+        let mut method = [0; 2];
+        client.read_exact(&mut method).await.unwrap();
+        assert_eq!(method, [5, 0]);
+        client
+            .write_all(&[5, 1, 0, 1, 127, 0, 0, 1, 0, 22])
+            .await
+            .unwrap();
+        let (_server, target) = parsed.await.unwrap();
+        assert_eq!(target, ("127.0.0.1".into(), 22));
+        let mut byte = [0];
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), client.read(&mut byte))
+                .await
+                .is_err(),
+            "parser sent a CONNECT reply before the target was opened"
+        );
+    }
 
     #[tokio::test]
     async fn test_socks5_no_auth_ipv4() {
@@ -237,9 +259,11 @@ mod tests {
             .expect("send req");
 
         let mut reply = [0u8; 10];
-        client.read_exact(&mut reply).await.expect("read reply");
-        assert_eq!(reply[0], 0x05);
-        assert_eq!(reply[1], 0x00); // SUCCESS
+        assert_eq!(
+            client.read(&mut reply).await.expect("read reply"),
+            0,
+            "parsing alone must not send CONNECT success"
+        );
 
         let (target_host, target_port) = server_task.await.expect("task");
         assert_eq!(target_host, "1.2.3.4");
@@ -276,10 +300,6 @@ mod tests {
         req.extend_from_slice(&[0x01, 0xBB]);
 
         client.write_all(&req).await.expect("send req");
-
-        let mut reply = [0u8; 10];
-        client.read_exact(&mut reply).await.expect("read reply");
-        assert_eq!(reply[1], 0x00);
 
         let (target_host, target_port) = server_task.await.expect("task");
         assert_eq!(target_host, "example.com");
@@ -335,10 +355,6 @@ mod tests {
             .write_all(&[0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0, 22])
             .await
             .expect("send req");
-        let mut reply = [0u8; 10];
-        client.read_exact(&mut reply).await.expect("read reply");
-        assert_eq!(reply[1], 0x00);
-
         let (target_host, target_port) = server_task.await.expect("task");
         assert_eq!(target_host, "127.0.0.1");
         assert_eq!(target_port, 22);
@@ -346,41 +362,54 @@ mod tests {
 
     /// 回归：配置了 USERPASS 认证但未提供期望凭据时必须拒绝，而不是放行任意口令。
     #[tokio::test]
-    async fn test_socks5_userpass_without_expected_credentials_is_rejected() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
+    async fn test_socks5_userpass_rejects_missing_or_wrong_credentials() {
+        for (expected_user, expected_pass, supplied_pass) in [
+            (None, None, b"anything1".as_slice()),
+            (Some("admin"), Some("secret123"), b"anything1".as_slice()),
+            (Some("admin"), Some("\u{fffd}"), &[0xff]),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("local addr");
 
-        let server_task = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            handle_socks5_handshake(&mut stream, SocksAuth::Userpass, None, None).await
-        });
+            let server_task = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                handle_socks5_handshake(
+                    &mut stream,
+                    SocksAuth::Userpass,
+                    expected_user,
+                    expected_pass,
+                )
+                .await
+            });
 
-        let mut client = TcpStream::connect(addr).await.expect("connect");
-        client
-            .write_all(&[0x05, 0x01, 0x02])
-            .await
-            .expect("send methods");
-        let mut resp = [0u8; 2];
-        client
-            .read_exact(&mut resp)
-            .await
-            .expect("read method resp");
-        assert_eq!(resp, [0x05, 0x02]);
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            client
+                .write_all(&[0x05, 0x01, 0x02])
+                .await
+                .expect("send methods");
+            let mut resp = [0u8; 2];
+            client
+                .read_exact(&mut resp)
+                .await
+                .expect("read method resp");
+            assert_eq!(resp, [0x05, 0x02]);
 
-        let mut subneg = vec![0x01, 5];
-        subneg.extend_from_slice(b"admin");
-        subneg.push(9);
-        subneg.extend_from_slice(b"anything1");
-        client.write_all(&subneg).await.expect("send subneg");
+            let mut subneg = vec![0x01, 5];
+            subneg.extend_from_slice(b"admin");
+            subneg.push(supplied_pass.len() as u8);
+            subneg.extend_from_slice(supplied_pass);
+            client.write_all(&subneg).await.expect("send subneg");
 
-        let mut subneg_resp = [0u8; 2];
-        client
-            .read_exact(&mut subneg_resp)
-            .await
-            .expect("read subneg resp");
-        assert_eq!(subneg_resp, [0x01, 0x01]); // 认证失败
+            let mut subneg_resp = [0u8; 2];
+            client
+                .read_exact(&mut subneg_resp)
+                .await
+                .expect("read subneg resp");
+            assert_eq!(subneg_resp, [0x01, 0x01]); // 认证失败
 
-        let result = server_task.await.expect("task");
-        assert!(result.is_err());
+            let error = server_task.await.expect("task").unwrap_err();
+            assert!(!error.message.contains("anything1"));
+            assert!(!error.message.contains("secret123"));
+        }
     }
 }

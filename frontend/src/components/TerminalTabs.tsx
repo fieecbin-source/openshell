@@ -5,6 +5,7 @@ import { useTerminalStore } from "../stores/terminalStore";
 import { Badge } from "./ui/Surface";
 import { IconButton } from "./ui/Button";
 import { cn } from "./ui/cn";
+import { HostIcon } from "./ui/HostIcon";
 import {
   ChevronDownIcon,
   HomeIcon,
@@ -13,6 +14,7 @@ import {
   TerminalIcon,
   RowsIcon,
   FolderIcon,
+  ZapIcon,
 } from "./ui/icons";
 
 interface TerminalTabsProps {
@@ -58,7 +60,6 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
     duplicateTab,
     layoutMode,
     setLayoutMode,
-    openQuickLocalShell,
   } = useTerminalStore();
 
   const isHomeActive = activeTabId === null || activeTabId === "home" || tabs.length === 0;
@@ -157,9 +158,21 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
     );
 
   // 右侧「当前连接状态 · 详情」胶囊的状态配色（复刻 FinalShell 绿/红/黄状态标签）
+  const activeRdpClientLaunched =
+    !!activeTab &&
+    activeTab.rdpPhase === "launched" &&
+    activeTab.status !== "connected" &&
+    activeTab.status !== "error" &&
+    activeTab.status !== "disconnected";
   const activeStatusPill = !activeTab || isHomeActive
     ? null
-    : activeTab.status === "connected"
+    : activeRdpClientLaunched
+      ? {
+          dot: "bg-amber-400",
+          cls: "border-amber-400/30 bg-amber-400/10 text-amber-500 hover:bg-amber-400/15",
+          label: "客户端已启动 · 详情",
+        }
+      : activeTab.status === "connected"
       ? {
           dot: "bg-emerald-500",
           cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/15",
@@ -202,27 +215,59 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
           const isConnected = tab.status === "connected";
 
           const statusHint =
-            tab.status === "connected"
-              ? "已连接"
-              : tab.status === "connecting"
-                ? "正在连接"
-                : tab.status === "reconnecting"
+            tab.rdpPhase === "launched" && !isConnected && tab.status !== "error" && tab.status !== "disconnected"
+              ? "远程桌面客户端已启动；等待后端确认远端登录结果"
+              : tab.status === "connected"
+                ? "已连接"
+                : tab.status === "connecting"
                   ? "正在连接"
-                  : tab.error
-                    ? `已断开：${tab.error}`
-                    : "已断开，按 Enter 重新连接";
+                  : tab.status === "reconnecting"
+                    ? "正在连接"
+                    : tab.error
+                      ? `已断开：${tab.error}`
+                      : "已断开，按 Enter 重新连接";
 
-          let statusDot = (
-            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 ring-2 ring-emerald-500/25" />
+          const isEstablished = tab.status === "connected" && (!!tab.connectionId || tab.protocol === "serial");
+
+          // Mac 风格状态指示灯 / 全速闪电徽标
+          let statusIndicator = (
+            <span
+              className="inline-flex items-center justify-center rounded bg-emerald-500/15 p-0.5 text-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.35)] transition-all"
+              title="已建立安全高速连接 · 全速无限制 (512KiB 流水线)"
+            >
+              <ZapIcon className="h-3 w-3 fill-emerald-500 text-emerald-500 stroke-[2.5]" />
+            </span>
           );
-          if (tab.status === "connecting" || tab.status === "reconnecting") {
-            statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse ring-2 ring-amber-400/25" />
+
+          if (tab.rdpPhase === "launched" && !isConnected && tab.status !== "error" && tab.status !== "disconnected") {
+            // 启动 mstsc 不等于远端已连接，使用中性黄色而非成功绿
+            statusIndicator = (
+              <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+                <span className="h-2 w-2 rounded-full bg-amber-400 ring-1 ring-amber-300" />
+              </span>
             );
-          } else if (tab.status === "error" || tab.status === "disconnected") {
-            statusDot = (
-              <span className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-red-500/25" />
-            );
+          } else if (!isEstablished) {
+            if (tab.status === "connected") {
+              // 刚连接成功、正在挂载系统
+              statusIndicator = (
+                <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 ring-1 ring-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.7)]" />
+                </span>
+              );
+            } else if (tab.status === "connecting" || tab.status === "reconnecting") {
+              statusIndicator = (
+                <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+                  <span className="h-2 w-2 rounded-full bg-amber-400 ring-1 ring-amber-300 animate-pulse shadow-[0_0_6px_rgba(251,191,36,0.6)]" />
+                </span>
+              );
+            } else {
+              // 未连接上 / 连接失败 / 断开：清晰漂亮的 Mac 风格红点
+              statusIndicator = (
+                <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+                  <span className="h-2 w-2 rounded-full bg-rose-500 ring-1 ring-rose-400 shadow-[0_0_6px_rgba(244,63,94,0.7)]" />
+                </span>
+              );
+            }
           }
 
           return (
@@ -262,8 +307,10 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
               className={cn(tabClass(isActive, tab.status), "cursor-pointer")}
               title={`${tab.sessionName} (双击重命名，右键更多)`}
             >
-              <span title={statusHint}>{statusDot}</span>
+              {/* 1. logo 放在左侧 */}
+              <HostIcon protocol={tab.protocol} className="h-3.5 w-3.5 shrink-0 opacity-80" />
 
+              {/* 2. 会话名称 */}
               {editingTabId === tab.tabId ? (
                 <input
                   type="text"
@@ -281,6 +328,9 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
               ) : (
                 <span className="max-w-[130px] truncate">{tab.sessionName}</span>
               )}
+
+              {/* 3. 右侧放清晰的 Mac 风格状态指示灯 / 闪电标识 */}
+              <span className="shrink-0 flex items-center" title={statusHint}>{statusIndicator}</span>
 
               {protocolBadge && (
                 <Badge
@@ -455,37 +505,41 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
             style={{ left: plusMenuPos?.left ?? 8, top: plusMenuPos?.top ?? 44 }}
           >
             <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
-              快速终端
-            </div>
-            <button
-              type="button"
-              role="menuitem"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
-              onClick={() => runMenuAction(() => void openQuickLocalShell("powershell"))}
-            >
-              <span aria-hidden="true">⚡</span>
-              <span>快速打开本地终端 (PowerShell)</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
-              onClick={() => runMenuAction(() => void openQuickLocalShell("cmd"))}
-            >
-              <span aria-hidden="true">💻</span>
-              <span>快速打开本地终端 (CMD)</span>
-            </button>
-
-            <div className="my-1 border-t border-line/10" />
-            <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
-              新建连接
+              主流连接
             </div>
             {(
               [
-                ["🖥️", "新建 SSH 主机连接...", "ssh"],
-                ["🪟", "新建 Windows 远程桌面 (RDP)...", "rdp"],
-                ["🌐", "新建 Telnet 连接...", "telnet"],
-                ["🔌", "新建串口 (Serial) 连接...", "serial"],
+                ["🖥️", "SSH 主机连接", "ssh"],
+                ["🪟", "Windows 远程桌面 (RDP)", "rdp"],
+                ["🔌", "串口 (Serial) 通信", "serial"],
+              ] as Array<[string, string, Protocol]>
+            ).map(([icon, label, protocol]) => (
+              <button
+                key={protocol}
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-line/5"
+                onClick={() =>
+                  runMenuAction(() =>
+                    onNewSessionWithProtocol
+                      ? onNewSessionWithProtocol(protocol)
+                      : onNewTabClick?.()
+                  )
+                }
+              >
+                <span aria-hidden="true">{icon}</span>
+                <span>{label}</span>
+              </button>
+            ))}
+
+            <div className="my-1 border-t border-line/10" />
+            <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
+              其他连接
+            </div>
+            {(
+              [
+                ["🌐", "Telnet 连接", "telnet"],
+                ["💻", "本地终端 (Local Shell)", "local_shell"],
               ] as Array<[string, string, Protocol]>
             ).map(([icon, label, protocol]) => (
               <button

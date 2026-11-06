@@ -8,6 +8,7 @@ interface ContainerWorkspaceProps {
   connId: string;
   /** 从侧栏点进来时聚焦的那个容器 */
   initialContainerId?: string;
+  showList: boolean;
   /** 关闭容器视图，回到终端命令行 */
   onClose: () => void;
 }
@@ -39,6 +40,7 @@ const STATE_TEXT: Record<DockerContainerInfo["state"], string> = {
 export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
   connId,
   initialContainerId,
+  showList,
   onClose,
 }) => {
   const containers = useContainerStore((s) => s.containers);
@@ -60,6 +62,10 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [revealEnv, setRevealEnv] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (initialContainerId) setSelectedId(initialContainerId);
+  }, [initialContainerId]);
 
   // 首次进入（或连接切换）时探测一次
   useEffect(() => {
@@ -141,7 +147,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
     if (!selected) return;
     setActionLoading(true);
     setActionMsg(null);
-    const msg = await runAction(selected.id, act);
+    const msg = await runAction(connId, selected.id, act);
     setActionMsg(msg);
     setActionLoading(false);
     if (selected) loadInspect(selected);
@@ -160,7 +166,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
   const mounts: any[] = Array.isArray(inspectData?.Mounts) ? inspectData.Mounts : [];
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-surface animate-in fade-in duration-150">
+    <div className="absolute inset-0 z-40 flex min-w-0 flex-col overflow-hidden bg-surface animate-in fade-in duration-150">
       {/* 顶部：返回终端 + 当前容器操作 */}
       <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line/15 bg-surface-muted/80 px-3">
         <button
@@ -247,12 +253,12 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
 
       <div className="flex min-h-0 flex-1">
         {/* 左侧：所有容器（路由入口） */}
-        <aside className="flex w-60 shrink-0 flex-col border-r border-line/15 bg-surface-muted">
+        {showList && <aside className="flex w-60 max-w-[45%] shrink-0 flex-col border-r border-line/15 bg-surface-muted">
           <div className="shrink-0 border-b border-line/15 p-2">
             <input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索容器名称 / 镜像"
+              aria-label="搜索容器"
               className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink placeholder-ink-secondary outline-none focus:border-accent"
             />
             <div className="mt-1.5 flex items-center justify-between px-0.5 text-[10px] text-ink-secondary">
@@ -301,7 +307,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
               );
             })}
           </div>
-        </aside>
+        </aside>}
 
         {/* 右侧：选中容器的详情 */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">

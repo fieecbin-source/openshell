@@ -202,7 +202,7 @@ export const useAiSettingsStore = create<AiSettingsState>((set, get) => ({
           ? {
               ...current,
               profiles: current.profiles.map((p) =>
-                p.id === profileId && result.ok
+                p.id === profileId && result && result.ok
                   ? { ...p, verified_at: Date.now() }
                   : p
               ),
@@ -210,9 +210,28 @@ export const useAiSettingsStore = create<AiSettingsState>((set, get) => ({
           : current,
       });
       return result;
-    } catch (err) {
-      set({ testingProfileId: null, error: toUserMessage(err, "测试连接") });
-      return null;
+    } catch (err: any) {
+      const current = get().config;
+      const targetProfile = current?.profiles.find((p) => p.id === profileId);
+      const friendly = formatFriendlyError(err);
+      const failedResult: ProviderTestResult = {
+        ok: false,
+        latency_ms: 0,
+        model: targetProfile?.model_id ?? "",
+        code:
+          err?.code === "TIMEOUT" || err?.code === "AI_TIMEOUT"
+            ? "AI_TIMEOUT"
+            : typeof err?.code === "string"
+              ? err.code
+              : null,
+        message: friendly || "连接测试失败，请检查网络或端点配置",
+      };
+      set({
+        testingProfileId: null,
+        lastTest: failedResult,
+        error: toUserMessage(err, "测试连接"),
+      });
+      return failedResult;
     }
   },
 

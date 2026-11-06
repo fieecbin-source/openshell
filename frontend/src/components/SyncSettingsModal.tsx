@@ -7,7 +7,7 @@ import { Field, Input } from "./ui/Field";
 import { Segmented, Switch } from "./ui/Controls";
 import { Modal } from "./ui/Overlay";
 import { InlineNotice } from "./ui/Notice";
-import { CloudIcon, DownloadIcon, RefreshIcon, ShieldIcon } from "./ui/icons";
+import { CloudIcon, DownloadIcon, RefreshIcon } from "./ui/icons";
 
 type AuthMode = "login" | "register";
 
@@ -30,11 +30,15 @@ const normalizeServerUrl = (raw: string): string => {
 export const SyncSettingsModal: React.FC = () => {
   const {
     config,
+    conflicts,
+    resolvingConflictId,
     syncing,
     modalOpen,
     error,
     setModalOpen,
     loadConfig,
+    loadConflicts,
+    resolveConflict,
     saveConfig,
     register,
     login,
@@ -54,13 +58,14 @@ export const SyncSettingsModal: React.FC = () => {
 
   useEffect(() => {
     if (modalOpen) {
-      loadConfig();
+      void loadConfig();
+      void loadConflicts();
     } else {
       setPassword("");
       setEmail("");
       setInviteCode("");
     }
-  }, [modalOpen, loadConfig]);
+  }, [modalOpen, loadConfig, loadConflicts]);
 
   useEffect(() => {
     if (config) {
@@ -132,21 +137,10 @@ export const SyncSettingsModal: React.FC = () => {
       open
       onClose={() => setModalOpen(false)}
       title="自建服务端与加密同步"
-      description="填写自己的域名、账号和密码，登录后自动同步"
       widthClassName="w-full max-w-[520px]"
     >
       <div className="space-y-3.5">
-        <InlineNotice
-          tone="accent"
-          title={
-            <span className="flex items-center gap-1.5">
-              <ShieldIcon className="h-3.5 w-3.5" />
-              客户端加密同步
-            </span>
-          }
-        >
-          数据在客户端加密后上传。同步密码同时用于解锁同步保险库，请妥善保管服务器上的账号配置。
-        </InlineNotice>
+
 
         {error && (
           <InlineNotice tone="danger">
@@ -187,24 +181,84 @@ export const SyncSettingsModal: React.FC = () => {
                 <span className="text-ink-tertiary">冲突副本状态</span>
                 <span
                   className={
-                    config.conflict_count > 0
+                    config.conflict_count > 0 || conflicts.length > 0
                       ? "font-medium text-state-warning"
                       : "text-ink-tertiary"
                   }
                 >
-                  {config.conflict_count > 0
-                    ? `${config.conflict_count} 个冲突副本（已保留）`
+                  {config.conflict_count > 0 || conflicts.length > 0
+                    ? `${conflicts.length || config.conflict_count} 个冲突副本（待处理）`
                     : "正常（无冲突）"}
                 </span>
               </div>
             </Panel>
+
+            {conflicts.length > 0 && (
+              <Panel className="space-y-2 border-state-warning/30 bg-state-warning/5">
+                <div className="flex items-center justify-between">
+                  <span className="text-os-xs font-medium text-state-warning">
+                    待解决版本冲突 ({conflicts.length})
+                  </span>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {conflicts.map((c) => (
+                    <div
+                      key={c.id}
+                      className="flex flex-col gap-1.5 rounded-os-md border border-line/10 bg-surface p-2.5 text-os-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-ink font-medium truncate">
+                          {c.record_type} : {c.record_id}
+                        </span>
+                        <span className="text-os-2xs text-ink-tertiary">
+                          {c.created_at ? new Date(c.created_at).toLocaleTimeString() : ""}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={resolvingConflictId !== null}
+                          loading={resolvingConflictId === c.id}
+                          onClick={async () => {
+                            try {
+                              await resolveConflict(c.id, "local");
+                              setSyncFeedback("已选择保留本地副本");
+                            } catch (e: any) {
+                              setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
+                            }
+                          }}
+                        >
+                          保留本地副本
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={resolvingConflictId !== null}
+                          loading={resolvingConflictId === c.id}
+                          onClick={async () => {
+                            try {
+                              await resolveConflict(c.id, "remote");
+                              setSyncFeedback("已选择使用远端数据");
+                            } catch (e: any) {
+                              setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
+                            }
+                          }}
+                        >
+                          使用远端数据
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            )}
 
             <Panel>
               <Switch
                 checked={autoSync}
                 onChange={handleAutoSyncToggle}
                 label="自动增量同步"
-                hint="数据变动时及周期自动推送与合并"
               />
             </Panel>
 
@@ -264,7 +318,7 @@ export const SyncSettingsModal: React.FC = () => {
               ]}
             />
 
-            <Field label="服务端地址 (HTTPS/HTTP)" required>
+            <Field label="服务端地址 (HTTPS/HTTP)" required value={serverUrl}>
               <Input
                 type="text"
                 autoComplete="off"
@@ -272,40 +326,40 @@ export const SyncSettingsModal: React.FC = () => {
                 mono
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="http://1.2.3.4:8085 或 https://sync.example.com"
+                aria-label="服务端地址"
               />
             </Field>
 
-            <Field label="账号 / 用户名" required hint="支持单用户自用模式下配置的用户名或邮箱">
+            <Field label="账号 / 用户名" required value={email}>
               <Input
                 type="text"
                 autoComplete="off"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin 或自定义账号名"
+                aria-label="同步账号"
               />
             </Field>
 
-            <Field label="密码" required hint="非空，最多 128 位">
+            <Field label="密码" required value={password}>
               <Input
                 type="password"
                 autoComplete="new-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="请输入同步密码"
+                aria-label="同步密码"
               />
             </Field>
 
             {mode === "register" && (
-              <Field label="邀请码 / 引导令牌" hint="单用户首次注册或受邀注册时填写，选填">
+              <Field label="邀请码 / 引导令牌">
                 <Input
                   type="text"
                   mono
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="选填"
+                  aria-label="邀请码"
                 />
               </Field>
             )}

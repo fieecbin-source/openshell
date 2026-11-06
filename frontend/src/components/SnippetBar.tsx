@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import { useSnippetStore } from "../stores/snippetStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import type { SendMode, Snippet } from "../types/ipc";
-import { writeTerminal } from "../lib/ipc";
 import { SAVE_SNIPPET_EVENT } from "../lib/terminal-actions";
 import { toast } from "../stores/toastStore";
 import { Button, IconButton } from "./ui/Button";
@@ -71,26 +70,28 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
   const handleSnippetClick = (snippet: Snippet) => {
     if (!activeTabId) return;
 
-    const placeholders = parsePlaceholders(snippet.command_template);
+    const commandText = snippet.body ?? "";
+    const placeholders = parsePlaceholders(commandText);
     if (placeholders.length > 0) {
       setParamModal({ snippet, params: placeholders });
     } else {
-      executeCommand(snippet.command_template, snippet.send_mode);
+      executeCommand(commandText, snippet.send_mode);
     }
   };
 
   const executeCommand = (cmd: string, mode: SendMode) => {
     if (!activeTabId) return;
     const finalCmd = mode === "execute" ? `${cmd}\n` : cmd;
-    const bytes = new TextEncoder().encode(finalCmd);
-    writeTerminal(activeTabId, bytes)
+    useTerminalStore
+      .getState()
+      .sendTextToTab(activeTabId, finalCmd)
       .then(() => toast.success(mode === "execute" ? "命令已发送并执行" : "命令已插入，按回车执行"))
       .catch(() => toast.error("发送失败，请确认终端仍处于连接状态"));
   };
 
   const handleApplyParams = () => {
     if (!paramModal || !activeTabId) return;
-    let finalCmd = paramModal.snippet.command_template;
+    let finalCmd = paramModal.snippet.body ?? "";
     for (const p of paramModal.params) {
       const val = p.value || p.defaultValue || "";
       const regex = new RegExp(`\\$\\{${p.name}(?::-.*?)?\\}`, "g");
@@ -104,7 +105,8 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
     if (!newName.trim() || !newCmd.trim()) return;
     await createSnippet({
       name: newName.trim(),
-      command_template: newCmd.trim(),
+      kind: "snippet",
+      body: newCmd.trim(),
       send_mode: newSendMode,
     });
     setNewName("");
@@ -132,7 +134,7 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
                 type="button"
                 disabled={!connected}
                 onClick={() => handleSnippetClick(snip)}
-                title={`${snip.name}\n${snip.command_template}`}
+                title={`${snip.name}\n${snip.body ?? ""}`}
                 aria-label={snip.name}
                 className="min-w-0 max-w-[160px] truncate rounded-full px-1 text-left text-os-2xs font-medium leading-5 text-ink-secondary transition-colors duration-os hover:text-accent disabled:opacity-40"
               >
@@ -184,7 +186,7 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
         {paramModal && (
           <div className="space-y-3">
             <pre className="truncate rounded-os-sm border border-line/10 bg-surface-muted p-2 font-mono text-os-2xs text-ink-secondary">
-              {paramModal.snippet.command_template}
+              {paramModal.snippet.body ?? ""}
             </pre>
 
             <div className="space-y-3">
@@ -196,13 +198,12 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
                       参数 <span className="font-mono text-accent">{p.name}</span>
                     </span>
                   }
-                  hint={p.defaultValue ? `默认: ${p.defaultValue}` : undefined}
                 >
                   <Input
                     type="text"
                     mono
                     autoFocus={idx === 0}
-                    placeholder={p.defaultValue}
+                    aria-label="命令参数"
                     value={p.value}
                     onChange={(e) => {
                       const updated = [...paramModal.params];
@@ -238,10 +239,10 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
         }
       >
         <div className="space-y-3">
-          <Field label="命令名称" required>
+          <Field label="命令名称" required value={newName}>
             <Input
               type="text"
-              placeholder="例如: 查看日志"
+              aria-label="命令名称"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
             />
@@ -249,11 +250,10 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
 
           <Field
             label="命令模板"
-            required
-            hint={'支持 ${VAR:-DEFAULT} 占位符，执行前会提示填充'}
+            required value={newCmd}
           >
             <Textarea
-              placeholder={"例如: tail -f -n ${LINES:-100} ${FILE}"}
+              aria-label="命令模板"
               value={newCmd}
               onChange={(e) => setNewCmd(e.target.value)}
               rows={3}

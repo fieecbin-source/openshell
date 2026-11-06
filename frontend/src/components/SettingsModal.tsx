@@ -15,6 +15,7 @@ import { useDialogBehavior } from "../lib/useDialogBehavior";
 import { TerminalColorSettings } from "./settings/TerminalColorSettings";
 import { ImageIcon, MountainIcon, SettingsIcon, SlidersIcon } from "./ui/icons";
 import { useVaultStore } from "../stores/vaultStore";
+import { RequiredMark } from "./ui/Field";
 
 const MAX_BACKGROUND_BYTES = 10 * 1024 * 1024;
 
@@ -503,14 +504,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                     type="text"
                     value={customUrlInput}
                     onChange={(e) => setCustomUrlInput(e.target.value)}
-                    placeholder="输入网络壁纸图片链接 (https://...)"
+                    aria-label="壁纸地址"
                     className="flex-1 px-3 py-1.5 bg-surface/70  border border-line/10  rounded-xl text-xs text-ink  outline-none focus:border-accent"
                   />
                   <input
                     type="text"
                     value={customNameInput}
                     onChange={(e) => setCustomNameInput(e.target.value)}
-                    placeholder="壁纸名称 (选填)"
+                    aria-label="壁纸名称"
                     className="w-32 px-3 py-1.5 bg-surface/70  border border-line/10  rounded-xl text-xs text-ink  outline-none focus:border-accent"
                   />
                   <button
@@ -759,37 +760,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ initialTab = "wall
                 <div className="font-bold text-sm text-ink ">修改主密码</div>
 
                 <div>
-                  <label className="block text-ink-secondary  mb-1">当前旧密码</label>
+                  <label className="block text-ink-secondary  mb-1">当前旧密码<RequiredMark value={oldPassword} /></label>
                   <input
                     type="password"
                     value={oldPassword}
                     onChange={(e) => setOldPassword(e.target.value)}
-                    placeholder="输入当前主密码"
+                    aria-label="当前主密码"
                     className="w-full px-3 py-2 bg-surface/70  border border-line/10  rounded-xl text-xs text-ink  outline-none focus:border-accent"
+                    aria-required="true"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-ink-secondary  mb-1">
-                      新主密码 (至少 8 位)
+                      新主密码<RequiredMark value={newPassword} />
                     </label>
                     <input
                       type="password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="设置新主密码"
+                      aria-label="新主密码"
                       className="w-full px-3 py-2 bg-surface/70  border border-line/10  rounded-xl text-xs text-ink  outline-none focus:border-accent"
+                      aria-required="true"
                     />
                   </div>
                   <div>
-                    <label className="block text-ink-secondary  mb-1">确认新主密码</label>
+                    <label className="block text-ink-secondary  mb-1">确认新主密码<RequiredMark value={confirmPassword} /></label>
                     <input
                       type="password"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="再次确认新主密码"
+                      aria-label="确认新主密码"
                       className="w-full px-3 py-2 bg-surface/70  border border-line/10  rounded-xl text-xs text-ink  outline-none focus:border-accent"
+                      aria-required="true"
                     />
                   </div>
                 </div>

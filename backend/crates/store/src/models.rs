@@ -411,7 +411,7 @@ pub(crate) fn json_value_type(v: &Value) -> &'static str {
 /// 在事务内递增 `sync_record.local_rev` 并标记为 dirty。
 ///
 /// `expected` 为 `Some` 时使用条件更新；受影响行数为 0 表示版本冲突。
-pub(crate) fn bump_sync(
+pub fn bump_sync(
     tx: &Transaction<'_>,
     record_id: &str,
     record_type: &str,
@@ -547,6 +547,7 @@ pub(crate) fn port_forward_from_row(row: &Row<'_>) -> rusqlite::Result<PortForwa
         socks_auth,
         socks_username: row.get(12)?,
         socks_password_ref: row.get(13)?,
+        has_socks_password: row.get::<_, Option<String>>(13)?.is_some(),
         expose_warning_ack: row.get::<_, i64>(14)? != 0,
         sort_order: row.get(15)?,
         created_at: row.get(16)?,

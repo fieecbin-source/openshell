@@ -35,12 +35,68 @@ use openshell_serial::SerialService;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 设置表中「自动备份保留份数」的键（scope = `user`）。
-pub const SETTING_BACKUP_KEEP: &str = "update.backupKeep";
+pub const SETTING_BACKUP_KEEP: &str = "update.backup_keep";
+
+#[cfg(test)]
+mod backup_retention_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_backup_retention_takes_precedence() {
+        let app = AppServices::new_in_memory().unwrap();
+        app.settings_repo
+            .set(
+                "user",
+                None,
+                "update.backupKeep",
+                serde_json::json!(7),
+                false,
+            )
+            .unwrap();
+        assert_eq!(app.backup_keep(), 7);
+        app.settings_repo
+            .set(
+                "user",
+                None,
+                "update.backup_keep",
+                serde_json::json!(20),
+                false,
+            )
+            .unwrap();
+        assert_eq!(app.backup_keep(), 20);
+    }
+
+    #[test]
+    fn twenty_backups_survive_creation_and_upgrade() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = AppServices::new(directory.path().to_path_buf()).unwrap();
+        app.settings_repo
+            .set(
+                "user",
+                None,
+                "update.backup_keep",
+                serde_json::json!(20),
+                false,
+            )
+            .unwrap();
+        for _ in 0..22 {
+            app.backup_now(BackupReason::PreInstall).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(app.list_backups().unwrap().len(), 20);
+        meta::set(&app.store, meta::KEY_LAST_APP_VERSION, "old-version").unwrap();
+        drop(app);
+        let reopened = AppServices::new(directory.path().to_path_buf()).unwrap();
+        assert_eq!(reopened.list_backups().unwrap().len(), 20);
+    }
+}
 
 pub struct AppServices {
     pub paths: AppPaths,
     pub store: Store,
     pub vault: Arc<VaultService>,
+    pub archive: Arc<crate::archive_service::ArchiveService>,
+    pub network_secrets: Arc<crate::network_secrets::NetworkSecrets>,
     pub session: Arc<SessionService>,
     pub connection: Arc<ConnectionService>,
     pub terminal: Arc<TerminalRouter>,
@@ -73,7 +129,7 @@ impl AppServices {
     pub fn new(data_dir: PathBuf) -> DomainResult<Self> {
         let paths = AppPaths::new(data_dir);
         std::fs::create_dir_all(&paths.backups_dir)?;
-        // 迁移阶段还没法读设置（库未打开），先用默认保留份数；用户自定义值在启动后裁剪时生效。
+        // 迁移成功后读取规范键及旧键，读取失败时保留全部快照。
         let opts = MigrationOptions {
             app_version: APP_VERSION.to_string(),
             backups_dir: paths.backups_dir.clone(),
@@ -91,6 +147,42 @@ impl AppServices {
         store.migrate()?;
 
         Self::init_with_store(paths, store, MigrationReport::default())
+    }
+
+    /// Unlock the old schema before any snapshot; credentials and references commit together.
+    pub fn recover_legacy_network_secrets(
+        data_dir: PathBuf,
+        master_password: &str,
+    ) -> DomainResult<Self> {
+        let paths = AppPaths::new(data_dir.clone());
+        if !paths.db_path.is_file() {
+            return Err(DomainError::not_found("旧数据库不存在"));
+        }
+        let store = Store::open(&paths.db_path)?;
+        let version = store.schema_version()?;
+        if version == 0 || version > SCHEMA_VERSION {
+            return Err(DomainError::validation("此数据库不能使用凭据恢复入口"));
+        }
+        let manager = Arc::new(VaultManager::new());
+        let vault = VaultService::new(
+            manager.clone(),
+            Arc::new(VaultRepo::new(store.clone())),
+            Arc::new(CredentialRepo::new(store.clone())),
+            Arc::new(SshKeyRepo::new(store.clone())),
+            Arc::new(SecretRepo::new(store.clone())),
+            Arc::new(EventBus::new(512)),
+        );
+        if vault.status()?.state == "uninitialized" {
+            vault.init(master_password, false, None)?;
+        } else {
+            vault.unlock(Some(master_password), false)?;
+        }
+        crate::network_secrets::NetworkSecrets::new(store.clone(), manager).migrate_legacy()?;
+        drop(vault);
+        drop(store);
+        let services = Self::new(data_dir)?;
+        services.vault.unlock(Some(master_password), false)?;
+        Ok(services)
     }
 
     /// 立即创建一份数据快照（安装更新前、用户手动备份时调用）。
@@ -114,13 +206,7 @@ impl AppServices {
 
     /// 自动快照保留份数，来自设置表，缺省 5，取值范围 1..=20。
     pub fn backup_keep(&self) -> usize {
-        self.settings_repo
-            .get("user", None, SETTING_BACKUP_KEEP)
-            .ok()
-            .flatten()
-            .and_then(|record| record.value_json.as_u64())
-            .map(|raw| (raw as usize).clamp(1, MAX_KEEP_BACKUPS))
-            .unwrap_or(DEFAULT_KEEP_BACKUPS)
+        backup::retention_count(&self.store, DEFAULT_KEEP_BACKUPS).unwrap_or(MAX_KEEP_BACKUPS)
     }
 
     fn init_with_store(
@@ -138,6 +224,20 @@ impl AppServices {
         let secret_repo = Arc::new(SecretRepo::new(store.clone()));
 
         let vault_manager = Arc::new(VaultManager::new());
+        let network_secrets = Arc::new(crate::network_secrets::NetworkSecrets::new(
+            store.clone(),
+            vault_manager.clone(),
+        ));
+        // 记录凭据存储来源：只有库内已无旧明文（明文代理口令 / 缺 secret 行的 SOCKS 引用）
+        // 才写入标记。旧库因此不会被误标成「引用式存储」，缺失引用仍按旧口令迁移。
+        // 该检查只读 SQLite、不需要保险库解锁；失败只影响判定精度，不阻断启动。
+        if let Err(error) = network_secrets.record_reference_store_if_clean() {
+            tracing::warn!(%error, "failed to probe credential store provenance");
+        }
+        let archive = Arc::new(crate::archive_service::ArchiveService::new(
+            store.clone(),
+            vault_manager.clone(),
+        ));
         let event_bus = Arc::new(EventBus::new(512));
         let op_registry = Arc::new(OpRegistry::new());
         let ssh_manager = Arc::new(SshConnectionManager::new());
@@ -166,18 +266,20 @@ impl AppServices {
         let connection_service = Arc::new(ConnectionService::new(
             session_repo.clone(),
             known_host_repo.clone(),
-            settings_repo.clone(),
             vault_service.clone(), // implements SecretResolver
             ssh_manager.clone(),
             op_registry.clone(),
             event_bus.clone(),
+            network_secrets.clone(),
         ));
 
         let terminal_router = Arc::new(TerminalRouter::new(event_bus.clone()));
 
         let snippet_repo = Arc::new(SnippetRepo::new(store.clone()));
         let port_forward_repo = Arc::new(PortForwardRepo::new(store.clone()));
-        let sftp_transfers = Arc::new(TransferManager::new(2));
+        // 4 路并发（上限 8）：配合 512 KiB 分块与 1 MiB 缓冲，把单条 SFTP 通道的
+        // 串行往返等待摊到多条子通道上，彻底消除「伪限速」。
+        let sftp_transfers = Arc::new(TransferManager::new(4));
         let cwd_tracker = Arc::new(CwdTracker::new());
         let monitor = Arc::new(MonitorEngine::new());
         let forward = Arc::new(ForwardManager::new());
@@ -219,8 +321,8 @@ impl AppServices {
                                 file = %info.file_name,
                                 "app upgraded, post-upgrade snapshot created"
                             );
-                            if let Err(err) =
-                                backup::prune(&paths.backups_dir, DEFAULT_KEEP_BACKUPS)
+                            if let Err(err) = backup::retention_count(&store, DEFAULT_KEEP_BACKUPS)
+                                .and_then(|keep| backup::prune(&paths.backups_dir, keep))
                             {
                                 tracing::warn!(error = %err, "failed to prune backups after upgrade");
                             }
@@ -240,6 +342,8 @@ impl AppServices {
             store,
             migration,
             vault: vault_service,
+            network_secrets,
+            archive,
             session: session_service,
             connection: connection_service,
             terminal: terminal_router,
@@ -263,15 +367,26 @@ impl AppServices {
     }
 
     /// 获取或懒加载指定连接的 SFTP 客户端。
+    ///
+    /// 复刻 FinalShell `zD.I()` 的前置判定：只有在底层 SSH 会话仍存活时才复用/新建
+    /// SFTP 子通道；会话已关闭时先清掉失效缓存并直接报错，避免把「已死的通道」
+    /// 反复交给上层。
     pub async fn get_or_create_sftp(
         &self,
         conn_id: &ConnectionId,
     ) -> DomainResult<Arc<SftpClient>> {
         let mut lock = self.sftp_clients.lock().await;
+        let conn = self.ssh_manager.get(conn_id).await?;
+        if *conn.closed_channel().borrow() {
+            lock.remove(conn_id);
+            return Err(DomainError::new(
+                ErrorCode::Io,
+                format!("connection {conn_id} is closed, cannot open sftp channel"),
+            ));
+        }
         if let Some(client) = lock.get(conn_id) {
             return Ok(Arc::clone(client));
         }
-        let conn = self.ssh_manager.get(conn_id).await?;
         let stream = conn.open_sftp().await?;
         let session = SftpSession::new(stream)
             .await
@@ -279,6 +394,16 @@ impl AppServices {
         let client = Arc::new(SftpClient::new(session));
         lock.insert(conn_id.clone(), Arc::clone(&client));
         Ok(client)
+    }
+
+    /// 清理旧缓存并重开一条全新的 SFTP 子系统通道（Auto-Heal）。
+    ///
+    /// 触发场景：SFTP 子通道因空闲超时 / 服务端 `MaxSessions` 回收 / 通道异常而失效，
+    /// 但 SSH 主会话仍然存活。此时丢弃旧 `SftpClient` 并透明地重开一次，
+    /// 上层无需感知即可继续操作。
+    pub async fn reconnect_sftp(&self, conn_id: &ConnectionId) -> DomainResult<Arc<SftpClient>> {
+        self.remove_sftp_client(conn_id).await;
+        self.get_or_create_sftp(conn_id).await
     }
 
     /// 移除失效连接的 SFTP 客户端缓存。

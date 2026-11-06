@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AI_WIRE_LABELS, type AiProviderPreset } from "../../../types/ai";
 import { Segmented } from "../../ui/Controls";
-import { Input } from "../../ui/Field";
+import { Input, RequiredMark } from "../../ui/Field";
 import { Badge, Card, EmptyState, SectionHeader } from "../../ui/Surface";
 import { CheckIcon, ExternalLinkIcon, SearchIcon } from "../../ui/icons";
 import { cn } from "../../ui/cn";
@@ -15,7 +15,6 @@ export interface ProviderPickerProps {
   providers: AiProviderPreset[];
   selectedKey: string;
   onSelect: (provider: AiProviderPreset) => void;
-  catalogMeta?: { source: string; version: string; fetched_at: string } | null;
   /** 目录不可用时，允许手动填写厂商标识。 */
   manualProvider: string;
   onManualProviderChange: (value: string) => void;
@@ -36,7 +35,6 @@ export function ProviderPicker({
   providers,
   selectedKey,
   onSelect,
-  catalogMeta,
   manualProvider,
   onManualProviderChange,
 }: ProviderPickerProps) {
@@ -75,13 +73,13 @@ export function ProviderPicker({
     return (
       <div className="space-y-2">
         <SectionHeader
-          title="厂商"
-          description="厂商目录暂不可用，可手动填写厂商标识与端点"
+          title={<span>厂商<RequiredMark value={manualProvider} /></span>}
         />
         <Input
           value={manualProvider}
+          aria-required="true"
           onChange={(event) => onManualProviderChange(event.target.value)}
-          placeholder="厂商标识，例如 openai / anthropic / ollama"
+          aria-label="厂商标识"
           mono
         />
       </div>
@@ -92,11 +90,6 @@ export function ProviderPicker({
     <div className="space-y-2.5">
       <SectionHeader
         title="厂商"
-        description={
-          catalogMeta
-            ? `推荐 ${recommended.length} 家 · 全部 ${providers.length} 家 · 目录 ${catalogMeta.version}`
-            : `推荐 ${recommended.length} 家 · 全部 ${providers.length} 家`
-        }
         actions={
           <Segmented<PickerMode>
             value={mode}
@@ -151,7 +144,6 @@ export function ProviderPicker({
               className="pl-8"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索厂商名称、标识或模型名"
               aria-label="搜索厂商"
             />
           </div>
@@ -160,7 +152,6 @@ export function ProviderPicker({
             <EmptyState
               icon={<SearchIcon className="h-6 w-6" />}
               title="没有匹配的厂商"
-              description="可尝试厂商名、标识或模型名，例如 openrouter、gpt-4o、ollama。"
             />
           ) : (
             <div

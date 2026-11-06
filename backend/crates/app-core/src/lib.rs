@@ -1,10 +1,12 @@
 pub mod ai_service;
 pub mod app_services;
+pub mod archive_service;
 pub mod card_service;
 pub mod connection_service;
 pub mod credit_tracker;
 pub mod event_bus;
 pub mod extension_registry;
+pub mod network_secrets;
 pub mod op_registry;
 pub mod session_service;
 pub mod sync_codec;

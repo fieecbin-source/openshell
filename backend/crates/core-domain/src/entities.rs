@@ -329,6 +329,8 @@ pub struct PortForwardRule {
     pub socks_auth: SocksAuth,
     pub socks_username: Option<String>,
     pub socks_password_ref: Option<String>,
+    #[serde(default)]
+    pub has_socks_password: bool,
     pub expose_warning_ack: bool,
     pub sort_order: i64,
     pub created_at: i64,
@@ -354,6 +356,9 @@ pub struct PortForwardRuleInput {
     pub socks_auth: Option<SocksAuth>,
     pub socks_username: Option<String>,
     pub socks_password_ref: Option<String>,
+    #[serde(skip_serializing)]
+    pub socks_password: Option<String>,
+    pub socks_clear_password: Option<bool>,
     pub expose_warning_ack: Option<bool>,
     pub sort_order: Option<i64>,
 }
@@ -409,6 +414,8 @@ pub struct HostMetrics {
     pub disk_mounts: Vec<DiskMountMetrics>,
     pub top_processes: Vec<ProcessMetrics>,
     pub uptime_seconds: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

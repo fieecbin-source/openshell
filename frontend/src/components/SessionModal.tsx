@@ -34,7 +34,7 @@ import { formatFriendlyError, parseIpcError } from "../lib/errors";
 import { SshKeyImportModal } from "./SshKeyImportModal";
 import { ProxyManagerModal } from "./ProxyManagerModal";
 import { Button, IconButton } from "./ui/Button";
-import { Select } from "./ui/Field";
+import { RequiredMark, Select } from "./ui/Field";
 import { KeyRound, Trash2 } from "lucide-react";
 import { HostIcon } from "./ui/HostIcon";
 import { HostIconPicker } from "./ui/HostIconPicker";
@@ -52,7 +52,6 @@ import {
   MonitorIcon,
   TerminalIcon,
   GlobeIcon,
-  ServerIcon,
   PlusIcon,
   PencilIcon,
   TrashIcon,
@@ -78,6 +77,39 @@ interface SessionModalProps {
 }
 
 const COMMON_BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+
+const PROTOCOL_TITLES: Record<Protocol, { name: string; create: string; edit: string }> = {
+  ssh: {
+    name: "SSH",
+    create: "新建 SSH 连接",
+    edit: "编辑 SSH 连接",
+  },
+  rdp: {
+    name: "Windows 远程桌面 (RDP)",
+    create: "新建 Windows 远程桌面 (RDP)",
+    edit: "编辑 Windows 远程桌面 (RDP)",
+  },
+  serial: {
+    name: "串口连接 (Serial)",
+    create: "新建串口连接 (Serial)",
+    edit: "编辑串口连接 (Serial)",
+  },
+  telnet: {
+    name: "Telnet",
+    create: "新建 Telnet 连接",
+    edit: "编辑 Telnet 连接",
+  },
+  local_shell: {
+    name: "本地终端",
+    create: "新建本地终端",
+    edit: "编辑本地终端",
+  },
+  sftp: {
+    name: "SFTP",
+    create: "新建 SFTP 连接",
+    edit: "编辑 SFTP 连接",
+  },
+};
 
 const RDP_RESOLUTION_PRESETS: Array<{ label: string; width: number; height: number }> = [
   { label: "1920 × 1080 (FHD)", width: 1920, height: 1080 },
@@ -141,6 +173,7 @@ const VaultInlineUnlock: React.FC<VaultInlineUnlockProps> = ({
       <input
         type="password"
         aria-label="保险库主密码"
+        aria-required="true"
         value={password}
         onChange={(e) => onPasswordChange(e.target.value)}
         className="flex-1 rounded-lg border border-state-warning/30 bg-surface px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:border-state-warning/30"
@@ -200,7 +233,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [encoding, setEncoding] = useState<string>("utf-8");
   const [startupCommand, setStartupCommand] = useState<string>("");
   const [workingDir, setWorkingDir] = useState<string>("");
-  const [autoReconnect, setAutoReconnect] = useState(false);
+  const [autoReconnect, setAutoReconnect] = useState(true);
+  const [reconnectMax, setReconnectMax] = useState<number>(5);
   const [compression, setCompression] = useState(false);
   const [agentForwarding, setAgentForwarding] = useState(false);
   const [x11Forwarding, setX11Forwarding] = useState(false);
@@ -261,6 +295,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [tunnelDestPort, setTunnelDestPort] = useState<number>(80);
   const [tunnelAutoStart, setTunnelAutoStart] = useState(true);
   const [tunnelSocksAuth, setTunnelSocksAuth] = useState<SocksAuth>("none");
+  const [tunnelSocksUsername, setTunnelSocksUsername] = useState("");
+  // 仅作为本次表单的临时输入，不写入 localStorage / password_ref
+  const [tunnelSocksPassword, setTunnelSocksPassword] = useState("");
   const [tunnelMsg, setTunnelMsg] = useState<string | null>(null);
 
   // Vault Inline State
@@ -326,6 +363,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     setTunnelDestPort(80);
     setTunnelAutoStart(true);
     setTunnelSocksAuth("none");
+    setTunnelSocksUsername("");
+    setTunnelSocksPassword("");
     setTunnelMsg(null);
   };
 
@@ -395,6 +434,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setStartupCommand(editingSession.startup_command || "");
         setWorkingDir(editingSession.working_dir || "");
         setAutoReconnect(editingSession.auto_reconnect ?? false);
+        setReconnectMax(editingSession.reconnect_max ?? 5);
         setCompression(editingSession.compression ?? false);
         setAgentForwarding(editingSession.agent_forwarding ?? false);
         setX11Forwarding(editingSession.x11_forwarding ?? false);
@@ -502,7 +542,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         setEncoding(initialValues?.encoding || "utf-8");
         setStartupCommand(initialValues?.startup_command || "");
         setWorkingDir(initialValues?.working_dir || "");
-        setAutoReconnect(initialValues?.auto_reconnect ?? false);
+        setAutoReconnect(initialValues?.auto_reconnect ?? true);
+        setReconnectMax(initialValues?.reconnect_max ?? 5);
         setCompression(initialValues?.compression ?? false);
         setAgentForwarding(initialValues?.agent_forwarding ?? false);
         setX11Forwarding(initialValues?.x11_forwarding ?? false);
@@ -606,9 +647,17 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       dest_port: tunnelType === "dynamic" ? null : Number(tunnelDestPort) || 80,
       auto_start: tunnelAutoStart,
       auto_reconnect: true,
-      socks_auth: tunnelSocksAuth,
+      socks_auth: tunnelType === "dynamic" ? tunnelSocksAuth : "none",
+      socks_username:
+        tunnelType === "dynamic" && tunnelSocksAuth === "userpass"
+          ? tunnelSocksUsername.trim() || null
+          : null,
       expose_warning_ack: true,
     };
+    // 密码只随本次表单提交，不做本地持久化；留空表示沿用已有凭据
+    if (tunnelType === "dynamic" && tunnelSocksAuth === "userpass" && tunnelSocksPassword) {
+      input.socks_password = tunnelSocksPassword;
+    }
 
     try {
       if (editingSession) {
@@ -660,6 +709,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     setTunnelDestPort(rule.dest_port || 80);
     setTunnelAutoStart(rule.auto_start ?? true);
     setTunnelSocksAuth((rule.socks_auth as SocksAuth) || "none");
+    setTunnelSocksUsername(rule.socks_username || "");
+    // 不把已保存的密码回填到输入框
+    setTunnelSocksPassword("");
   };
 
   const handleDeleteEmbeddedTunnel = async (id: string, isExisting: boolean) => {
@@ -829,6 +881,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           working_dir: workingDir.trim() ? workingDir.trim() : null,
           keepalive_sec: keepaliveSec,
           auto_reconnect: autoReconnect,
+          reconnect_max: Math.max(1, Math.min(20, Number(reconnectMax) || 5)),
           compression,
           agent_forwarding: agentForwarding,
           x11_forwarding: x11Forwarding,
@@ -1020,7 +1073,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const renderProxySelectRow = () => (
     <div>
       <label className="block text-xs font-semibold text-ink-secondary mb-1">
-        代理服务器 (HTTP / SOCKS4 / SOCKS5)
+        代理服务器
       </label>
       <div className="flex items-center gap-2">
         <select
@@ -1050,91 +1103,42 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-2xl rounded-2xl border border-line/10 bg-surface p-6 shadow-2xl flex flex-col max-h-[92vh] text-ink transition-all">
-        {/* 顶部标题与 5 协议完整并列切换栏 */}
-        <div className="mb-4 flex flex-col gap-3 border-b border-line/15 pb-3.5 shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <HostIcon iconKey={iconKey} protocol={protocol} className="h-8 w-8" />
-              <h3 className="text-base font-semibold text-ink tracking-tight">
-                {editingSession ? "编辑会话配置" : "新建连接会话"}
-              </h3>
-            </div>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-ink-tertiary hover:text-ink-secondary p-1.5 rounded-full hover:bg-line/5 transition"
-              title="关闭"
-            >
-              <XIcon className="h-4 w-4" />
-            </button>
+        {/* 顶部标题与专属连接类型 */}
+        <div className="mb-4 flex items-center justify-between border-b border-line/15 pb-3.5 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <HostIcon iconKey={iconKey} protocol={protocol} className="h-7 w-7 shrink-0" />
+            <h3 className="text-base font-semibold text-ink tracking-tight">
+              {editingSession
+                ? PROTOCOL_TITLES[protocol].edit
+                : PROTOCOL_TITLES[protocol].create}
+            </h3>
+            {!editingSession && (
+              <select
+                aria-label="切换连接类型"
+                value={protocol}
+                onChange={(e) => handleProtocolSwitch(e.target.value as Protocol)}
+                className="ml-1.5 rounded-lg border border-line/15 bg-surface-muted/50 px-2.5 py-1 text-xs text-ink-secondary hover:text-ink focus:border-accent focus:outline-none transition"
+              >
+                <option value="ssh">SSH</option>
+                <option value="rdp">Windows 远程桌面 (RDP)</option>
+                <option value="serial">串口 (Serial)</option>
+                <option value="telnet">Telnet</option>
+                <option value="local_shell">本地终端</option>
+              </select>
+            )}
           </div>
 
-          {/* 5 种协议完整并列切换 (SSH / RDP / LocalShell / Telnet / Serial) */}
-          <div className="grid grid-cols-5 gap-1 bg-line/5 p-1 rounded-xl border border-line/15 text-xs">
-            <button
-              type="button"
-              onClick={() => handleProtocolSwitch("ssh")}
-              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "ssh"
-                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                  : "text-ink-secondary hover:text-ink"
-                }`}
-            >
-              <ServerIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">SSH 主机</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleProtocolSwitch("rdp")}
-              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "rdp"
-                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                  : "text-ink-secondary hover:text-ink"
-                }`}
-            >
-              <MonitorIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">远程桌面 (RDP)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleProtocolSwitch("local_shell")}
-              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "local_shell"
-                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                  : "text-ink-secondary hover:text-ink"
-                }`}
-            >
-              <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">本地终端</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleProtocolSwitch("telnet")}
-              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "telnet"
-                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                  : "text-ink-secondary hover:text-ink"
-                }`}
-            >
-              <GlobeIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">Telnet</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleProtocolSwitch("serial")}
-              className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg font-medium transition ${protocol === "serial"
-                  ? "bg-surface text-accent font-semibold shadow-apple-sm"
-                  : "text-ink-secondary hover:text-ink"
-                }`}
-            >
-              <PlugIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">串口 (Serial)</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-ink-tertiary hover:text-ink-secondary p-1.5 rounded-full hover:bg-line/5 transition"
+            title="关闭"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
         </div>
 
-        {/* SSH 模式下的内部子标签导航（常规 / 高级与跳板机 / 隧道 / 图标） */}
+        {/* SSH 模式下的内部子标签导航（常规与认证 / 高级与终端 / 隧道 / 图标） */}
         {protocol === "ssh" && (
           <div
             role="tablist"
@@ -1147,8 +1151,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               aria-selected={activeTab === "general"}
               onClick={() => setActiveTab("general")}
               className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "general"
-                  ? "border-accent text-accent font-bold"
-                  : "border-transparent text-ink-secondary hover:text-ink"
+                ? "border-accent text-accent font-bold"
+                : "border-transparent text-ink-secondary hover:text-ink"
                 }`}
             >
               常规与认证
@@ -1159,11 +1163,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               aria-selected={activeTab === "advanced"}
               onClick={() => setActiveTab("advanced")}
               className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "advanced"
-                  ? "border-accent text-accent font-bold"
-                  : "border-transparent text-ink-secondary hover:text-ink"
+                ? "border-accent text-accent font-bold"
+                : "border-transparent text-ink-secondary hover:text-ink"
                 }`}
             >
-              <span>高级与跳板机</span>
+              <span>高级与终端</span>
               {(jumpHostSessionId || proxyId) && (
                 <span className="h-1.5 w-1.5 rounded-full bg-state-warning" />
               )}
@@ -1174,8 +1178,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               aria-selected={activeTab === "tunnel"}
               onClick={() => setActiveTab("tunnel")}
               className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "tunnel"
-                  ? "border-accent text-accent font-bold"
-                  : "border-transparent text-ink-secondary hover:text-ink"
+                ? "border-accent text-accent font-bold"
+                : "border-transparent text-ink-secondary hover:text-ink"
                 }`}
             >
               <span>隧道 / 端口转发</span>
@@ -1191,11 +1195,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               aria-selected={activeTab === "icon"}
               onClick={() => setActiveTab("icon")}
               className={`shrink-0 whitespace-nowrap pb-2 px-3 border-b-2 font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 rounded-t-md ${activeTab === "icon"
-                  ? "border-accent text-accent font-bold"
-                  : "border-transparent text-ink-secondary hover:text-ink"
+                ? "border-accent text-accent font-bold"
+                : "border-transparent text-ink-secondary hover:text-ink"
                 }`}
             >
-              图标
+              主机图标
             </button>
           </div>
         )}
@@ -1218,14 +1222,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="留空自动按 user@host 生成"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    所属树状分组
+                    所属分组
                   </label>
                   <select
                     value={groupId}
@@ -1245,7 +1248,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label htmlFor="session-host" className="block text-xs font-semibold text-ink-secondary mb-1">
-                    主机地址 (IP / 域名) *
+                    主机地址<RequiredMark value={host} />
                   </label>
                   <input
                     id="session-host"
@@ -1253,20 +1256,20 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
                     autoFocus
-                    placeholder="例如 192.168.1.100"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
+                    aria-required="true"
+                    aria-label="主机地址"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    SSH 端口
+                    端口
                   </label>
                   <input
                     type="number"
                     value={port > 0 ? port : ""}
                     onChange={(e) => setPort(e.target.value === "" ? 0 : Number(e.target.value))}
-                    placeholder="22"
                     min={1}
                     max={65535}
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
@@ -1276,13 +1279,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  登录用户名
+                  用户名
                 </label>
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="默认 root"
                   className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink placeholder-ink-tertiary focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
                 />
               </div>
@@ -1290,7 +1292,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               {/* 核心认证区 */}
               <div className="pt-2 border-t border-line/15">
                 <label className="block text-xs font-semibold text-ink-secondary mb-2">
-                  认证方式与安全凭据
+                  认证方式
                 </label>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
@@ -1298,8 +1300,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="button"
                     onClick={() => setAuthMethod("password")}
                     className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${authMethod === "password"
-                        ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
-                        : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
+                      ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
+                      : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
                       }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
@@ -1316,8 +1318,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       }
                     }}
                     className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${isPublicKeyAuth(authMethod)
-                        ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
-                        : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
+                      ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
+                      : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
                       }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
@@ -1329,8 +1331,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="button"
                     onClick={() => setAuthMethod("keyboard_interactive")}
                     className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${authMethod === "keyboard_interactive"
-                        ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
-                        : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
+                      ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
+                      : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
                       }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
@@ -1342,8 +1344,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="button"
                     onClick={() => setAuthMethod("agent")}
                     className={`p-2.5 rounded-xl border text-xs font-medium text-left transition ${authMethod === "agent"
-                        ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
-                        : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
+                      ? "bg-action/5 border-accent text-accent ring-1 ring-accent/30 shadow-apple-sm"
+                      : "bg-surface-muted/60 border-line/15 text-ink-secondary hover:bg-line/5"
                       }`}
                   >
                     <div className="font-bold flex items-center gap-1.5">
@@ -1355,15 +1357,19 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                 {/* 密码输入区 */}
                 {authMethod === "password" && (
                   <div className="rounded-xl border border-line/15 bg-surface-muted/40 p-3 space-y-2">
-                    <label className="block text-xs font-medium text-ink-secondary">
-                      连接密码
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-medium text-ink-secondary">
+                        连接密码
+                      </label>
+                      {editingSession?.credential_id && !password && (
+                        <span className="text-[11px] text-accent font-medium">已保存密码</span>
+                      )}
+                    </div>
                     <div className="relative">
                       <input
                         type={showPassword ? "text" : "password"}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder={editingSession?.credential_id ? "已保存密码（留空保持不变）" : "输入连接密码"}
                         className="w-full rounded-lg border border-line/15 bg-surface px-3 py-2 pr-10 text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition font-mono"
                       />
                       <button
@@ -1547,26 +1553,24 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    默认工作目录 (Working Directory)
+                    默认工作目录
                   </label>
                   <input
                     type="text"
                     value={workingDir}
                     onChange={(e) => setWorkingDir(e.target.value)}
-                    placeholder="例如 /var/www 或 ~/project"
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs font-mono text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    登录后自动执行命令 (Startup Command)
+                    登录后自动执行命令
                   </label>
                   <input
                     type="text"
                     value={startupCommand}
                     onChange={(e) => setStartupCommand(e.target.value)}
-                    placeholder="例如 tmux attach || tmux new"
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs font-mono text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
                   />
                 </div>
@@ -1608,20 +1612,40 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                 </div>
               </div>
 
-              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3">
-                <div className="mb-2 text-xs font-semibold text-ink-secondary">
-                  SSH 高级通道与特性开关
+              <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3 space-y-2.5">
+                <div className="text-xs font-semibold text-ink-secondary">
+                  高级选项与特性开关
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs text-ink-secondary">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoReconnect}
-                      onChange={(e) => setAutoReconnect(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded border-line/25 text-accent"
-                    />
-                    <span>断线自动重连</span>
-                  </label>
+                  <div className="flex flex-wrap items-center gap-2 col-span-2 sm:col-span-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoReconnect}
+                        onChange={(e) => setAutoReconnect(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-line/25 text-accent"
+                      />
+                      <span>断线自动重连</span>
+                    </label>
+                    <div className="inline-flex items-center gap-1.5 text-[11px] text-ink-tertiary">
+                      <span>最大重试次数 (1 ~ 20):</span>
+                      <input
+                        type="number"
+                        aria-label="最大重试次数"
+                        min={1}
+                        max={20}
+                        disabled={!autoReconnect}
+                        value={reconnectMax}
+                        onChange={(e) =>
+                          setReconnectMax(
+                            Math.max(1, Math.min(20, Number(e.target.value) || 5))
+                          )
+                        }
+                        className="w-14 rounded-lg border border-line/20 bg-surface px-2 py-0.5 text-center font-mono text-xs text-ink focus:border-accent focus:outline-none disabled:opacity-50"
+                      />
+                      <span>次</span>
+                    </div>
+                  </div>
 
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -1673,6 +1697,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     <span>网络传输加速标记</span>
                   </label>
                 </div>
+
+                {/* 内置 SFTP 流水线与断线重连由底层网络通道保障 */}
               </div>
 
               <div>
@@ -1702,7 +1728,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="rounded-xl border border-line/15 bg-surface-muted/30 p-3.5 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-ink">
-                    {editingTunnelId ? "编辑隧道转发规则" : "添加隧道转发规则 (-L / -R / -D)"}
+                    {editingTunnelId ? "编辑隧道转发规则" : "添加隧道转发规则"}
                   </span>
                   {editingTunnelId && (
                     <button
@@ -1728,8 +1754,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       type="button"
                       onClick={() => setTunnelType(item.value)}
                       className={`rounded-lg border py-1.5 text-xs font-semibold transition ${tunnelType === item.value
-                          ? "border-accent bg-action/10 text-accent"
-                          : "border-line/15 bg-surface text-ink-secondary hover:text-ink"
+                        ? "border-accent bg-action/10 text-accent"
+                        : "border-line/15 bg-surface text-ink-secondary hover:text-ink"
                         }`}
                     >
                       {item.label}
@@ -1746,7 +1772,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       type="text"
                       value={tunnelName}
                       onChange={(e) => setTunnelName(e.target.value)}
-                      placeholder="如 MySQL 映射"
                       className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
                     />
                   </div>
@@ -1805,6 +1830,53 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   </div>
                 )}
 
+                {tunnelType === "dynamic" && (
+                  <div className="grid grid-cols-3 gap-2.5 rounded-xl border border-line/15 bg-surface-muted/40 p-2.5">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                        SOCKS5 认证
+                      </label>
+                      <select
+                        value={tunnelSocksAuth}
+                        onChange={(e) => setTunnelSocksAuth(e.target.value as SocksAuth)}
+                        className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
+                      >
+                        <option value="none">无需认证</option>
+                        <option value="userpass">用户名 / 密码</option>
+                      </select>
+                    </div>
+                    {tunnelSocksAuth === "userpass" && (
+                      <>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                            用户名
+                          </label>
+                          <input
+                            type="text"
+                            value={tunnelSocksUsername}
+                            onChange={(e) => setTunnelSocksUsername(e.target.value)}
+                            autoComplete="off"
+                            className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold text-ink-secondary">
+                            密码（仅本次输入，不保存到本地）
+                          </label>
+                          <input
+                            type="password"
+                            value={tunnelSocksPassword}
+                            onChange={(e) => setTunnelSocksPassword(e.target.value)}
+                            autoComplete="new-password"
+                            placeholder={editingTunnelId ? "留空沿用已保存凭据" : ""}
+                            className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between pt-1">
                   <label className="flex items-center gap-2 cursor-pointer text-xs text-ink-secondary">
                     <input
@@ -1835,7 +1907,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
                 {totalTunnelCount === 0 ? (
                   <div className="rounded-xl border border-dashed border-line/20 py-6 text-center text-xs text-ink-tertiary">
-                    尚未配置端口转发规则，可在上方添加本地 (-L)、远端 (-R) 或动态 (-D) 隧道
+                    暂无端口转发规则
                   </div>
                 ) : editingSession ? (
                   existingTunnels.map((rule) => (
@@ -1952,7 +2024,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="留空按 Administrator@host:3389 生成"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
@@ -1978,14 +2049,15 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    主机地址 (IP / 域名) *
+                    主机地址<RequiredMark value={host} />
                   </label>
                   <input
                     type="text"
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
-                    placeholder="例如 192.168.1.50"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                    aria-required="true"
+                    aria-label="主机地址"
                   />
                 </div>
                 <div>
@@ -2012,31 +2084,33 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Administrator"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    登录密码
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-ink-secondary">
+                      登录密码
+                    </label>
+                    {editingSession?.credential_id && !password && (
+                      <span className="text-[11px] text-accent font-medium">已保存</span>
+                    )}
+                  </div>
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder={editingSession?.credential_id ? "已保存密码（留空不变）" : "输入 Windows 密码"}
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    Windows 域 (Domain，可选)
+                    Windows 域
                   </label>
                   <input
                     type="text"
                     value={rdpDomain}
                     onChange={(e) => setRdpDomain(e.target.value)}
-                    placeholder="WORKGROUP / 留空"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
@@ -2064,21 +2138,21 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       type="button"
                       onClick={() => setRdpFullscreen(true)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${rdpFullscreen
-                          ? "bg-action text-white border-accent font-semibold"
-                          : "bg-surface text-ink-secondary border-line/15"
+                        ? "bg-action text-white border-accent font-semibold"
+                        : "bg-surface text-ink-secondary border-line/15"
                         }`}
                     >
-                      全屏模式 (Fullscreen)
+                      全屏模式
                     </button>
                     <button
                       type="button"
                       onClick={() => setRdpFullscreen(false)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${!rdpFullscreen
-                          ? "bg-action text-white border-accent font-semibold"
-                          : "bg-surface text-ink-secondary border-line/15"
+                        ? "bg-action text-white border-accent font-semibold"
+                        : "bg-surface text-ink-secondary border-line/15"
                         }`}
                     >
-                      窗口自定义尺寸
+                      自定义尺寸
                     </button>
                   </div>
                 </div>
@@ -2098,8 +2172,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                               setRdpHeight(preset.height);
                             }}
                             className={`px-2.5 py-1 rounded-lg text-xs font-mono border transition ${active
-                                ? "border-accent bg-action/10 text-accent font-bold"
-                                : "border-line/15 bg-surface text-ink-secondary hover:text-ink"
+                              ? "border-accent bg-action/10 text-accent font-bold"
+                              : "border-line/15 bg-surface text-ink-secondary hover:text-ink"
                               }`}
                           >
                             {preset.label}
@@ -2111,7 +2185,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
-                          窗口宽度 (Width px)
+                          宽度 (px)
                         </label>
                         <input
                           type="number"
@@ -2124,7 +2198,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       </div>
                       <div>
                         <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
-                          窗口高度 (Height px)
+                          高度 (px)
                         </label>
                         <input
                           type="number"
@@ -2153,7 +2227,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       onChange={(e) => setRdpDrivesRedirect(e.target.checked)}
                       className="w-3.5 h-3.5 rounded border-line/25 text-accent"
                     />
-                    <span>映射本地磁盘驱动器 (drivestoredirect)</span>
+                    <span>映射本地磁盘驱动器</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -2162,7 +2236,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       onChange={(e) => setRdpClipboard(e.target.checked)}
                       className="w-3.5 h-3.5 rounded border-line/25 text-accent"
                     />
-                    <span>共享剪贴板 (redirect_clipboard)</span>
+                    <span>共享剪贴板</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -2180,7 +2254,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       onChange={(e) => setRdpAdminSession(e.target.checked)}
                       className="w-3.5 h-3.5 rounded border-line/25 text-accent"
                     />
-                    <span>管理员控制台会话 (/admin)</span>
+                    <span>管理员控制台会话</span>
                   </label>
                 </div>
 
@@ -2195,9 +2269,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     }
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink"
                   >
-                    <option value="local">在本机播放声音 (Local)</option>
-                    <option value="remote">在远程电脑播放 (Remote)</option>
-                    <option value="none">不播放声音 / 静音 (None)</option>
+                    <option value="local">本机播放</option>
+                    <option value="remote">远程播放</option>
+                    <option value="none">静音</option>
                   </select>
                 </div>
               </div>
@@ -2238,7 +2312,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="例如：PowerShell 终端 / 本地开发环境"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
@@ -2263,7 +2336,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  Shell 类型 (Shell Kind)
+                  Shell 类型
                 </label>
                 <select
                   value={shellKind}
@@ -2281,14 +2354,15 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               {shellKind === "custom" && (
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    自定义可执行文件路径 (Shell Path) *
+                    程序路径<RequiredMark value={shellPath} />
                   </label>
                   <input
                     type="text"
                     value={shellPath}
                     onChange={(e) => setShellPath(e.target.value)}
-                    placeholder="例如 C:\Program Files\Git\bin\bash.exe 或 /usr/local/bin/fish"
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
+                    aria-required="true"
+                    aria-label="程序路径"
                   />
                 </div>
               )}
@@ -2296,19 +2370,18 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    初始工作目录 (Working Directory)
+                    工作目录
                   </label>
                   <input
                     type="text"
                     value={workingDir}
                     onChange={(e) => setWorkingDir(e.target.value)}
-                    placeholder="留空使用用户主目录"
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    字符编码 (Encoding)
+                    字符编码
                   </label>
                   <select
                     value={encoding}
@@ -2326,13 +2399,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                  启动后自动执行命令 (Startup Command)
+                  启动命令
                 </label>
                 <input
                   type="text"
                   value={startupCommand}
                   onChange={(e) => setStartupCommand(e.target.value)}
-                  placeholder="例如 conda activate dev"
                   className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:outline-none"
                 />
               </div>
@@ -2363,7 +2435,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="留空按 Telnet-host:23 生成"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
@@ -2389,14 +2460,15 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    主机地址 (IP / 域名) *
+                    主机地址<RequiredMark value={host} />
                   </label>
                   <input
                     type="text"
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
-                    placeholder="例如 192.168.1.1"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
+                    aria-required="true"
+                    aria-label="主机地址"
                   />
                 </div>
                 <div>
@@ -2417,25 +2489,28 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    登录用户名 (可选)
+                    登录用户名
                   </label>
                   <input
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="自动登录用户名"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-ink-secondary mb-1">
-                    登录密码 (可选)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-ink-secondary">
+                      登录密码
+                    </label>
+                    {editingSession?.credential_id && !password && (
+                      <span className="text-[11px] text-accent font-medium">已保存</span>
+                    )}
+                  </div>
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder={editingSession?.credential_id ? "已保存密码（留空不变）" : "自动登录密码"}
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none"
                   />
                 </div>
@@ -2484,7 +2559,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       type="text"
                       value={telnetLoginPrompt}
                       onChange={(e) => setTelnetLoginPrompt(e.target.value)}
-                      placeholder="login:"
                       className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
                     />
                   </div>
@@ -2496,7 +2570,6 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       type="text"
                       value={telnetPasswordPrompt}
                       onChange={(e) => setTelnetPasswordPrompt(e.target.value)}
-                      placeholder="Password:"
                       className="w-full rounded-lg border border-line/15 bg-surface px-2.5 py-1.5 font-mono text-xs text-ink"
                     />
                   </div>
@@ -2521,7 +2594,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-ink-secondary mb-1">
-                      字符编码 (Encoding)
+                      字符编码
                     </label>
                     <select
                       value={encoding}
@@ -2560,7 +2633,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-semibold text-ink-secondary">
-                    串口设备 (Port) *
+                    串口设备<RequiredMark value={serialPort} />
                   </label>
                   <button
                     type="button"
@@ -2575,6 +2648,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     value={serialPort}
                     onChange={(e) => setSerialPort(e.target.value)}
                     className="flex-1 rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs text-ink font-mono focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                    aria-required="true"
+                    aria-label="串口设备"
                   >
                     {ports.length === 0 ? (
                       <option value="COM1">COM1 (自动回环/模拟串口)</option>
@@ -2590,8 +2665,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="text"
                     value={serialPort}
                     onChange={(e) => setSerialPort(e.target.value)}
-                    placeholder="或手动输入"
                     className="w-32 rounded-xl border border-line/15 bg-surface px-2.5 py-2 text-xs font-mono text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                    aria-required="true"
+                    aria-label="串口设备"
                   />
                 </div>
               </div>
@@ -2599,7 +2675,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-semibold text-ink-secondary">
-                    波特率 (Baud Rate) *
+                    波特率<RequiredMark value={baudRate > 0 ? baudRate : ""} />
                   </label>
                   <button
                     type="button"
@@ -2614,8 +2690,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     type="number"
                     value={baudRate}
                     onChange={(e) => setBaudRate(Number(e.target.value))}
-                    placeholder="如 1500000"
                     className="w-full rounded-xl border border-line/15 bg-surface px-3 py-2 text-xs font-mono text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition"
+                    aria-required="true"
+                    aria-label="波特率"
                   />
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
@@ -2625,8 +2702,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         type="button"
                         onClick={() => setBaudRate(rate)}
                         className={`px-2.5 py-1 rounded-lg text-xs font-mono border transition ${baudRate === rate
-                            ? "bg-action text-white border-accent font-bold shadow-apple-sm"
-                            : "bg-surface-muted text-ink-secondary border-line/15 hover:border-line/25 hover:bg-line/5"
+                          ? "bg-action text-white border-accent font-bold shadow-apple-sm"
+                          : "bg-surface-muted text-ink-secondary border-line/15 hover:border-line/25 hover:bg-line/5"
                           }`}
                       >
                         {rate}

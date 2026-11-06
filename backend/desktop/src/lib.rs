@@ -4,8 +4,12 @@ mod commands;
 mod error;
 mod profile;
 mod protocol_runtime;
+mod rdp_host;
+mod rdp_process;
 mod ssh_keys;
+mod terminal_encoding;
 mod updater;
+mod vault_recovery;
 
 use commands::*;
 use openshell_app_core::AppServices;
@@ -88,8 +92,20 @@ pub fn run() {
             }
             tracing::info!(dir = %data_dir.display(), "using user data directory");
 
-            let services =
-                Arc::new(AppServices::new(data_dir.clone()).expect("failed to initialize AppServices"));
+            let services = (|| -> openshell_core_domain::DomainResult<AppServices> {
+                match AppServices::new(data_dir.clone()) {
+                    Ok(services) => Ok(services),
+                    Err(error) if error.details.as_ref().is_some_and(|details| details["requires_network_secret_migration"] == true) => {
+                        let password = vault_recovery::prompt()?;
+                        AppServices::recover_legacy_network_secrets(data_dir.clone(), &password)
+                    }
+                    Err(error) => Err(error),
+                }
+            })().map_err(|error| {
+                tauri_plugin_dialog::DialogExt::dialog(app.handle()).message(format!("无法升级本地数据：{}",error.message)).title("OpenShell 启动失败").kind(tauri_plugin_dialog::MessageDialogKind::Error).blocking_show();
+                Box::<dyn std::error::Error>::from(error)
+            })?;
+            let services = Arc::new(services);
 
             // 注册内置扩展示例模块（Architecture §21 / P1-M5-1）
             services
@@ -178,9 +194,12 @@ pub fn run() {
             proxy_list_save,
             proxy_test,
             rdp_launch,
+            rdp_get_status,
+            rdp_close,
             local_shell_open,
             telnet_open,
             terminal_write,
+            terminal_encode,
             terminal_resize,
             terminal_ack,
             terminal_close,
@@ -199,6 +218,7 @@ pub fn run() {
             sftp_start_transfer,
             sftp_list_transfers,
             sftp_pause_transfer,
+            sftp_resume_transfer,
             sftp_cancel_transfer,
             sftp_get_cwd,
             monitor_start,
@@ -221,6 +241,7 @@ pub fn run() {
             importer_preview_openssh,
             importer_preview_finalshell,
             importer_commit,
+            importer_discard_preview,
             importer_export_bundle_json,
             importer_export_bundle_encrypted,
             importer_preview_bundle_json,
@@ -242,6 +263,8 @@ pub fn run() {
             updater::updater_open_log_dir,
             updater::updater_open_backup_dir,
             updater::updater_open_download_dir,
+            sync_list_conflicts,
+            sync_resolve_conflict,
             sync_get_config,
             sync_save_config,
             sync_register,
@@ -281,8 +304,9 @@ pub fn run() {
             ai_history_list,
             ai_set_enabled,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run OpenShell");
+        .build(tauri::generate_context!())
+        .expect("failed to build OpenShell")
+        .run(|_,event| {if matches!(event,tauri::RunEvent::Exit) {commands::shutdown_rdp_launches();}});
 }
 
 /// 解析并校验用户数据目录（数据安全的第 0 道防线）。

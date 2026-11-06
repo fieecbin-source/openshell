@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { sshExec } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 
+let connectionGeneration = 0;
+
 export interface DockerContainerInfo {
   id: string;
   name: string;
@@ -25,8 +27,8 @@ interface ContainerState {
 
   probe: (connId: string) => Promise<void>;
   reload: () => Promise<void>;
-  /** 返回面向用户的提示文案 */
-  action: (id: string, act: "start" | "stop" | "restart") => Promise<string>;
+  /** 返回面向用户的提示文案；connId 为发起操作的工作区所属连接 */
+  action: (connId: string, id: string, act: "start" | "stop" | "restart") => Promise<string>;
   reset: () => void;
 }
 
@@ -52,7 +54,12 @@ export const useContainerStore = create<ContainerState>((set, get) => ({
    */
   probe: async (connId) => {
     if (!connId) return;
-    set({ loading: true, error: null, connId });
+    if (get().connId === connId && get().loading) return;
+    if (get().connId !== connId) connectionGeneration += 1;
+    const generation = connectionGeneration;
+    const isCurrent = () => get().connId === connId && connectionGeneration === generation;
+    set({ loading: true, error: null, connId, ...(get().connId !== connId
+      ? { runtime: "", containers: [], probed: false } : {}) });
     try {
       const res = await sshExec(
         connId,
@@ -60,6 +67,7 @@ export const useContainerStore = create<ContainerState>((set, get) => ({
           "ls -1 /usr/bin/docker /usr/local/bin/docker /snap/bin/docker /bin/docker " +
           "/usr/bin/podman /usr/local/bin/podman 2>/dev/null | head -n 1"
       );
+      if (!isCurrent()) return;
       const runtime = (res.stdout || "")
         .split("\n")
         .map((l) => l.trim())
@@ -72,8 +80,9 @@ export const useContainerStore = create<ContainerState>((set, get) => ({
       }
       set({ runtime });
       await get().reload();
-      set({ probed: true });
+      if (isCurrent()) set({ probed: true });
     } catch (e) {
+      if (!isCurrent()) return;
       set({
         runtime: "",
         containers: [],
@@ -86,6 +95,8 @@ export const useContainerStore = create<ContainerState>((set, get) => ({
 
   reload: async () => {
     const { connId, runtime } = get();
+    const generation = connectionGeneration;
+    const isCurrent = () => get().connId === connId && connectionGeneration === generation;
     if (!connId || !runtime) {
       if (connId) await get().probe(connId);
       return;
@@ -93,6 +104,7 @@ export const useContainerStore = create<ContainerState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const res = await sshExec(connId, `${runtime} ps -a --format '{{json .}}'`);
+      if (!isCurrent()) return;
       const out = (res.stdout || "").trim();
       const lines = out.split("\n").filter((l) => l.trim().startsWith("{"));
 
@@ -145,25 +157,39 @@ export const useContainerStore = create<ContainerState>((set, get) => ({
       });
       set({ containers: list, loading: false });
     } catch (e) {
+      if (!isCurrent()) return;
       set({ containers: [], error: formatFriendlyError(e), loading: false });
     }
   },
 
-  action: async (id, act) => {
-    const { connId, runtime } = get();
-    if (!connId || !runtime) return "容器引擎尚未就绪，请先刷新";
+  action: async (connId, id, act) => {
+    const current = get();
+    // 操作必须绑定发起它的连接：A 的容器列表在切到 B 后不能把 A 的容器 ID 发给 B
+    if (!connId || current.connId !== connId) {
+      return "当前连接已切换，已取消操作";
+    }
+    const { runtime, containers } = current;
+    if (!runtime) return "容器引擎尚未就绪，请先刷新";
     const safeId = id.replace(/[^a-zA-Z0-9_.-]/g, "");
+    if (!safeId) return "容器 ID 无效，已取消操作";
+    if (!containers.some((item) => item.id === safeId)) {
+      return "容器列表已更新，请刷新后重试";
+    }
+    const generation = connectionGeneration;
     try {
       const res = await sshExec(connId, `${runtime} ${act} ${safeId}`);
       const stderrText = (res.stderr || "").trim();
       const ok = res.exit_code === 0 || (res.exit_code === null && !stderrText);
       if (!ok) return formatFriendlyError(stderrText || "操作未成功");
-      await get().reload();
+      if (get().connId === connId && connectionGeneration === generation) await get().reload();
       return `已${act === "start" ? "启动" : act === "stop" ? "停止" : "重启"}容器`;
     } catch (e) {
       return formatFriendlyError(e);
     }
   },
 
-  reset: () => set({ connId: null, runtime: "", containers: [], error: null, probed: false }),
+  reset: () => {
+    connectionGeneration += 1;
+    set({ connId: null, runtime: "", containers: [], error: null, probed: false, loading: false });
+  },
 }));

@@ -9,7 +9,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { TerminalTab } from "../stores/terminalStore";
 import { useTerminalStore } from "../stores/terminalStore";
-import { resolveTheme, useSettingsStore } from "../stores/settingsStore";
+import { isLightBackground, resolveTheme, useSettingsStore } from "../stores/settingsStore";
 import {
   cacheScenicWallpaper,
   getCachedScenicWallpaper,
@@ -23,7 +23,13 @@ import { MaximizeIcon, MinimizeIcon, SearchIcon, CopyIcon, DownloadIcon, Command
 import { ConfirmDialog } from "./ui/Overlay";
 import { ConnectAuthModal } from "./ConnectAuthModal";
 import { toast, useToastStore } from "../stores/toastStore";
-import { SAVE_SNIPPET_EVENT } from "../lib/terminal-actions";
+import {
+  SAVE_SNIPPET_EVENT,
+  createStreamingDecoder,
+  encodeTextForSession,
+} from "../lib/terminal-actions";
+import { subscribeSerial } from "../stores/serialStore";
+import { useSessionStore } from "../stores/sessionStore";
 import {
   ackTerminal,
   openTerminal,
@@ -32,7 +38,6 @@ import {
   resizeTerminal,
   writeTerminal,
   sendSerial,
-  readSerial,
 } from "../lib/ipc";
 
 interface XtermViewProps {
@@ -76,6 +81,12 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   const clipboardRef = useRef<{ copy: () => void; paste: () => void } | null>(null);
   const isFullscreen = useTerminalStore((s) => s.isFullscreen);
   const toggleFullscreen = useTerminalStore((s) => s.toggleFullscreen);
+  // 会话编码：临时本地终端没有落库会话，按 UTF-8 处理
+  const encoding = useSessionStore((s) =>
+    s.sessions.find((item) => item.id === tab.sessionId)?.encoding
+  );
+  const encodingRef = useRef(encoding);
+  encodingRef.current = encoding;
 
   // 记录最近一次打印的连接状态，避免重复输出
   const lastLoggedStateRef = useRef<string>("");
@@ -348,19 +359,22 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     const onDataDispose = term.onData((data) => {
       const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
       if (live?.status !== "connected") return;
-      const bytes = new TextEncoder().encode(data);
-      if (tab.protocol === "serial") {
-        sendSerial(tab.cardId || tab.tabId, Array.from(bytes)).catch((e) =>
-          console.warn("failed to write to serial", e)
-        );
-      } else {
-        writeTerminal(tab.tabId, bytes).catch((err) => {
+      void (async () => {
+        try {
+          const bytes = await encodeTextForSession(data, encodingRef.current);
+          if (tab.protocol === "serial") {
+            await sendSerial(tab.cardId || tab.tabId, Array.from(bytes));
+          } else {
+            await writeTerminal(tab.tabId, bytes);
+          }
+        } catch (err) {
+          // 编码失败或写入失败都必须进入断开状态，不能只停留在 console.warn
           const current = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
-          if (current?.connectionId === live.connectionId && current.status === "connected") {
+          if (current?.status === "connected") {
             useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(err));
           }
-        });
-      }
+        }
+      })();
     });
 
     // ResizeObserver：拖拽分屏条时每帧都会触发，必须防抖，
@@ -497,14 +511,14 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     if (tab.status === "connecting") {
       term.writeln(`\r\n\x1b[38;5;75m➜ [连接中]\x1b[0m 正在建立安全连接: \x1b[1m${tab.sessionName}\x1b[0m...`);
     } else if (tab.status === "reconnecting") {
-      term.writeln("\x1b[38;5;75m[连接中]\x1b[0m 正在建立连接，请稍候…");
+      term.writeln("\x1b[38;5;75m[连接中]\x1b[0m 正在重新建立连接，请稍候…");
     } else if (tab.status === "connected") {
-      term.writeln(`\x1b[38;5;82m✔ [已就绪]\x1b[0m 会话连接成功，终端已就绪！\r\n`);
+      term.writeln(`\x1b[38;5;82m✔ [已就绪]\x1b[0m 认证成功，终端连接已建立！\r\n`);
     } else if (tab.status === "error" || tab.status === "disconnected") {
       if (tab.error) {
         term.writeln(`\x1b[38;5;196m[连接已断开]\x1b[0m ${tab.error}`);
       }
-      term.writeln("\r\n\x1b[38;5;75m按 Enter 重新连接。\x1b[0m 不会自动重试；可通过右键菜单修改登录凭据。\r\n");
+      term.writeln("\r\n\x1b[38;5;75m按 Enter 重新连接。\x1b[0m 可通过右键菜单修改登录凭据。\r\n");
     }
   }, [tab.status, tab.error, tab.sessionName]);
 
@@ -524,31 +538,42 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
 
     const term = terminalRef.current;
 
-    // 串口连接轮询消费缓冲
+    // 串口连接：单轮询分发（ASCII/HEX 共用同一份原始字节），此处只订阅
     if (tab.protocol === "serial") {
-      let isCancelled = false;
-      const targetCardId = tab.cardId || tab.tabId;
+      if (!visible) return;
+      let decoder: ReturnType<typeof createStreamingDecoder> = null;
+      try {
+        decoder = createStreamingDecoder(encoding);
+      } catch (err) {
+        term.write(`\r\n\x1b[31m[OpenShell] ${formatFriendlyError(err)}\x1b[0m\r\n`);
+        return;
+      }
 
-      const pollInterval = setInterval(async () => {
-        // 标签不可见时暂停轮询：多开串口标签时这是 20 次 IPC/秒/标签的开销
-        if (isCancelled || !visibleRef.current) return;
-        try {
-          const bytes = await readSerial(targetCardId, 4096);
-          if (bytes && bytes.length > 0 && !isCancelled) {
-            const payload = new Uint8Array(bytes);
-            term.write(payload);
-            if (useSettingsStore.getState().logSessionOutput) {
-              appendSessionLog(tab.tabId, payload);
-            }
+      const targetCardId = tab.cardId || tab.tabId;
+      const unsubscribe = subscribeSerial(targetCardId, {
+        onData: (bytes) => {
+          if (terminalRef.current !== term) return;
+          const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+          if (!live || live.status !== "connected") return;
+          const payload = new Uint8Array(bytes);
+          if (decoder) term.write(decoder.decode(payload));
+          else term.write(payload);
+          if (useSettingsStore.getState().logSessionOutput) {
+            appendSessionLog(tab.tabId, payload);
           }
-        } catch {
-          // ignore read error
-        }
-      }, 50);
+        },
+        onError: (error) => {
+          // 读取失败必须暴露为断开，交给 markDisconnected 处理退避与上限
+          const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
+          if (live && live.status === "connected") {
+            useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(error));
+          }
+        },
+      });
 
       return () => {
-        isCancelled = true;
-        clearInterval(pollInterval);
+        decoder?.reset();
+        unsubscribe();
       };
     }
 
@@ -557,6 +582,14 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
 
     // 字符流通道（SSH / 本地终端 / Telnet）：重连后 connectionId 变化时必须重新打开
     if (!tab.connectionId || openedConnectionRef.current === tab.connectionId) {
+      return;
+    }
+
+    let decoder: ReturnType<typeof createStreamingDecoder> = null;
+    try {
+      decoder = createStreamingDecoder(encoding);
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[OpenShell] ${formatFriendlyError(err)}\x1b[0m\r\n`);
       return;
     }
 
@@ -574,10 +607,12 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       // 二进制帧格式：0x01 为 PTY 数据
       if (tag === 0x01) {
         const payload = new Uint8Array(frameBytes.slice(5));
-        term.write(payload, () => {
+        const acknowledge = () => {
           // 消费完成后反馈确认（流控信用）
           ackTerminal(tab.tabId, payload.length).catch(() => {});
-        });
+        };
+        if (decoder) term.write(decoder.decode(payload), acknowledge);
+        else term.write(payload, acknowledge);
 
         if (useSettingsStore.getState().logSessionOutput) {
           appendSessionLog(tab.tabId, payload);
@@ -607,29 +642,54 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         useTerminalStore.getState().markDisconnected(tab.tabId, formatFriendlyError(err));
       }
     });
-  }, [tab.connectionId, tab.status, tab.tabId, tab.protocol, tab.cardId, tab.sessionId, tab.shellKind]);
+
+    return () => {
+      decoder?.reset();
+    };
+  }, [
+    tab.connectionId,
+    tab.status,
+    tab.tabId,
+    tab.protocol,
+    tab.cardId,
+    tab.sessionId,
+    tab.shellKind,
+    visible,
+    encoding,
+  ]);
+
+  const isLight = isLightBackground(currentTheme.background);
 
   return (
     <div
-      className="relative h-full w-full overflow-hidden transition-colors duration-300"
+      className="relative h-full w-full overflow-hidden transition-colors duration-300 border-t border-line/10 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)]"
       style={{
         backgroundColor: currentTheme.background,
       }}
     >
       {/* 以终端主题作为壁纸底色，限制图像强度以维持文字对比度。 */}
       {hasWallpaper && (
-        <div
-          className="absolute inset-0 pointer-events-none transition-opacity duration-300"
-          style={{
-            backgroundImage: wallpaper.backgroundImage,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundRepeat: "no-repeat",
-            filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
-            transform: backgroundBlur > 0 ? "scale(1.05)" : undefined,
-            opacity: Math.max(0, Math.min(1, backgroundOpacity / 100)),
-          }}
-        />
+        <>
+          <div
+            className="absolute inset-0 pointer-events-none transition-opacity duration-300"
+            style={{
+              backgroundImage: wallpaper.backgroundImage,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              backgroundRepeat: "no-repeat",
+              filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
+              transform: backgroundBlur > 0 ? "scale(1.05)" : undefined,
+              opacity: Math.max(0, Math.min(1, backgroundOpacity / 100)),
+            }}
+          />
+          {/* 对比度保护遮罩：根据明暗自适应半透遮罩，防止壁纸高光影响终端文字识别 */}
+          <div
+            className="absolute inset-0 pointer-events-none transition-colors duration-300"
+            style={{
+              backgroundColor: isLight ? "rgba(255, 255, 255, 0.45)" : "rgba(12, 16, 23, 0.60)",
+            }}
+          />
+        </>
       )}
 
       {/* 搜索工具栏 */}
@@ -665,7 +725,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         </button>
       </div>
 
-      <div ref={containerRef} className="relative z-10 h-full w-full" />
+      <div ref={containerRef} className="relative z-10 h-full w-full p-1.5 focus:outline-none" />
       {ctxMenu && visible && createPortal(
         <div ref={menuRef} role="menu" aria-label="终端操作" className="fixed z-[70] max-h-[calc(100vh-16px)] w-60 overflow-y-auto rounded-xl border border-line/10 bg-surface/95 p-1.5 text-os-xs text-ink shadow-os-lg backdrop-blur-xl"
           style={{ left: ctxMenu.x, top: ctxMenu.y }} onMouseDown={(event) => event.stopPropagation()}

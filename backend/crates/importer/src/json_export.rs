@@ -14,6 +14,8 @@ pub struct OpenShellExportBundle {
     pub groups: Vec<Group>,
     pub snippets: Vec<Snippet>,
     pub port_forwards: Vec<PortForwardRule>,
+    #[serde(default)]
+    pub proxies: Vec<openshell_core_domain::ProxyServerConfig>,
 }
 
 impl OpenShellExportBundle {
@@ -31,6 +33,7 @@ impl OpenShellExportBundle {
             groups,
             snippets,
             port_forwards,
+            proxies: Vec::new(),
         }
     }
 

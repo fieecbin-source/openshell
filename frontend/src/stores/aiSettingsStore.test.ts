@@ -240,4 +240,50 @@ describe("aiSettingsStore", () => {
     await useAiSettingsStore.getState().loadLogo("ollama");
     expect(useAiSettingsStore.getState().logos.ollama).toContain("data:image/svg+xml");
   });
+
+  it("testProfile 遇到 reject/超时重置 testingProfileId 且不更新 verified_at", async () => {
+    const profile = makeProfile({ verified_at: null });
+    vi.mocked(aiIpc.getAiConfig).mockResolvedValue(makeConfig([profile]));
+    await useAiSettingsStore.getState().load();
+
+    vi.mocked(aiIpc.testAiProfile).mockRejectedValueOnce({
+      code: "AI_TIMEOUT",
+      message: "连接超时：服务器没有在预期时间内响应",
+    });
+
+    const res = await useAiSettingsStore.getState().testProfile("prof_1");
+
+    expect(res).not.toBeNull();
+    expect(res?.ok).toBe(false);
+    expect(res?.code).toBe("AI_TIMEOUT");
+
+    const state = useAiSettingsStore.getState();
+    expect(state.testingProfileId).toBeNull();
+    expect(state.lastTest?.ok).toBe(false);
+    // verified_at 绝不能被更新
+    expect(state.config?.profiles[0].verified_at).toBeNull();
+  });
+
+  it("testProfile 返回 ok=false 时保留精准失败状态且不写 verified_at", async () => {
+    const profile = makeProfile({ verified_at: null });
+    vi.mocked(aiIpc.getAiConfig).mockResolvedValue(makeConfig([profile]));
+    await useAiSettingsStore.getState().load();
+
+    const emptyResult: ProviderTestResult = {
+      ok: false,
+      latency_ms: 50,
+      model: profile.model_id,
+      message: "端点返回空响应体",
+      code: null,
+    };
+    vi.mocked(aiIpc.testAiProfile).mockResolvedValueOnce(emptyResult);
+
+    const res = await useAiSettingsStore.getState().testProfile("prof_1");
+
+    expect(res).toEqual(emptyResult);
+    const state = useAiSettingsStore.getState();
+    expect(state.testingProfileId).toBeNull();
+    expect(state.lastTest?.ok).toBe(false);
+    expect(state.config?.profiles[0].verified_at).toBeNull();
+  });
 });

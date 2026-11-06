@@ -20,12 +20,49 @@ interface MonitorState {
   filterProcess: string;
   autoRefreshInterval: number | null;
   error: string | null;
+  /** monitor_get_latest 最近一次失败原因（成功后清空） */
+  latestError: string | null;
+  latestFailedAt: number | null;
+  /** 最近一次成功拿到 latest（含 null 快照）的本地时间 */
+  latestReceivedAt: number | null;
 
   start: (sessionId: string, connId: string) => Promise<void>;
   stop: (sessionId?: string, connId?: string) => Promise<void>;
   poll: () => Promise<void>;
   kill: (pid: number, signal?: number) => Promise<void>;
   setFilterProcess: (filter: string) => void;
+}
+
+/** 3 个采集周期（默认 3s）内没有新快照即视为陈旧 */
+export const METRICS_STALE_AFTER_MS = 9000;
+
+export function isMetricsStale(
+  metrics: HostMetrics | null | undefined,
+  now: number = Date.now()
+): boolean {
+  if (!metrics || !Number.isFinite(metrics.timestamp_ms)) return true;
+  return now - metrics.timestamp_ms > METRICS_STALE_AFTER_MS;
+}
+
+/** 后端标记为不可用的字段：首采样缺失时必须显示“不可用”，不能当作 0 */
+export function isFieldUnavailable(
+  metrics: HostMetrics | null | undefined,
+  field: string
+): boolean {
+  return !!metrics?.unavailable_fields?.includes(field);
+}
+
+/**
+ * 读取可展示的数值：字段缺失或 unavailable_fields 命中时返回 null，
+ * 合法 0 仍返回 0（调用方据此区分“不可用”与“真实 0”）。
+ */
+export function readAvailableMetric(
+  metrics: HostMetrics | null | undefined,
+  field: string
+): number | null {
+  if (!metrics || isFieldUnavailable(metrics, field)) return null;
+  const raw = (metrics as unknown as Record<string, unknown>)[field];
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
 }
 
 export const useMonitorStore = create<MonitorState>((set, get) => ({
@@ -38,6 +75,9 @@ export const useMonitorStore = create<MonitorState>((set, get) => ({
   filterProcess: "",
   autoRefreshInterval: null,
   error: null,
+  latestError: null,
+  latestFailedAt: null,
+  latestReceivedAt: null,
 
   start: async (sessionId: string, connId: string) => {
     const prev = get();
@@ -47,7 +87,8 @@ export const useMonitorStore = create<MonitorState>((set, get) => ({
     }
     if (prev.autoRefreshInterval) clearInterval(prev.autoRefreshInterval);
     set({ activeSessionId: sessionId, activeConnId: connId, refCount: 1,
-      isMonitoring: false, autoRefreshInterval: null, latest: null, history: [], error: null });
+      isMonitoring: false, autoRefreshInterval: null, latest: null, history: [], error: null,
+      latestError: null, latestFailedAt: null, latestReceivedAt: null });
     const isCurrent = () => get().activeSessionId === sessionId && get().activeConnId === connId;
 
     try {
@@ -107,6 +148,9 @@ export const useMonitorStore = create<MonitorState>((set, get) => ({
       error: null,
       latest: null,
       history: [],
+      latestError: null,
+      latestFailedAt: null,
+      latestReceivedAt: null,
     });
     if (sid) await monitorStop(sid).catch(() => {});
   },
@@ -123,9 +167,23 @@ export const useMonitorStore = create<MonitorState>((set, get) => ({
     // 用户手动点一次「重新采集」碰巧成功才突然出现数据。
     try {
       const latest = await monitorGetLatest(sid);
-      if (isCurrent()) set({ latest });
+      if (isCurrent()) {
+        // null 是「还没有有效采样」，不是 0；成功返回必须清空上一次失败状态
+        set({
+          latest,
+          latestReceivedAt: Date.now(),
+          latestError: null,
+          latestFailedAt: null,
+        });
+      }
     } catch (e) {
-      console.warn("poll monitor latest error", e);
+      if (isCurrent()) {
+        // 保留旧快照供历史参考，但记录失败时间，UI 必须展示「采集失败/陈旧」而不是实时值
+        set({
+          latestError: formatFriendlyError(e),
+          latestFailedAt: Date.now(),
+        });
+      }
     }
 
     try {

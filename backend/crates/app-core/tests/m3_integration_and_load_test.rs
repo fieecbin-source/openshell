@@ -173,6 +173,10 @@ async fn test_importer_and_osvault_encrypted_roundtrip() {
     let services = AppServices::new_in_memory().expect("init in-memory app services");
 
     // 1. 测试 OpenSSH config 解析
+    //
+    // BUG016 现行语义：带 ProxyJump/IdentityFile/转发等暂不支持依赖的会话必须被明确阻断，
+    // 不能“导入成功但静默变直连”。这里保留一个依赖方（db-internal）与两个可独立导入的
+    // 有效会话（bastion、cache），既覆盖阻断断言，也保住有效会话的加密归档回环。
     let ssh_config = r#"
 Host bastion
     HostName jump.corp.internal
@@ -183,25 +187,50 @@ Host db-internal
     HostName 10.0.2.15
     User postgres
     ProxyJump bastion
+
+Host cache
+    HostName 10.0.2.16
+    User redis
+    Port 6379
 "#;
     let (blocks, warnings) = OpenSshParser::parse_config(ssh_config);
-    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks.len(), 3);
     assert_eq!(warnings.len(), 0);
 
     let inputs = OpenSshParser::to_session_inputs(&blocks);
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
 
     let report =
         ImportPreviewEngine::generate_preview(inputs, &[], ConflictStrategy::Skip, warnings);
-    assert_eq!(report.total, 2);
+    assert_eq!(report.total, 3);
     assert_eq!(report.new_count, 2);
-    assert_eq!(report.candidates[0].action, CandidateAction::Create);
+    assert_eq!(report.skip_count, 1);
 
-    // 2. 提交导入到服务层
-    for c in report.candidates {
+    // 被跳过的是依赖 ProxyJump 的那条，且带明确阻断原因（不是被静默丢弃）。
+    let blocked = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.action == CandidateAction::Skip)
+        .expect("the ProxyJump session must be blocked");
+    assert_eq!(blocked.input.host.as_deref(), Some("10.0.2.15"));
+    let reason = blocked.input.protocol_options_json.as_ref().unwrap()["import_blocked"]
+        .as_str()
+        .expect("blocked candidate must carry a reason");
+    assert!(reason.contains("ProxyJump"), "{reason}");
+    assert!(report
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("ProxyJump")));
+
+    // 2. 提交导入到服务层：跳过的候选绝不能被直连导入。
+    for candidate in report
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.action != CandidateAction::Skip)
+    {
         services
             .session
-            .create_session(c.input)
+            .create_session(candidate.input.clone())
             .await
             .expect("create session");
     }
@@ -212,6 +241,12 @@ Host db-internal
         .await
         .expect("list sessions");
     assert_eq!(sessions.len(), 2);
+    assert!(
+        sessions
+            .iter()
+            .all(|session| session.host.as_deref() != Some("10.0.2.15")),
+        "a blocked ProxyJump session must never be imported as a direct connection"
+    );
 
     // 3. 导出为 .osvault 加密归档
     let bundle = OpenShellExportBundle::new(sessions.clone(), Vec::new(), Vec::new(), Vec::new());

@@ -22,7 +22,6 @@ interface SessionTreeProps {
 
 type FilterKind = "all" | "favorites" | "recent";
 
-const RECENT_LIMIT = 8;
 /** 未分组区域在拖拽高亮时使用的伪 group id */
 const ROOT_DROP_ID = "__root__";
 
@@ -136,14 +135,6 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
 
   const tree = useMemo(() => buildGroupTree(groups, filteredSessions), [groups, filteredSessions]);
 
-  const recentSessions = useMemo(
-    () =>
-      sessions
-        .filter((s) => (s.last_used_at ?? 0) > 0)
-        .sort((a, b) => (b.last_used_at ?? 0) - (a.last_used_at ?? 0))
-        .slice(0, RECENT_LIMIT),
-    [sessions]
-  );
 
   // 搜索/筛选状态下隐藏空分组，避免整屏都是空文件夹
   const hideEmptyGroups = searchQuery.trim().length > 0 || activeFilter !== "all";
@@ -496,11 +487,22 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
     onDeleteGroup: handleDeleteGroup,
     onCreateSubGroup: (group) => {
       setNewGroupParentId(group.id);
+      setNewGroupName("");
       setShowNewGroupInput(true);
+      setCollapsedGroups((prev) => ({ ...prev, [group.id]: false }));
     },
     renderSession,
     hoveredGroupId,
     draggingKind: dragPayload?.kind ?? null,
+    subGroupParentId: newGroupParentId,
+    subGroupName: newGroupName,
+    onSubGroupNameChange: setNewGroupName,
+    onSubmitSubGroup: handleCreateGroup,
+    onCancelSubGroup: () => {
+      setShowNewGroupInput(false);
+      setNewGroupParentId(null);
+      setNewGroupName("");
+    },
   };
 
   return (
@@ -542,7 +544,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索会话 (名称 / 主机)..."
+            aria-label="搜索会话"
             className="w-full rounded-xl border border-line/15 bg-surface py-1.5 pl-8 pr-3 text-xs text-ink placeholder-ink-tertiary shadow-apple-sm transition focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
           />
           <svg
@@ -608,17 +610,14 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
           </button>
         </div>
 
-        {showNewGroupInput && (
+        {showNewGroupInput && newGroupParentId === null && (
           <form onSubmit={handleCreateGroup} className="mt-2 flex animate-in items-center space-x-1 fade-in">
             <input
               type="text"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
-              placeholder={
-                newGroupParentId
-                  ? `在「${groups.find((g) => g.id === newGroupParentId)?.name ?? "分组"}」下新建子分组...`
-                  : "新分组名称..."
-              }
+              aria-label="分组名称"
+              placeholder="新建根分组名称"
               autoFocus
               className="flex-1 rounded-xl border border-line/25 bg-surface px-2.5 py-1 text-xs text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
@@ -633,6 +632,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
               onClick={() => {
                 setShowNewGroupInput(false);
                 setNewGroupParentId(null);
+                setNewGroupName("");
               }}
               className="rounded-xl border border-line/15 px-2 py-1 text-xs text-ink-secondary hover:bg-line/5"
             >
@@ -644,17 +644,6 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
 
       {/* 会话树列表 */}
       <div className="flex-1 space-y-1 overflow-y-auto p-2">
-        {/* 最近连接：常用机器不必在树里翻找 */}
-        {activeFilter === "all" && !searchQuery.trim() && recentSessions.length > 0 && (
-          <div className="mb-1 space-y-0.5">
-            <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">
-              最近连接
-            </div>
-            {recentSessions.map(renderSession)}
-            <div className="my-1 border-b border-line/15" />
-          </div>
-        )}
-
         {visibleRoots.map((node) => (
           <SessionTreeNode key={node.group.id} node={node} depth={0} api={treeApi} />
         ))}
@@ -700,7 +689,7 @@ export const SessionTree: React.FC<SessionTreeProps> = ({ onNewSession, onEditSe
                   ? "还没有连接记录"
                   : "暂无保存的会话"}
             </p>
-            <p className="mb-3 text-[11px] text-ink-tertiary">点击下方按钮快速配置新连接</p>
+
             <button onClick={() => onNewSession()} className="text-xs font-semibold text-accent hover:underline">
               + 立即新建会话
             </button>

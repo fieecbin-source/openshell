@@ -27,8 +27,8 @@ it("keeps terminal and text editing keys separate from SFTP shortcuts", () => {
   const clearTerminal = new KeyboardEvent("keydown", { key: "l", ctrlKey: true, bubbles: true, cancelable: true });
   act(() => terminal.dispatchEvent(clearTerminal));
   expect(clearTerminal.defaultPrevented).toBe(false);
-  expect(container.querySelector('input[placeholder^="输入绝对路径"]')).toBeNull();
-  const filter = container.querySelector<HTMLInputElement>('input[placeholder*="过滤"]')!;
+  expect(container.querySelector('input[aria-label="远程路径"]')).toBeNull();
+  const filter = container.querySelector<HTMLInputElement>('input[aria-label="过滤文件"]')!;
   filter.focus();
   const deleteText = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
   act(() => filter.dispatchEvent(deleteText));
@@ -39,5 +39,5 @@ it("keeps terminal and text editing keys separate from SFTP shortcuts", () => {
   const editPath = new KeyboardEvent("keydown", { key: "l", ctrlKey: true, bubbles: true, cancelable: true });
   act(() => files.dispatchEvent(editPath));
   expect(editPath.defaultPrevented).toBe(true);
-  expect(container.querySelector('input[placeholder^="输入绝对路径"]')).not.toBeNull();
+  expect(container.querySelector('input[aria-label="远程路径"]')).not.toBeNull();
 });

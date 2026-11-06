@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import type { ProxyServerConfig, ProxyTestResult, ProxyType } from "../types/ipc";
 import * as ipcModule from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
+import { RequiredMark } from "./ui/Field";
 
 function getIpcFn<K extends keyof typeof ipcModule>(key: K): (typeof ipcModule)[K] | undefined {
   try {
@@ -22,6 +23,7 @@ import {
   EyeOffIcon,
   GlobeIcon,
   KeyIcon,
+  LockIcon,
   PencilIcon,
   PlusIcon,
   RefreshIcon,
@@ -35,24 +37,12 @@ export interface ProxyManagerModalProps {
   onChanged?: (proxies: ProxyServerConfig[]) => void;
 }
 
-const LOCAL_FALLBACK_KEY = "openshell_proxy_list_fallback_v1";
+const LEGACY_LOCAL_FALLBACK_KEY = "openshell_proxy_list_fallback_v1";
 
-function readFallbackProxies(): ProxyServerConfig[] {
-  if (typeof window === "undefined" || !window.localStorage) return [];
-  try {
-    const raw = window.localStorage.getItem(LOCAL_FALLBACK_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeFallbackProxies(list: ProxyServerConfig[]): void {
+function cleanLegacyProxyCache(): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
-    window.localStorage.setItem(LOCAL_FALLBACK_KEY, JSON.stringify(list));
+    window.localStorage.removeItem(LEGACY_LOCAL_FALLBACK_KEY);
   } catch {
     // ignore storage errors
   }
@@ -97,10 +87,12 @@ export function ProxyManagerModal({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [proxyType, setProxyType] = useState<ProxyType>("socks5");
-  const [host, setHost] = useState("127.0.0.1");
+  const [host, setHost] = useState("");
   const [port, setPort] = useState<number>(1080);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [clearPassword, setClearPassword] = useState(false);
+  const [hasStoredPassword, setHasStoredPassword] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [notes, setNotes] = useState("");
 
@@ -112,10 +104,12 @@ export function ProxyManagerModal({
     setEditingId(null);
     setName("");
     setProxyType("socks5");
-    setHost("127.0.0.1");
+    setHost("");
     setPort(1080);
     setUsername("");
     setPassword("");
+    setClearPassword(false);
+    setHasStoredPassword(false);
     setShowPassword(false);
     setNotes("");
     setErrorMsg(null);
@@ -130,10 +124,7 @@ export function ProxyManagerModal({
       const list = await proxyListGetFn();
       const normalized = Array.isArray(list) ? list : [];
       setProxies(normalized);
-      writeFallbackProxies(normalized);
     } catch (err) {
-      const fallback = readFallbackProxies();
-      setProxies(fallback);
       if (checkTauriRuntime()) {
         setErrorMsg(formatFriendlyError(err));
       }
@@ -144,6 +135,7 @@ export function ProxyManagerModal({
 
   useEffect(() => {
     if (open) {
+      cleanLegacyProxyCache();
       void loadProxies();
       resetForm();
     }
@@ -167,31 +159,22 @@ export function ProxyManagerModal({
     setHost(proxy.host);
     setPort(proxy.port);
     setUsername(proxy.username || "");
-    setPassword(proxy.password || "");
+    setPassword("");
+    setClearPassword(false);
+    setHasStoredPassword(Boolean((proxy as any).has_password || (proxy as any).password_ref));
     setShowPassword(false);
     setNotes(proxy.notes || "");
     setErrorMsg(null);
   };
 
-  const persistList = async (nextList: ProxyServerConfig[]): Promise<ProxyServerConfig[]> => {
-    try {
-      const proxyListSaveFn = getIpcFn("proxyListSave");
-      if (!proxyListSaveFn) throw new Error("proxyListSave unavailable");
-      const saved = await proxyListSaveFn(nextList);
-      const finalList = Array.isArray(saved) ? saved : nextList;
-      setProxies(finalList);
-      writeFallbackProxies(finalList);
-      onChanged?.(finalList);
-      return finalList;
-    } catch (err) {
-      if (!checkTauriRuntime()) {
-        setProxies(nextList);
-        writeFallbackProxies(nextList);
-        onChanged?.(nextList);
-        return nextList;
-      }
-      throw err;
-    }
+  const persistList = async (nextList: any[]): Promise<ProxyServerConfig[]> => {
+    const proxyListSaveFn = getIpcFn("proxyListSave");
+    if (!proxyListSaveFn) throw new Error("proxyListSave unavailable");
+    const saved = await proxyListSaveFn(nextList as any);
+    const finalList = Array.isArray(saved) ? saved : (nextList as any);
+    setProxies(finalList);
+    onChanged?.(finalList);
+    return finalList;
   };
 
   const handleSaveProxy = async (e: React.FormEvent) => {
@@ -218,25 +201,34 @@ export function ProxyManagerModal({
     const now = Math.floor(Date.now() / 1000);
 
     try {
-      let nextList: ProxyServerConfig[];
+      let nextList: any[];
       if (editingId) {
-        nextList = proxies.map((item) =>
-          item.id === editingId
-            ? {
-                ...item,
-                name: trimmedName,
-                proxy_type: proxyType,
-                host: trimmedHost,
-                port: numericPort,
-                username: username.trim() ? username.trim() : null,
-                password: password ? password : null,
-                notes: notes.trim() ? notes.trim() : null,
-                updated_at: now,
-              }
-            : item
-        );
+        nextList = proxies.map((item) => {
+          if (item.id !== editingId) return item;
+          const updated: any = {
+            ...item,
+            name: trimmedName,
+            proxy_type: proxyType,
+            host: trimmedHost,
+            port: numericPort,
+            username: username.trim() ? username.trim() : null,
+            notes: notes.trim() ? notes.trim() : null,
+            updated_at: now,
+          };
+          if (clearPassword) {
+            updated.clear_password = true;
+            updated.password = null;
+          } else if (password) {
+            updated.password = password;
+            updated.clear_password = false;
+          } else {
+            delete updated.password;
+            updated.clear_password = false;
+          }
+          return updated;
+        });
       } else {
-        const newItem: ProxyServerConfig = {
+        const newItem: any = {
           id: generateProxyId(),
           name: trimmedName,
           proxy_type: proxyType,
@@ -299,16 +291,24 @@ export function ProxyManagerModal({
   };
 
   const handleTestFormProxy = () => {
-    const draft: ProxyServerConfig = {
+    const draft: any = {
       id: editingId || "__form__",
       name: name.trim() || "未命名代理",
       proxy_type: proxyType,
       host: host.trim(),
       port: Number(port) || 1080,
       username: username.trim() ? username.trim() : null,
-      password: password ? password : null,
       notes: notes.trim() ? notes.trim() : null,
     };
+    if (password) {
+      draft.password = password;
+    } else if (editingId && hasStoredPassword && !clearPassword) {
+      const existing = proxies.find((p) => p.id === editingId);
+      if (existing) {
+        draft.password_ref = (existing as any).password_ref;
+        draft.has_password = true;
+      }
+    }
     void runProxyTest("__form__", draft);
   };
 
@@ -335,10 +335,8 @@ export function ProxyManagerModal({
               <GlobeIcon className="h-4 w-4" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-ink">代理服务器管理 (Proxy Manager)</h3>
-              <p className="text-[11px] text-ink-tertiary">
-                配置全局 HTTP / SOCKS4 / SOCKS5 代理，供 SSH、Telnet 与远程桌面连接调用
-              </p>
+              <h3 className="text-sm font-semibold text-ink">代理服务器管理</h3>
+
             </div>
           </div>
 
@@ -391,9 +389,7 @@ export function ProxyManagerModal({
               <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-line/20 bg-surface-muted/30 p-8 text-center">
                 <GlobeIcon className="mb-2 h-7 w-7 text-ink-tertiary" />
                 <p className="text-xs font-medium text-ink-secondary">暂无代理服务器</p>
-                <p className="mt-1 text-[11px] text-ink-tertiary">
-                  请在右侧表单填写代理信息并点击「添加代理」
-                </p>
+
               </div>
             ) : (
               <div className="space-y-2.5 overflow-y-auto pr-1">
@@ -427,6 +423,14 @@ export function ProxyManagerModal({
                               <span className="inline-flex items-center gap-1 rounded border border-line/15 bg-surface px-1.5 py-0.5 text-[10px] text-ink-secondary">
                                 <KeyIcon className="h-2.5 w-2.5" />
                                 {proxy.username}
+                              </span>
+                            )}
+                            {Boolean((proxy as any).has_password || (proxy as any).password_ref) && (
+                              <span
+                                className="inline-flex items-center gap-1 rounded border border-line/15 bg-surface px-1.5 py-0.5 text-[10px] text-ink-secondary"
+                                title="已加密保存凭据"
+                              >
+                                <LockIcon className="h-2.5 w-2.5 text-accent" />
                               </span>
                             )}
                           </div>
@@ -518,14 +522,16 @@ export function ProxyManagerModal({
               )}
 
               <div>
-                <label className="mb-1 block text-xs font-semibold text-ink-secondary">
-                  代理名称 *
+                <label htmlFor="proxy-name" className="mb-1 block text-xs font-semibold text-ink-secondary">
+                  代理名称<RequiredMark value={name} />
                 </label>
                 <input
+                  id="proxy-name"
+                  aria-required="true"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="例如：本地 Clash / 香港跳板代理"
+                  aria-label="代理名称"
                   className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20"
                 />
               </div>
@@ -554,26 +560,30 @@ export function ProxyManagerModal({
 
               <div className="grid grid-cols-3 gap-2.5">
                 <div className="col-span-2">
-                  <label className="mb-1 block text-xs font-semibold text-ink-secondary">
-                    服务器地址 (Host) *
+                  <label htmlFor="proxy-host" className="mb-1 block text-xs font-semibold text-ink-secondary">
+                    服务器地址<RequiredMark value={host} />
                   </label>
                   <input
+                    id="proxy-host"
+                    aria-required="true"
                     type="text"
                     value={host}
                     onChange={(e) => setHost(e.target.value)}
-                    placeholder="127.0.0.1"
+                    aria-label="服务器地址"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-ink-secondary">
-                    端口 (Port) *
+                  <label htmlFor="proxy-port" className="mb-1 block text-xs font-semibold text-ink-secondary">
+                    端口<RequiredMark value={port > 0 ? port : ""} />
                   </label>
                   <input
+                    id="proxy-port"
+                    aria-required="true"
                     type="number"
                     min={1}
                     max={65535}
-                    value={port}
+                    value={port > 0 ? port : ""}
                     onChange={(e) => setPort(Number(e.target.value))}
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20"
                   />
@@ -583,32 +593,53 @@ export function ProxyManagerModal({
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-ink-secondary">
-                    用户名 (可选)
+                    用户名
                   </label>
                   <input
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="无认证可留空"
+                    aria-label="用户名"
                     className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-ink-secondary">
-                    密码 (可选)
-                  </label>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-ink-secondary">
+                      密码
+                      {editingId && hasStoredPassword && !clearPassword && (
+                        <span className="ml-1.5 font-normal text-accent text-[11px]">已存</span>
+                      )}
+                    </label>
+                    {editingId && hasStoredPassword && (
+                      <label className="flex items-center gap-1 text-[11px] text-ink-tertiary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={clearPassword}
+                          onChange={(e) => {
+                            setClearPassword(e.target.checked);
+                            if (e.target.checked) setPassword("");
+                          }}
+                          className="rounded border-line/20 text-accent"
+                        />
+                        <span>清除</span>
+                      </label>
+                    )}
+                  </div>
                   <div className="relative">
                     <input
                       type={showPassword ? "text" : "password"}
                       value={password}
+                      disabled={clearPassword}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="无密码可留空"
-                      className="w-full rounded-xl border border-line/15 bg-surface-muted/50 py-2 pl-3 pr-8 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20"
+                      aria-label="密码"
+                      className="w-full rounded-xl border border-line/15 bg-surface-muted/50 py-2 pl-3 pr-8 font-mono text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50"
                     />
                     <button
                       type="button"
+                      disabled={clearPassword}
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2 top-2 text-ink-tertiary hover:text-ink-secondary"
+                      className="absolute right-2 top-2 text-ink-tertiary hover:text-ink-secondary disabled:opacity-30"
                       title={showPassword ? "隐藏密码" : "显示密码"}
                       aria-label={showPassword ? "隐藏密码" : "显示密码"}
                     >
@@ -624,13 +655,13 @@ export function ProxyManagerModal({
 
               <div>
                 <label className="mb-1 block text-xs font-semibold text-ink-secondary">
-                  备注 (可选)
+                  备注
                 </label>
                 <input
                   type="text"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="用途说明或节点备注"
+                  aria-label="备注"
                   className="w-full rounded-xl border border-line/15 bg-surface-muted/50 px-3 py-2 text-xs text-ink focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/20"
                 />
               </div>

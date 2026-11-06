@@ -1,12 +1,17 @@
 import React, { useMemo, useState } from "react";
+import type { Protocol } from "../types/ipc";
 import { useTerminalStore } from "../stores/terminalStore";
-import { sendSerial, writeTerminal } from "../lib/ipc";
+import { formatFriendlyError } from "../lib/errors";
+import { toast } from "../stores/toastStore";
 import { Badge } from "./ui/Surface";
 import { Button, IconButton } from "./ui/Button";
 import { Input } from "./ui/Field";
 import { ConfirmDialog } from "./ui/Overlay";
 import { cn } from "./ui/cn";
 import { ActivityIcon, CheckIcon, SendIcon, XIcon } from "./ui/icons";
+
+/** 可参与广播的协议：远程桌面会话没有可写文本通道，不在这里虚报发送成功 */
+const BROADCAST_PROTOCOLS: Protocol[] = ["ssh", "sftp", "local_shell", "telnet", "serial"];
 
 interface MultiExecBarProps {
   onClose: () => void;
@@ -25,9 +30,12 @@ const DANGEROUS_PATTERNS = [
 ];
 
 export const MultiExecBar: React.FC<MultiExecBarProps> = ({ onClose }) => {
-  const { tabs } = useTerminalStore();
+  const { tabs, sendTextToTab } = useTerminalStore();
   const connectedTabs = useMemo(
-    () => tabs.filter((t) => t.status === "connected"),
+    () =>
+      tabs.filter(
+        (t) => t.status === "connected" && BROADCAST_PROTOCOLS.includes(t.protocol)
+      ),
     [tabs]
   );
 
@@ -73,19 +81,27 @@ export const MultiExecBar: React.FC<MultiExecBarProps> = ({ onClose }) => {
 
   const dispatchCommand = (cmd: string) => {
     const selected = new Set(selectedTabIds);
-    for (const tab of connectedTabs) {
-      if (!selected.has(tab.tabId)) continue;
-      if (tab.protocol === "serial") {
-        // 串口会话没有 SSH PTY 通道，必须走串口发送接口，否则广播对它完全无效
-        const serialBytes = new TextEncoder().encode(cmd + "\r\n");
-        sendSerial(tab.cardId || tab.tabId, serialBytes).catch(console.warn);
-      } else {
-        const bytes = new TextEncoder().encode(cmd + "\n");
-        writeTerminal(tab.tabId, bytes).catch(console.warn);
-      }
-    }
+    const targets = connectedTabs.filter((tab) => selected.has(tab.tabId));
     setCommand("");
     setDangerModal(null);
+
+    // 统一走 terminalStore 的按会话编码发送入口：GB18030 等多目标编码不再被 UTF-8 覆盖。
+    // 串口保留 CRLF，其余终端保留 LF；单个目标失败必须汇总提示，不能吞掉。
+    void Promise.allSettled(
+      targets.map((tab) =>
+        sendTextToTab(tab.tabId, tab.protocol === "serial" ? cmd + "\r\n" : cmd + "\n")
+      )
+    ).then((results) => {
+      const failed = results.filter(
+        (item): item is PromiseRejectedResult => item.status === "rejected"
+      );
+      if (failed.length === 0) return;
+      const first = failed[0].reason;
+      toast.error(
+        `${failed.length} 个会话发送失败`,
+        formatFriendlyError(first)
+      );
+    });
   };
 
   return (
@@ -151,7 +167,7 @@ export const MultiExecBar: React.FC<MultiExecBarProps> = ({ onClose }) => {
             onKeyDown={(e) => {
               if (e.key === "Enter") handleSend();
             }}
-            placeholder="输入命令，将同时发送到所选终端并回车..."
+            aria-label="批量命令"
             className="flex-1"
           />
           <Button

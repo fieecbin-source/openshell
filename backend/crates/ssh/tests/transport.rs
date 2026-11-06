@@ -99,6 +99,7 @@ fn options(port: u16) -> ConnectOptions {
         timeout_sec: 5,
         compression: true,
         agent_forwarding: false,
+        x11_forwarding: None,
     }
 }
 

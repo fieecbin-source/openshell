@@ -13,6 +13,7 @@ import {
   sftpRemoveDir,
   sftpRemoveFile,
   sftpRename,
+  sftpResumeTransfer,
   sftpSetPermissions,
   sftpStartTransfer,
   sftpWriteFile,
@@ -71,6 +72,7 @@ interface SftpState {
 
   pollTransfers: () => Promise<void>;
   pauseTransfer: (id: string) => Promise<void>;
+  resumeTransfer: (id: string) => Promise<void>;
   cancelTransfer: (id: string) => Promise<void>;
   setTransferQueueOpen: (open: boolean) => void;
 
@@ -236,7 +238,7 @@ export const useSftpStore = create<SftpState>((set, get) => ({
     }
   },
 
-  uploadFile: async (connId: string, sessionId: string, localFilePath: string, remoteDir: string, resume = true) => {
+  uploadFile: async (connId: string, sessionId: string, localFilePath: string, remoteDir: string, resume = false) => {
     const filename = localFilePath.replace(/\\/g, "/").split("/").pop() || "uploaded_file";
     const remoteDest = remoteDir.endsWith("/") ? remoteDir + filename : `${remoteDir}/${filename}`;
     await sftpStartTransfer(connId, sessionId, "upload", localFilePath, remoteDest, resume);
@@ -244,7 +246,7 @@ export const useSftpStore = create<SftpState>((set, get) => ({
     await get().pollTransfers();
   },
 
-  downloadFile: async (connId: string, sessionId: string, remoteFilePath: string, localDir: string, resume = true) => {
+  downloadFile: async (connId: string, sessionId: string, remoteFilePath: string, localDir: string, resume = false) => {
     const filename = remoteFilePath.split("/").pop() || "downloaded_file";
     const localDest = localDir.endsWith("\\") || localDir.endsWith("/")
       ? `${localDir}${filename}`
@@ -265,6 +267,11 @@ export const useSftpStore = create<SftpState>((set, get) => ({
 
   pauseTransfer: async (id: string) => {
     await sftpPauseTransfer(id);
+    await get().pollTransfers();
+  },
+
+  resumeTransfer: async (id: string) => {
+    await sftpResumeTransfer(id);
     await get().pollTransfers();
   },
 

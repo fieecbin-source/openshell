@@ -9,6 +9,64 @@ use std::net::SocketAddr;
 const ACCOUNT: &str = "isolated-sync-user";
 const PASSWORD: &str = "isolated-sync-password-12345";
 
+#[tokio::test]
+async fn resolving_a_snapshot_requires_its_proxy_dependency() {
+    use openshell_app_core::sync_codec::{self, ConflictBackupInput};
+    let app = AppServices::new_in_memory().unwrap();
+    let session = app
+        .session
+        .create_session(SessionInput {
+            host: Some("proxy.invalid".into()),
+            proxy_id: Some("missing-proxy".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let record = sync_codec::collect_dirty_records(&app.store)
+        .unwrap()
+        .into_iter()
+        .find(|record| record.record_id == session.id.as_str())
+        .unwrap();
+    let conflict = sync_codec::backup_conflict(
+        &app.store,
+        ConflictBackupInput {
+            record_id: record.record_id.clone(),
+            record_type: record.record_type,
+            local_snapshot: Some(serde_json::to_value(&record).unwrap()),
+            remote_ciphertext_b64: String::new(),
+            remote_checksum: String::new(),
+            remote_revision: 1,
+            remote_device_id: None,
+            remote_deleted: false,
+            remote_updated_at: 1,
+        },
+    )
+    .unwrap();
+    assert!(sync_codec::resolve_conflict_record(&app.store, &conflict, true, &record).is_err());
+    assert_eq!(app.sync.list_conflicts().unwrap().len(), 1);
+    app.network_secrets.save_proxies(vec![serde_json::from_value(serde_json::json!({
+        "id":"missing-proxy","name":"restored proxy","proxy_type":"socks5","host":"127.0.0.1","port":1080
+    })).unwrap()]).unwrap();
+    let mut proxies = app
+        .settings_repo
+        .get("global", None, "proxy_list")
+        .unwrap()
+        .unwrap()
+        .value_json;
+    proxies[0]["password_ref"] = serde_json::json!(openshell_core_domain::SecretId::new());
+    app.settings_repo
+        .set("global", None, "proxy_list", proxies.clone(), false)
+        .unwrap();
+    assert!(sync_codec::resolve_conflict_record(&app.store, &conflict, true, &record).is_err());
+    assert_eq!(app.sync.list_conflicts().unwrap().len(), 1);
+    proxies[0]["password_ref"] = serde_json::Value::Null;
+    app.settings_repo
+        .set("global", None, "proxy_list", proxies, false)
+        .unwrap();
+    sync_codec::resolve_conflict_record(&app.store, &conflict, true, &record).unwrap();
+    assert!(app.sync.list_conflicts().unwrap().is_empty());
+}
+
 async fn server() -> (
     String,
     DbPool,
@@ -152,6 +210,136 @@ async fn three_field_login_restores_credentials_and_bidirectional_changes() {
         .unwrap()
         .is_empty());
 
+    let conflicts = b.sync.list_conflicts().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert!(conflicts[0].has_local_snapshot);
+    b.store
+        .with_conn(|conn| {
+            conn.execute(
+                "UPDATE credential SET deleted_at=1 WHERE id=?1",
+                [credential.id.as_str()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        b.sync
+            .resolve_conflict(
+                &conflicts[0].id,
+                openshell_app_core::sync_service::SyncConflictChoice::Local
+            )
+            .await
+            .is_err(),
+        "must not restore a session whose credential was deleted"
+    );
+    assert_eq!(b.sync.list_conflicts().unwrap().len(), 1);
+    assert!(b
+        .session
+        .list_sessions(&SessionQuery::default())
+        .await
+        .unwrap()
+        .is_empty());
+    b.store
+        .with_conn(|conn| {
+            conn.execute(
+                "UPDATE credential SET deleted_at=NULL WHERE id=?1",
+                [credential.id.as_str()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    b.sync
+        .resolve_conflict(
+            &conflicts[0].id,
+            openshell_app_core::sync_service::SyncConflictChoice::Local,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        b.session.get_session(&session.id).await.unwrap().name,
+        "Offline edit"
+    );
+    assert!(b.sync.list_conflicts().unwrap().is_empty());
+    b.sync.sync_now().await.unwrap();
+    a.sync.sync_now().await.unwrap();
+    assert_eq!(
+        a.session.get_session(&session.id).await.unwrap().name,
+        "Offline edit"
+    );
+    b.session
+        .update_session(
+            &session.id,
+            SessionPatch {
+                name: Some("edit after resolve".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    b.sync.sync_now().await.unwrap();
+    a.sync.sync_now().await.unwrap();
+    assert_eq!(
+        a.session.get_session(&session.id).await.unwrap().name,
+        "edit after resolve"
+    );
+
+    a.session
+        .update_session(
+            &session.id,
+            SessionPatch {
+                name: Some("remote choice".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    b.session
+        .update_session(
+            &session.id,
+            SessionPatch {
+                name: Some("local choice".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    a.sync.sync_now().await.unwrap();
+    assert_eq!(b.sync.sync_now().await.unwrap().conflict_count, 1);
+    let conflict = b.sync.list_conflicts().unwrap().remove(0);
+    b.sync
+        .resolve_conflict(
+            &conflict.id,
+            openshell_app_core::sync_service::SyncConflictChoice::Remote,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        b.session.get_session(&session.id).await.unwrap().name,
+        "remote choice"
+    );
+    b.session
+        .update_session(
+            &session.id,
+            SessionPatch {
+                name: Some("after remote resolve".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    b.sync.sync_now().await.unwrap();
+    a.sync.sync_now().await.unwrap();
+    assert_eq!(
+        a.session.get_session(&session.id).await.unwrap().name,
+        "after remote resolve"
+    );
+
     let persisted_auth: i64 = a.store.with_conn(|conn| {
         Ok(conn.query_row("SELECT COUNT(*) FROM setting WHERE scope='sync' AND key IN ('auth','access_token','refresh_token','password')", [], |r| r.get(0)).unwrap())
     }).unwrap();
@@ -194,6 +382,181 @@ async fn three_field_login_restores_credentials_and_bidirectional_changes() {
         .login(&url, ACCOUNT, PASSWORD)
         .await
         .expect("repeated login does not violate NULL setting uniqueness");
+    task.abort();
+}
+
+#[tokio::test]
+async fn lost_upload_acknowledgement_keeps_own_echo_resolvable() {
+    use openshell_app_core::sync_service::SyncConflictChoice;
+    let (url, server_db, _dir, task) = server().await;
+    let a = AppServices::new_in_memory().unwrap();
+    a.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    let session = a
+        .session
+        .create_session(SessionInput {
+            name: Some("before acknowledgement".into()),
+            host: Some("echo.invalid".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Fail only the local acknowledgement after the real server has committed the upload.
+    a.store.with_conn(|conn| {
+        conn.execute_batch("CREATE TRIGGER reject_ack BEFORE UPDATE OF dirty ON session WHEN NEW.dirty=0 BEGIN SELECT RAISE(ABORT,'synthetic acknowledgement failure'); END").unwrap();
+        Ok(())
+    }).unwrap();
+    assert!(a.sync.sync_now().await.is_err());
+    let committed: i64 = server_db
+        .with_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM record WHERE record_id=?1 AND device_id=?2",
+                rusqlite::params![session.id.as_str(), a.sync.get_or_create_device_id()],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        committed, 1,
+        "the server must have accepted this device's upload"
+    );
+    a.store
+        .with_conn(|conn| {
+            conn.execute_batch("DROP TRIGGER reject_ack").unwrap();
+            Ok(())
+        })
+        .unwrap();
+    a.session
+        .update_session(
+            &session.id,
+            SessionPatch {
+                name: Some("edit after lost acknowledgement".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let result = a
+        .sync
+        .sync_now()
+        .await
+        .expect("own echo must not permanently block pull");
+    assert_eq!(result.conflict_count, 1);
+    assert_eq!(result.pushed_count, 0);
+    let conflicts = a.sync.list_conflicts().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].record_id, session.id.as_str());
+    assert!(conflicts[0].has_local_snapshot);
+    a.sync
+        .resolve_conflict(&conflicts[0].id, SyncConflictChoice::Local)
+        .await
+        .unwrap();
+    assert_eq!(
+        a.session.get_session(&session.id).await.unwrap().name,
+        "edit after lost acknowledgement"
+    );
+    assert!(a.sync.list_conflicts().unwrap().is_empty());
+    assert_eq!(a.sync.sync_now().await.unwrap().pushed_count, 1);
+    let b = AppServices::new_in_memory().unwrap();
+    b.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    assert_eq!(
+        b.session.get_session(&session.id).await.unwrap().name,
+        "edit after lost acknowledgement"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn changed_conflicts_refresh_without_losing_the_original_local_snapshot() {
+    use openshell_app_core::sync_service::SyncConflictChoice;
+    let (url, _db, _dir, task) = server().await;
+    let a = AppServices::new_in_memory().unwrap();
+    a.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    let session = a
+        .session
+        .create_session(SessionInput {
+            name: Some("initial".into()),
+            host: Some("refresh.invalid".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    a.sync.sync_now().await.unwrap();
+    let b = AppServices::new_in_memory().unwrap();
+    b.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    for local_edit in [true, false] {
+        for (app, name) in [(&b, "original local"), (&a, "first remote")] {
+            app.session
+                .update_session(
+                    &session.id,
+                    SessionPatch {
+                        name: Some(name.into()),
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        a.sync.sync_now().await.unwrap();
+        assert_eq!(b.sync.sync_now().await.unwrap().conflict_count, 1);
+        let old = b.sync.list_conflicts().unwrap().remove(0);
+        let (editor, name) = if local_edit {
+            (&b, "later local")
+        } else {
+            (&a, "later remote")
+        };
+        editor
+            .session
+            .update_session(
+                &session.id,
+                SessionPatch {
+                    name: Some(name.into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        if !local_edit {
+            a.sync.sync_now().await.unwrap();
+        }
+        b.sync.sync_now().await.unwrap();
+        let latest = b
+            .sync
+            .list_conflicts()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id != old.id)
+            .expect("sync must refresh a changed conflict");
+        let old_snapshot: String = b
+            .store
+            .with_conn(|conn| {
+                conn.query_row(
+                    "SELECT local_snapshot_json FROM sync_conflict WHERE id=?1",
+                    [&old.id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| openshell_core_domain::DomainError::internal(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&old_snapshot).unwrap()["payload"]["name"],
+            "original local"
+        );
+        let choice = if local_edit {
+            SyncConflictChoice::Local
+        } else {
+            SyncConflictChoice::Remote
+        };
+        b.sync.resolve_conflict(&latest.id, choice).await.unwrap();
+        assert_eq!(b.session.get_session(&session.id).await.unwrap().name, name);
+        assert!(b.sync.list_conflicts().unwrap().is_empty());
+        b.sync.sync_now().await.unwrap();
+        a.sync.sync_now().await.unwrap();
+        assert_eq!(a.session.get_session(&session.id).await.unwrap().name, name);
+    }
     task.abort();
 }
 

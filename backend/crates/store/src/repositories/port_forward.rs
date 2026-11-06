@@ -23,6 +23,19 @@ impl PortForwardRepo {
     }
 }
 
+pub fn validate_password_reference(
+    conn: &rusqlite::Connection,
+    reference: Option<&str>,
+) -> DomainResult<()> {
+    if let Some(reference) = reference {
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM secret WHERE id=?1 AND record_type='socks_password' AND deleted_at IS NULL)", [reference], |r| r.get(0)).map_err(map_sql_error)?;
+        if !exists {
+            return Err(DomainError::validation("SOCKS 密码必须引用保险库秘密"));
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl PortForwardRepository for PortForwardRepo {
     async fn list(&self, session_id: Option<&SessionId>) -> DomainResult<Vec<PortForwardRule>> {
@@ -61,6 +74,9 @@ impl PortForwardRepository for PortForwardRepo {
     }
 
     async fn create(&self, input: PortForwardRuleInput) -> DomainResult<PortForwardRule> {
+        if input.socks_password.is_some() {
+            return Err(DomainError::validation("SOCKS 密码必须先写入保险库"));
+        }
         if input.name.trim().is_empty() {
             return Err(DomainError::validation("rule name cannot be empty"));
         }
@@ -81,6 +97,7 @@ impl PortForwardRepository for PortForwardRepo {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(map_sql_error)?;
 
+            validate_password_reference(&tx, input.socks_password_ref.as_deref())?;
             bump_sync(&tx, id.as_str(), "port_forward", None)?;
 
             tx.execute(
@@ -128,6 +145,7 @@ impl PortForwardRepository for PortForwardRepo {
                 reconnect_max,
                 socks_auth,
                 socks_username: input.socks_username,
+                has_socks_password: input.socks_password_ref.is_some(),
                 socks_password_ref: input.socks_password_ref,
                 expose_warning_ack,
                 sort_order,
@@ -148,6 +166,9 @@ impl PortForwardRepository for PortForwardRepo {
         id: &PortForwardId,
         input: PortForwardRuleInput,
     ) -> DomainResult<PortForwardRule> {
+        if input.socks_password.is_some() {
+            return Err(DomainError::validation("SOCKS 密码必须先写入保险库"));
+        }
         ensure_id::<PortForwardId>(id.as_str())?;
         if input.name.trim().is_empty() {
             return Err(DomainError::validation("rule name cannot be empty"));
@@ -168,6 +189,7 @@ impl PortForwardRepository for PortForwardRepo {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(map_sql_error)?;
 
+            validate_password_reference(&tx, input.socks_password_ref.as_deref())?;
             bump_sync(&tx, id.as_str(), "port_forward", None)?;
 
             let affected = tx.execute(
@@ -227,6 +249,7 @@ impl PortForwardRepository for PortForwardRepo {
                 reconnect_max,
                 socks_auth,
                 socks_username: input.socks_username,
+                has_socks_password: input.socks_password_ref.is_some(),
                 socks_password_ref: input.socks_password_ref,
                 expose_warning_ack,
                 sort_order,

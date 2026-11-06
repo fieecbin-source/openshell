@@ -32,6 +32,32 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (4, MIGRATION_004),
 ];
 
+#[cfg(test)]
+mod backup_retention_tests {
+    use super::*;
+
+    #[test]
+    fn migration_does_not_prune_twenty_setting_to_default_five() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("openshell.db");
+        let backups_dir = directory.path().join("backups");
+        let store = Store::open(&db_path).unwrap();
+        store.with_conn(|conn| {
+            conn.execute_batch(MIGRATION_001).map_err(map_sql_error)?;
+            conn.pragma_update(None, "user_version", 1).map_err(map_sql_error)?;
+            conn.execute("INSERT INTO setting(id,scope,key,value_json,value_type,updated_at) VALUES('retention','user','update.backup_keep','20','number',1)", []).map_err(map_sql_error)?;
+            Ok(())
+        }).unwrap();
+        for _ in 0..8 {
+            backup::create(&store, &backups_dir, "test", BackupReason::PreInstall).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        drop(store);
+        open_with_migration(&db_path, &MigrationOptions::new("test", &backups_dir)).unwrap();
+        assert_eq!(backup::list(&backups_dir).unwrap().len(), 9);
+    }
+}
+
 /// 测试注入点：命中该版本时在提交前抛错，用于验证回滚与快照恢复。0 表示不注入。
 static FAIL_MIGRATION_AT: AtomicU32 = AtomicU32::new(0);
 
@@ -138,10 +164,10 @@ pub fn open_with_migration(
             Err(err) => {
                 // 备份失败时宁可放弃这次升级，也不能在没有退路的情况下改用户数据。
                 return Err(DomainError::new(
-                    ErrorCode::Io,
+                    if err.code == ErrorCode::VaultLocked { ErrorCode::VaultLocked } else { ErrorCode::Io },
                     format!("failed to snapshot database before migration: {err}"),
                 )
-                .with_details(serde_json::json!({ "stage": "pre_migration_backup" })));
+                .with_details(serde_json::json!({ "stage": "pre_migration_backup", "requires_network_secret_migration": err.code == ErrorCode::VaultLocked })));
             }
         }
     } else {
@@ -151,7 +177,14 @@ pub fn open_with_migration(
     match store.run_migrations(from_version) {
         Ok(schema_version) => {
             if pre_migration_backup.is_some() {
-                let _ = backup::prune(&opts.backups_dir, opts.keep_backups);
+                match backup::retention_count(&store, opts.keep_backups) {
+                    Ok(keep) => {
+                        let _ = backup::prune(&opts.backups_dir, keep);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "backup retention unavailable; snapshots preserved")
+                    }
+                }
             }
             Ok((
                 store,

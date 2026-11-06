@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SyncSettingsModal } from "./SyncSettingsModal";
 
 const mock = vi.hoisted(() => ({
-  modalOpen: true, config: null, syncing: false, error: null,
-  setModalOpen: vi.fn(), loadConfig: vi.fn(), saveConfig: vi.fn(),
+  modalOpen: true, config: null as any, conflicts: [] as any[], resolvingConflictId: null as string | null, syncing: false, error: null,
+  setModalOpen: vi.fn(), loadConfig: vi.fn(), loadConflicts: vi.fn(), resolveConflict: vi.fn(), saveConfig: vi.fn(),
   register: vi.fn(), login: vi.fn(), logout: vi.fn(), clearLocalSyncData: vi.fn(),
   syncNow: vi.fn(), checkUpdates: vi.fn(),
 }));
@@ -17,7 +17,7 @@ describe("sync login privacy", () => {
   let container: HTMLDivElement;
   let root: Root;
   const render = () => act(() => root.render(<SyncSettingsModal />));
-  const input = (placeholder: string) => container.querySelector<HTMLInputElement>(`input[placeholder="${placeholder}"]`)!;
+  const input = (label: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
   const change = (field: HTMLInputElement, value: string) => act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
     field.dispatchEvent(new Event("input", { bubbles: true }));
@@ -37,28 +37,80 @@ describe("sync login privacy", () => {
   it("starts with empty server, username and password fields", () => {
     render();
     expect([...container.querySelectorAll("input")].every((field) => field.value === "")).toBe(true);
-    expect(input("请输入同步密码").getAttribute("autocomplete")).toBe("new-password");
+    expect(input("同步密码").getAttribute("autocomplete")).toBe("new-password");
   });
 
   it("forgets an entered password when the dialog is closed and reopened", () => {
     render();
-    change(input("请输入同步密码"), "test-only-password");
-    expect(input("请输入同步密码").value).toBe("test-only-password");
+    change(input("同步密码"), "test-only-password");
+    expect(input("同步密码").value).toBe("test-only-password");
     mock.modalOpen = false; render();
     mock.modalOpen = true; render();
-    expect(input("请输入同步密码").value).toBe("");
+    expect(input("同步密码").value).toBe("");
   });
 
   it("clears the password even when authentication fails", async () => {
     mock.login.mockRejectedValueOnce(new Error("test failure"));
     render();
-    change(input("http://1.2.3.4:8085 或 https://sync.example.com"), "https://sync.example.invalid");
-    change(input("admin 或自定义账号名"), "test-user");
-    change(input("请输入同步密码"), "test-only-password");
+    change(input("服务端地址"), "https://sync.example.invalid");
+    change(input("同步账号"), "test-user");
+    change(input("同步密码"), "test-only-password");
     await act(async () => {
       container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
     expect(mock.login).toHaveBeenCalledTimes(1);
-    expect(input("请输入同步密码").value).toBe("");
+    expect(input("同步密码").value).toBe("");
+  });
+
+  it("renders conflicts list and allows resolving conflict with local or remote choice", async () => {
+    mock.config = {
+      server_url: "https://sync.example.com",
+      account_id: "acc_1",
+      device_id: "dev_1",
+      auto_sync: true,
+      last_sync_at: 1700000000000,
+      last_error: null,
+      conflict_count: 1,
+      is_logged_in: true,
+    };
+    mock.conflicts = [
+      {
+        id: "conf_test_1",
+        record_id: "session_abc",
+        record_type: "session",
+        created_at: 1700000000000,
+        has_local_snapshot: true,
+      },
+    ];
+    mock.resolveConflict.mockResolvedValue(undefined);
+
+    render();
+
+    expect(container.textContent).toContain("待解决版本冲突");
+    expect(container.textContent).toContain("session : session_abc");
+
+    const localBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("保留本地副本")
+    );
+    const remoteBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("使用远端数据")
+    );
+
+    expect(localBtn).toBeTruthy();
+    expect(remoteBtn).toBeTruthy();
+
+    await act(async () => {
+      localBtn!.click();
+    });
+
+    expect(mock.resolveConflict).toHaveBeenCalledWith("conf_test_1", "local");
+    expect(container.textContent).toContain("已选择保留本地副本");
+
+    await act(async () => {
+      remoteBtn!.click();
+    });
+
+    expect(mock.resolveConflict).toHaveBeenCalledWith("conf_test_1", "remote");
+    expect(container.textContent).toContain("已选择使用远端数据");
   });
 });

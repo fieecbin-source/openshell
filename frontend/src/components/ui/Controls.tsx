@@ -7,12 +7,11 @@ export interface SwitchProps {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
-  hint?: ReactNode;
   disabled?: boolean;
   className?: string;
 }
 
-export function Switch({ checked, onChange, label, hint, disabled = false, className }: SwitchProps) {
+export function Switch({ checked, onChange, label, disabled = false, className }: SwitchProps) {
   const id = useId();
   return (
     <div className={cn("flex items-center justify-between gap-3", className)}>
@@ -20,7 +19,6 @@ export function Switch({ checked, onChange, label, hint, disabled = false, class
         <label htmlFor={id} className="block text-os-sm text-ink">
           {label}
         </label>
-        {hint !== undefined && <p className="mt-0.5 text-os-xs text-ink-tertiary">{hint}</p>}
       </div>
       <button
         id={id}

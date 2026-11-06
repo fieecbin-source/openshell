@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import type { Session } from "../types/ipc";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useSerialStore } from "../stores/serialStore";
@@ -32,6 +32,22 @@ export const TerminalHost: React.FC<TerminalHostProps> = ({
   const tabs = useTerminalStore((s) => s.tabs);
   const activeTabId = useTerminalStore((s) => s.activeTabId);
   const viewMode = useSerialStore((s) => s.viewMode);
+  const sendError = useSerialStore((s) => s.sendError);
+  const clearSendError = useSerialStore((s) => s.clearSendError);
+
+  // 串口写入失败不能只停留在 toast：把对应标签标记为断开并触发现有自动重连。
+  useEffect(() => {
+    if (!sendError) return;
+    const tab = useTerminalStore
+      .getState()
+      .tabs.find((item) => (item.cardId || item.tabId) === sendError.cardId);
+    if (tab && tab.status === "connected") {
+      useTerminalStore
+        .getState()
+        .markDisconnected(tab.tabId, `串口发送失败：${sendError.message}`);
+    }
+    clearSendError();
+  }, [sendError, clearSendError]);
 
   return (
     <div
@@ -69,7 +85,7 @@ export const TerminalHost: React.FC<TerminalHostProps> = ({
                     </div>
                   )}
                 </div>
-                <SerialSendBar cardId={tab.cardId || tab.tabId} />
+                <SerialSendBar cardId={tab.cardId || tab.tabId} sessionId={tab.sessionId} />
               </>
             ) : (
               <XtermView tab={tab} visible={slotVisible} />

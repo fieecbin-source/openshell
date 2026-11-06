@@ -3867,6 +3867,7 @@ dependencies = [
  "async-trait",
  "openshell-core-domain",
  "openshell-ssh",
+ "russh",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

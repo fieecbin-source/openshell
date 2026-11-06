@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { useMonitorStore } from "../stores/monitorStore";
+import { isFieldUnavailable, isMetricsStale, readAvailableMetric, useMonitorStore } from "../stores/monitorStore";
 import type { ProcessMetrics } from "../types/ipc";
 import { formatFriendlyError } from "../lib/errors";
+import { cn } from "./ui/cn";
 
 /** 与工作区共享浅色玻璃材质和语义状态色。 */
 const C = {
@@ -34,7 +35,36 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
     filterProcess,
     setFilterProcess,
     error,
+    latestError,
+    latestFailedAt,
   } = useMonitorStore();
+
+  // 只有「有快照、未过期、未失败」才能当实时值展示；合法 0 仍然保留，不伪造占位
+  const stale = latest ? isMetricsStale(latest) : false;
+  const liveMetrics = latest && !stale ? latest : null;
+  const staleSeconds =
+    latest && Number.isFinite(latest.timestamp_ms)
+      ? Math.max(0, Math.round((Date.now() - latest.timestamp_ms) / 1000))
+      : null;
+  const statusState = latestError ? "error" : !latest ? "waiting" : stale ? "stale" : "live";
+
+  // 后端把首采样缺失的字段列进 unavailable_fields：显示“不可用”，绝不渲染伪 0；
+  // 合法 0 仍返回 0 并按正常数值展示。
+  const unavailableText = "不可用";
+  const cpuValue = readAvailableMetric(liveMetrics, "cpu_percent");
+  const netRxBps = readAvailableMetric(liveMetrics, "net_rx_bps");
+  const netTxBps = readAvailableMetric(liveMetrics, "net_tx_bps");
+  const memCachedBytes = readAvailableMetric(liveMetrics, "memory_cached_bytes");
+  const coresUnavailable = isFieldUnavailable(liveMetrics, "cpu_cores");
+  const processesUnavailable = isFieldUnavailable(liveMetrics, "top_processes");
+  const loadUnavailable = isFieldUnavailable(liveMetrics, "load_1");
+  const displayMetric = (
+    value: number | null,
+    format: (input: number) => string
+  ): string => {
+    if (value === null) return liveMetrics ? unavailableText : "-";
+    return format(value);
+  };
 
   const [killModal, setKillModal] = useState<ProcessMetrics | null>(null);
   const [killSignal, setKillSignal] = useState<number>(15);
@@ -88,7 +118,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
     return `${mins}分钟`;
   };
 
-  const filteredProcesses = (latest?.top_processes || []).filter((p) => {
+  const filteredProcesses = (liveMetrics?.top_processes || []).filter((p) => {
     if (!filterProcess) return true;
     const q = filterProcess.toLowerCase();
     return (
@@ -131,23 +161,51 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
     );
   };
 
-  const cpuHistory = history.map((h) => h.cpu_percent);
-  const memHistory = history.map((h) =>
-    h.memory_total_bytes > 0
-      ? (h.memory_used_bytes / h.memory_total_bytes) * 100
-      : 0
-  );
+  const cpuHistory = history
+    .filter((h) => !isFieldUnavailable(h, "cpu_percent"))
+    .map((h) => h.cpu_percent);
+  const memHistory = history
+    .filter(
+      (h) =>
+        !isFieldUnavailable(h, "memory_used_bytes") &&
+        !isFieldUnavailable(h, "memory_total_bytes") &&
+        h.memory_total_bytes > 0
+    )
+    .map((h) => (h.memory_used_bytes / h.memory_total_bytes) * 100);
 
   return (
     <div className={`absolute inset-0 z-40 flex flex-col overflow-hidden ${C.page} ${C.ink}`}>
       {/* 顶部标题栏 */}
       <div className={`h-14 shrink-0 px-6 flex items-center justify-between ${C.header}`}>
         <div className="flex items-center gap-3 min-w-0">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <span
+            className={cn(
+              "w-2.5 h-2.5 rounded-full shrink-0",
+              statusState === "live"
+                ? "bg-emerald-400 animate-pulse"
+                : statusState === "error"
+                  ? "bg-red-400"
+                  : "bg-amber-400"
+            )}
+          />
           <h3 className="text-sm font-bold text-ink whitespace-nowrap">服务器实时监控</h3>
-          {latest && (
+          {statusState === "live" && (
+            <span className="text-[10px] font-mono text-state-success">实时</span>
+          )}
+          {statusState === "waiting" && (
+            <span className="text-[10px] font-mono text-ink-secondary">等待首次采样</span>
+          )}
+          {statusState === "stale" && (
+            <span className="text-[10px] font-mono text-state-warning">
+              数据已过期{staleSeconds !== null ? `（最后采样 ${staleSeconds} 秒前）` : ""}
+            </span>
+          )}
+          {statusState === "error" && (
+            <span className="text-[10px] font-mono text-state-danger">采集失败</span>
+          )}
+          {liveMetrics && (
             <span className={`text-xs ${C.inkDim} font-mono bg-line/5 border border-line/10 px-2 py-0.5 rounded-md whitespace-nowrap`}>
-              运行时长 {formatUptime(latest.uptime_seconds)}
+              运行时长 {formatUptime(liveMetrics.uptime_seconds)}
             </span>
           )}
         </div>
@@ -177,6 +235,19 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
             <span>{error}</span>
           </div>
         )}
+        {latestError && (
+          <div
+            role="alert"
+            className="p-3 bg-amber-500/10 border border-amber-400/40 rounded-xl text-xs text-state-warning flex items-center gap-2"
+          >
+            <span>⚠️</span>
+            <span>
+              采集失败：{latestError}
+              {latestFailedAt ? `（${new Date(latestFailedAt).toLocaleTimeString()}）` : ""}
+              {latest ? "，当前展示的数值已过期，不代表实时状态。" : ""}
+            </span>
+          </div>
+        )}
 
         {/* 指标卡片网格 */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -185,17 +256,21 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-medium ${C.inkDim}`}>CPU 使用率</span>
               <span className="text-lg font-bold text-state-success font-mono">
-                {latest ? `${Number(latest.cpu_percent || 0).toFixed(1)}%` : "-"}
+                {displayMetric(cpuValue, (value) => `${value.toFixed(1)}%`)}
               </span>
             </div>
             {renderHistoryChart(cpuHistory, "#34d399")}
-            {latest?.cpu_cores && latest.cpu_cores.length > 0 && (
+            {coresUnavailable ? (
+              <div className={`mt-3 pt-3 border-t border-line/10 text-[10px] ${C.inkFaint}`}>
+                核心负载{unavailableText}
+              </div>
+            ) : liveMetrics?.cpu_cores && liveMetrics.cpu_cores.length > 0 && (
               <div className="mt-3 pt-3 border-t border-line/10">
                 <div className={`text-[10px] ${C.inkFaint} mb-1.5`}>
-                  {latest.cpu_cores.length} 核心负载
+                  {liveMetrics.cpu_cores.length} 核心负载
                 </div>
                 <div className="grid grid-cols-4 gap-1.5">
-                  {latest.cpu_cores.slice(0, 8).map((core, idx) => (
+                  {liveMetrics.cpu_cores.slice(0, 8).map((core, idx) => (
                     <div key={idx} className={`${C.sub} rounded p-1 text-center`}>
                       <div className={`text-[9px] ${C.inkFaint} font-mono`}>C{idx}</div>
                       <div className={`text-[10px] font-mono ${C.ink}`}>
@@ -213,25 +288,31 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-medium ${C.inkDim}`}>物理内存</span>
               <span className="text-lg font-bold text-accent font-mono">
-                {latest && latest.memory_total_bytes > 0
-                  ? `${((latest.memory_used_bytes / latest.memory_total_bytes) * 100).toFixed(1)}%`
+                {liveMetrics && liveMetrics.memory_total_bytes > 0
+                  ? `${((liveMetrics.memory_used_bytes / liveMetrics.memory_total_bytes) * 100).toFixed(1)}%`
                   : "-"}
               </span>
             </div>
             {renderHistoryChart(memHistory, "#60a5fa")}
-            {latest && (
+            {liveMetrics && (
               <div className="mt-3 pt-3 border-t border-line/10 text-xs space-y-1">
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>已用</span>
-                  <span className={`font-mono ${C.ink}`}>{formatBytes(latest.memory_used_bytes)}</span>
+                  <span className={`font-mono ${C.ink}`}>{formatBytes(liveMetrics.memory_used_bytes)}</span>
                 </div>
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>缓存</span>
-                  <span className={`font-mono ${C.ink}`}>{formatBytes(latest.memory_cached_bytes)}</span>
+                  <span className={`font-mono ${C.ink}`}>
+                    {memCachedBytes === null
+                      ? liveMetrics
+                        ? unavailableText
+                        : "-"
+                      : formatBytes(memCachedBytes)}
+                  </span>
                 </div>
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>总计</span>
-                  <span className={`font-mono ${C.ink}`}>{formatBytes(latest.memory_total_bytes)}</span>
+                  <span className={`font-mono ${C.ink}`}>{formatBytes(liveMetrics.memory_total_bytes)}</span>
                 </div>
               </div>
             )}
@@ -241,18 +322,20 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
           <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-medium ${C.inkDim}`}>网络吞吐</span>
-              <span className={`text-[10px] ${C.inkFaint} font-mono`}>实时</span>
+              <span className={`text-[10px] ${C.inkFaint} font-mono`}>
+                {statusState === "live" ? "实时" : statusState === "stale" ? "已过期" : "无数据"}
+              </span>
             </div>
             <div className="space-y-3 py-2">
               <div>
                 <div className="flex justify-between text-[11px] mb-1">
                   <span className={C.inkDim}>接收 RX</span>
                   <span className="font-mono text-state-success font-semibold">
-                    {latest ? formatBps(latest.net_rx_bps) : "-"}
+                    {displayMetric(netRxBps, formatBps)}
                   </span>
                 </div>
                 <div className={`text-[10px] ${C.inkFaint} font-mono text-right`}>
-                  累计 {latest ? formatBytes(latest.net_rx_total) : "-"}
+                  累计 {liveMetrics ? formatBytes(liveMetrics.net_rx_total) : "-"}
                 </div>
               </div>
 
@@ -260,11 +343,11 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 <div className="flex justify-between text-[11px] mb-1">
                   <span className={C.inkDim}>发送 TX</span>
                   <span className="font-mono text-accent font-semibold">
-                    {latest ? formatBps(latest.net_tx_bps) : "-"}
+                    {displayMetric(netTxBps, formatBps)}
                   </span>
                 </div>
                 <div className={`text-[10px] ${C.inkFaint} font-mono text-right`}>
-                  累计 {latest ? formatBytes(latest.net_tx_total) : "-"}
+                  累计 {liveMetrics ? formatBytes(liveMetrics.net_tx_total) : "-"}
                 </div>
               </div>
             </div>
@@ -276,17 +359,17 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               <span className={`text-xs font-medium ${C.inkDim}`}>平均负载</span>
               <span className={`text-[10px] ${C.inkFaint} font-mono`}>1 / 5 / 15m</span>
             </div>
-            {latest && (
+            {liveMetrics && (
               <div className="grid grid-cols-3 gap-2 py-4">
                 {[
-                  { label: "1 分钟", value: latest.load_1 },
-                  { label: "5 分钟", value: latest.load_5 },
-                  { label: "15 分钟", value: latest.load_15 },
+                  { label: "1 分钟", value: loadUnavailable ? null : liveMetrics.load_1 },
+                  { label: "5 分钟", value: loadUnavailable ? null : liveMetrics.load_5 },
+                  { label: "15 分钟", value: loadUnavailable ? null : liveMetrics.load_15 },
                 ].map((item) => (
                   <div key={item.label} className={`${C.sub} rounded-lg p-2 text-center`}>
                     <div className={`text-[10px] ${C.inkFaint}`}>{item.label}</div>
                     <div className="text-base font-bold text-ink font-mono mt-0.5">
-                      {Number(item.value || 0).toFixed(2)}
+                      {item.value === null ? unavailableText : Number(item.value || 0).toFixed(2)}
                     </div>
                   </div>
                 ))}
@@ -296,7 +379,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         </div>
 
         {/* 磁盘挂载点使用情况 */}
-        {latest?.disk_mounts && latest.disk_mounts.length > 0 && (
+        {liveMetrics?.disk_mounts && liveMetrics.disk_mounts.length > 0 && (
           <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>
             <h4 className={`text-xs font-bold ${C.ink} mb-3 flex items-center gap-1.5`}>
               <svg className="w-4 h-4 text-state-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -305,7 +388,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               <span>磁盘存储分区</span>
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {latest.disk_mounts.map((mount, idx) => {
+              {liveMetrics.disk_mounts.map((mount, idx) => {
                 const usePct = Math.min(100, Number(mount.use_percent || 0));
                 return (
                   <div key={`${mount.mount_point || idx}`} className={`${C.sub} rounded-lg p-3`}>
@@ -346,14 +429,14 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
             <div className="flex items-center gap-2">
               <h4 className={`text-xs font-bold ${C.ink}`}>Top 活跃进程</h4>
               <span className={`text-[10px] ${C.inkFaint} font-mono`}>
-                共 {filteredProcesses.length} 个
+                共 {processesUnavailable ? unavailableText : filteredProcesses.length} 个
               </span>
             </div>
 
             <div className="w-full sm:w-64">
               <input
                 type="text"
-                placeholder="搜索进程名 / 用户 / PID..."
+                aria-label="搜索进程"
                 value={filterProcess}
                 onChange={(e) => setFilterProcess(e.target.value)}
                 className={`w-full px-3 py-1.5 ${C.sub} rounded-lg text-xs text-ink placeholder-[#6f829e] outline-none focus:border-emerald-400/70`}
@@ -377,7 +460,15 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 {filteredProcesses.length === 0 ? (
                   <tr>
                     <td colSpan={6} className={`py-8 text-center ${C.inkDim} font-sans`}>
-                      未找到匹配进程
+                      {processesUnavailable
+                        ? "进程数据不可用（远端未返回本次采样）"
+                        : statusState === "live"
+                          ? "未找到匹配进程"
+                          : statusState === "error"
+                            ? "采集失败，无法展示进程列表"
+                            : statusState === "stale"
+                              ? "数据已过期，请等待下一次采集"
+                              : "等待首次采样"}
                     </td>
                   </tr>
                 ) : (

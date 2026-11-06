@@ -18,10 +18,16 @@ export interface ProxyServerConfig {
   host: string;
   port: number;
   username?: string | null;
-  password?: string | null;
+  password_ref?: string | null;
+  has_password?: boolean;
   notes?: string | null;
   created_at?: number;
   updated_at?: number;
+}
+
+export interface ProxyServerInput extends ProxyServerConfig {
+  password?: string | null;
+  clear_password?: boolean;
 }
 
 export interface ProxyTestResult {
@@ -48,11 +54,28 @@ export interface RdpProtocolOptions {
 }
 
 export interface RdpLaunchResult {
+  launch_id: string;
   session_id: string;
   rdp_file_path: string;
   pid: number | null;
   host: string;
   port: number;
+}
+
+export interface RdpRuntimeStatus {
+  launch_id: string;
+  session_id: string;
+  state: "starting" | "launched" | "connected" | "disconnected" | "failed" | "closed";
+  error: string | null;
+  exit_code: number | null;
+}
+
+export interface SyncConflict {
+  id: string;
+  record_id: string;
+  record_type: string;
+  created_at: number;
+  has_local_snapshot: boolean;
 }
 
 export type LocalShellKind = "powershell" | "pwsh" | "cmd" | "wsl" | "bash" | "zsh" | "custom";
@@ -89,6 +112,7 @@ export interface SshProtocolOptions {
  * error        连接失败（凭据、网络、主机密钥等）
  */
 export type TabStatus =
+  | "launched"
   | "connecting"
   | "connected"
   | "reconnecting"
@@ -291,7 +315,7 @@ export interface SftpFileEntry {
 }
 
 export type TransferDirection = "upload" | "download";
-export type TransferState = "queued" | "transferring" | "paused" | "completed" | "failed" | "cancelled";
+export type TransferState = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
 export interface TransferTask {
   id: string;
@@ -351,6 +375,7 @@ export interface HostMetrics {
   disk_mounts: DiskMountMetrics[];
   top_processes: ProcessMetrics[];
   uptime_seconds: number;
+  unavailable_fields?: string[];
 }
 
 // ==========================================
@@ -358,7 +383,7 @@ export interface HostMetrics {
 // ==========================================
 
 export type PortForwardType = "local" | "remote" | "dynamic";
-export type SocksAuth = "none" | "user_pass";
+export type SocksAuth = "none" | "userpass";
 
 export interface PortForwardRule {
   id: string;
@@ -375,6 +400,7 @@ export interface PortForwardRule {
   socks_auth: SocksAuth;
   socks_username: string | null;
   socks_password_ref: string | null;
+  has_socks_password?: boolean;
   expose_warning_ack: boolean;
   sort_order: number;
   created_at: number;
@@ -396,6 +422,8 @@ export interface PortForwardRuleInput {
   socks_auth?: SocksAuth;
   socks_username?: string | null;
   socks_password_ref?: string | null;
+  socks_password?: string | null;
+  socks_clear_password?: boolean;
   expose_warning_ack?: boolean;
   sort_order?: number;
 }
@@ -409,7 +437,7 @@ export type ForwardStatus =
 // Snippets & Quick Commands
 // ==========================================
 
-export type SnippetKind = "command" | "macro";
+export type SnippetKind = "snippet" | "macro";
 export type SendMode = "insert" | "execute";
 
 export interface Snippet {
@@ -417,8 +445,10 @@ export interface Snippet {
   group_id: string | null;
   name: string;
   kind: SnippetKind;
-  command_template: string;
-  description: string | null;
+  body: string | null;
+  variables_json?: unknown;
+  macro_steps_json?: unknown;
+  tags_json?: unknown;
   shortcut: string | null;
   send_mode: SendMode;
   sort_order: number;
@@ -431,8 +461,10 @@ export interface SnippetInput {
   group_id?: string | null;
   name: string;
   kind?: SnippetKind;
-  command_template: string;
-  description?: string | null;
+  body?: string | null;
+  variables_json?: unknown;
+  macro_steps_json?: unknown;
+  tags_json?: unknown;
   shortcut?: string | null;
   send_mode?: SendMode;
   sort_order?: number;
@@ -458,6 +490,7 @@ export interface ImportPreviewReport {
   skip_count: number;
   warnings: string[];
   candidates: ImportCandidate[];
+  archive_token?: string;
 }
 
 // ==========================================

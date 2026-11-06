@@ -170,7 +170,7 @@ impl SecretRepo {
 }
 
 /// 事务内插入秘密行，不更新 `sync_record`。
-pub(crate) fn insert_secret_row(tx: &Transaction<'_>, secret: &SecretRecord) -> DomainResult<()> {
+pub fn insert_secret_row(tx: &Transaction<'_>, secret: &SecretRecord) -> DomainResult<()> {
     tx.execute(
         "INSERT INTO secret(id, record_type, ciphertext, nonce, aad, crypto_suite, key_version, \
          created_at, updated_at, deleted_at, version, origin_device_id, dirty) \

@@ -8,6 +8,7 @@ import { RemoteEditorModal } from "./RemoteEditorModal";
 import { localFsHome, sftpWriteFile } from "../lib/ipc";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { DirectoryIcon } from "./ui/DirectoryIcon";
+import { Field } from "./ui/Field";
 import { BoxIcon, FileIcon, LinkIcon, FolderPlusIcon, PlusIcon, EyeIcon, EyeOffIcon, PencilIcon, TrashIcon, LockIcon, InfoIcon, UploadIcon, DownloadIcon, RefreshIcon } from "./ui/icons";
 
 interface SftpViewProps {
@@ -285,7 +286,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
     }
     const targets = entry ? [entry] : visibleFiles.filter((f) => selectedPaths.includes(f.path));
     for (const t of targets) {
-      await downloadFile(connId, sessionId, t.path, destDir, true);
+      await downloadFile(connId, sessionId, t.path, destDir, false);
     }
   };
 
@@ -306,7 +307,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
   const uploadFileObject = async (file: File) => {
     const systemPath = (file as any).path as string | undefined;
     if (systemPath) {
-      await uploadFile(connId, sessionId, systemPath, remotePath, true);
+      await uploadFile(connId, sessionId, systemPath, remotePath, false);
       return;
     }
     const buffer = await file.arrayBuffer();
@@ -346,7 +347,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
         if (paths.length === 0) return;
         try {
           for (const path of paths) {
-            await uploadFile(connId, sessionId, path, remotePath, true);
+            await uploadFile(connId, sessionId, path, remotePath, false);
           }
           await refreshRemote(connId);
         } catch (err) {
@@ -537,7 +538,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                   onChange={(e) => setPathInputValue(e.target.value)}
                   onBlur={() => setIsEditingPath(false)}
                   className="w-full rounded-lg border border-accent/30 bg-surface-muted px-3 py-1 text-xs text-ink outline-none font-mono"
-                  placeholder="输入绝对路径 (回车跳转, Esc 取消)"
+                  aria-label="远程路径"
                 />
               </form>
             ) : (
@@ -613,7 +614,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
               <span>传输</span>
               {transfers.length > 0 && (
                 <span className="rounded-full bg-state-success/100/20 text-state-success border border-state-success/30 px-1.5 text-[10px] font-mono">
-                  {transfers.filter((t) => t.state === "transferring" || t.state === "queued").length}
+                  {transfers.filter((t) => t.state === "running" || t.state === "queued").length}
                 </span>
               )}
             </button>
@@ -628,7 +629,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
                 type="text"
                 value={filterQuery}
                 onChange={(e) => setFilterQuery(e.target.value)}
-                placeholder="过滤当前目录文件名..."
+                aria-label="过滤文件"
                 className="w-full rounded-md border border-line/15 bg-surface-muted px-2.5 py-1 text-xs text-ink placeholder-ink-tertiary outline-none focus:border-accent/30"
               />
               {filterQuery && (
@@ -974,21 +975,25 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4">
           <div className="w-80 rounded-xl border border-line/15 bg-surface-muted p-4 shadow-2xl">
             <h4 className="text-xs font-bold text-ink mb-2">新建远程文件夹</h4>
-            <input
-              type="text"
-              autoFocus
-              placeholder="文件夹名称"
-              value={newDirName}
-              onChange={(e) => setNewDirName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newDirName.trim()) {
-                  createRemoteDir(connId, newDirName.trim());
-                  setNewDirModalOpen(false);
-                }
-                if (e.key === "Escape") setNewDirModalOpen(false);
-              }}
-              className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
-            />
+            <Field label="名称" htmlFor="sftp-new-directory" required value={newDirName}>
+              <input
+                id="sftp-new-directory"
+                aria-required="true"
+                type="text"
+                autoFocus
+                aria-label="文件夹名称"
+                value={newDirName}
+                onChange={(e) => setNewDirName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newDirName.trim()) {
+                    createRemoteDir(connId, newDirName.trim());
+                    setNewDirModalOpen(false);
+                  }
+                  if (e.key === "Escape") setNewDirModalOpen(false);
+                }}
+                className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
+              />
+            </Field>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setNewDirModalOpen(false)}
@@ -1018,21 +1023,25 @@ export const SftpView: React.FC<SftpViewProps> = ({ connId, sessionId }) => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4">
           <div className="w-80 rounded-xl border border-line/15 bg-surface-muted p-4 shadow-2xl">
             <h4 className="text-xs font-bold text-ink mb-2">新建空白文件</h4>
-            <input
-              type="text"
-              autoFocus
-              placeholder="文件名称 (如 script.sh)"
-              value={newFileName}
-              onChange={(e) => setNewFileName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newFileName.trim()) {
-                  createRemoteFile(connId, newFileName.trim());
-                  setNewFileModalOpen(false);
-                }
-                if (e.key === "Escape") setNewFileModalOpen(false);
-              }}
-              className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
-            />
+            <Field label="名称" htmlFor="sftp-new-file" required value={newFileName}>
+              <input
+                id="sftp-new-file"
+                aria-required="true"
+                type="text"
+                autoFocus
+                aria-label="文件名称"
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newFileName.trim()) {
+                    createRemoteFile(connId, newFileName.trim());
+                    setNewFileModalOpen(false);
+                  }
+                  if (e.key === "Escape") setNewFileModalOpen(false);
+                }}
+                className="w-full px-2.5 py-1.5 bg-surface-muted border border-line/15 rounded text-xs text-ink mb-3 outline-none focus:border-accent/30 font-mono"
+              />
+            </Field>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setNewFileModalOpen(false)}

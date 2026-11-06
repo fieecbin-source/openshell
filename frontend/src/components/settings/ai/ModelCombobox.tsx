@@ -48,8 +48,6 @@ export function ModelCombobox({ models, value, onChange, disabled = false }: Mod
       ?.scrollIntoView({ block: "nearest" });
   }, [highlight, open]);
 
-  const isPreset = models.some((model) => model.id === value);
-
   const commit = (modelId: string) => {
     onChange(modelId);
     setQuery("");
@@ -61,10 +59,11 @@ export function ModelCombobox({ models, value, onChange, disabled = false }: Mod
     return (
       <Input
         mono
+        aria-required="true"
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="输入模型标识，例如 gpt-4o-mini"
+          aria-label="模型"
       />
     );
   }
@@ -75,10 +74,10 @@ export function ModelCombobox({ models, value, onChange, disabled = false }: Mod
         <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-tertiary" />
         <Input
           className="pl-8"
+          aria-required="true"
           mono
           disabled={disabled}
           value={open ? query : value}
-          placeholder={value || "搜索预设模型，或直接输入模型 ID"}
           aria-label="模型"
           aria-expanded={open}
           role="combobox"
@@ -108,11 +107,7 @@ export function ModelCombobox({ models, value, onChange, disabled = false }: Mod
         />
       </div>
 
-      <p className="mt-1 text-os-2xs text-ink-tertiary">
-        当前模型 ID：
-        <span className="ml-1 font-mono text-ink-secondary">{value || "未选择"}</span>
-        {value && !isPreset && <span className="ml-1.5 text-accent">自定义</span>}
-      </p>
+
 
       {open && (
         <div

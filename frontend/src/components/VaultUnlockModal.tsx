@@ -41,7 +41,6 @@ export const VaultUnlockModal: React.FC = () => {
       open
       onClose={() => undefined}
       title="解锁 OpenShell 保险库"
-      description="请输入你为本机设置的主密码。"
       widthClassName="w-full max-w-[420px]"
       overlayZClassName="z-[70]"
       footer={
@@ -51,14 +50,13 @@ export const VaultUnlockModal: React.FC = () => {
       }
     >
       <form id="vault-unlock-form" onSubmit={handleSubmit} className="flex flex-col gap-3.5" autoComplete="off">
-        <Field label="主密码" htmlFor="vault-master-password">
+        <Field label="主密码" htmlFor="vault-master-password" required value={password}>
           <Input
             id="vault-master-password"
             type="password"
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="输入应用主密码"
             autoFocus
           />
         </Field>

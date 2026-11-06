@@ -6,7 +6,7 @@ import { Badge, EmptyState } from "./ui/Surface";
 import { Drawer } from "./ui/Overlay";
 import { InlineNotice } from "./ui/Notice";
 import { cn } from "./ui/cn";
-import { DownloadIcon, PauseIcon, StopIcon, UploadIcon } from "./ui/icons";
+import { DownloadIcon, PauseIcon, PlayIcon, StopIcon, UploadIcon } from "./ui/icons";
 
 export const TransferQueueDrawer: React.FC = () => {
   const {
@@ -14,6 +14,7 @@ export const TransferQueueDrawer: React.FC = () => {
     transferQueueOpen,
     setTransferQueueOpen,
     pauseTransfer,
+    resumeTransfer,
     cancelTransfer,
     pollTransfers,
   } = useSftpStore();
@@ -41,7 +42,8 @@ export const TransferQueueDrawer: React.FC = () => {
   };
 
   const getStatusBadge = (t: TransferTask) => {
-    switch (t.state) {
+    switch (t.state as string) {
+      case "running":
       case "transferring":
         return <Badge tone="accent">传输中</Badge>;
       case "queued":
@@ -60,7 +62,7 @@ export const TransferQueueDrawer: React.FC = () => {
   };
 
   const activeCount = transfers.filter(
-    (t) => t.state === "transferring" || t.state === "queued",
+    (t) => t.state === "running" || t.state === "queued",
   ).length;
 
   return (
@@ -68,7 +70,6 @@ export const TransferQueueDrawer: React.FC = () => {
       open={transferQueueOpen}
       onClose={() => setTransferQueueOpen(false)}
       title="传输队列"
-      description={transfers.length > 0 ? `共 ${transfers.length} 个任务` : "尚无任务"}
       widthClassName="w-[380px]"
       footer={
         <Button variant="secondary" size="sm" onClick={() => setTransferQueueOpen(false)}>
@@ -82,7 +83,6 @@ export const TransferQueueDrawer: React.FC = () => {
             className="py-16"
             icon={<UploadIcon className="h-8 w-8" />}
             title="暂无传输任务"
-            description="上传或下载文件后，任务进度会显示在这里。"
           />
         ) : (
           <div className="space-y-2">
@@ -138,7 +138,7 @@ export const TransferQueueDrawer: React.FC = () => {
                       {formatBytes(t.transferred_bytes)} / {formatBytes(t.total_bytes)}（{percent}%）
                     </span>
                     <span className="tabular-nums">
-                      {t.state === "transferring" ? formatSpeed(t.speed_bps) : ""}
+                      {t.state === "running" ? formatSpeed(t.speed_bps) : ""}
                     </span>
                   </div>
 
@@ -148,9 +148,9 @@ export const TransferQueueDrawer: React.FC = () => {
                     </InlineNotice>
                   )}
 
-                  {(t.state === "transferring" || t.state === "queued" || t.state === "paused") && (
+                  {(t.state === "running" || t.state === "queued" || t.state === "paused") && (
                     <div className="mt-2 flex items-center justify-end gap-1.5">
-                      {(t.state === "transferring" || t.state === "queued") && (
+                      {(t.state === "running" || t.state === "queued") && (
                         <Button
                           variant="secondary"
                           size="sm"
@@ -159,6 +159,17 @@ export const TransferQueueDrawer: React.FC = () => {
                           onClick={() => pauseTransfer(t.id)}
                         >
                           暂停
+                        </Button>
+                      )}
+                      {t.state === "paused" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-[24px] px-2 text-os-2xs"
+                          leading={<PlayIcon className="h-3 w-3" />}
+                          onClick={() => resumeTransfer(t.id)}
+                        >
+                          恢复
                         </Button>
                       )}
                       <Button

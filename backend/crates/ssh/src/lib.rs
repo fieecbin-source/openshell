@@ -1,5 +1,6 @@
 //! OpenShell SSH 适配层：russh 连接、认证、跳板、保活、通道。
 
+mod agent;
 pub mod connection;
 pub mod errors;
 pub mod handler;
@@ -8,6 +9,7 @@ pub mod manager;
 pub mod proxy;
 pub use proxy::connect_tcp_via_proxy;
 pub mod stream;
+pub mod x11;
 
 pub use base64;
 pub use connection::{ConnectOptions, SshConnection};

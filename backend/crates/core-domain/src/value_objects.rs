@@ -322,8 +322,12 @@ pub struct ProxyServerConfig {
     pub port: u16,
     #[serde(default)]
     pub username: Option<String>,
-    #[serde(default)]
+    #[serde(skip)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub password_ref: Option<String>,
+    #[serde(default)]
+    pub has_password: bool,
     #[serde(default)]
     pub notes: Option<String>,
     #[serde(default)]
@@ -339,9 +343,30 @@ pub struct ProxyTestResult {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct ProxyServerInput {
+    #[serde(flatten)]
+    pub config: ProxyServerConfig,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub clear_password: bool,
+}
+
 #[cfg(test)]
 mod task1_tests {
     use super::*;
+
+    #[test]
+    fn proxy_password_is_never_serialized() {
+        let proxy: ProxyServerConfig = serde_json::from_value(serde_json::json!({
+            "id":"test", "name":"test", "proxy_type":"socks5", "host":"localhost",
+            "port":1080, "password":"synthetic-secret-must-not-leak"
+        }))
+        .unwrap();
+        let value = serde_json::to_value(proxy).unwrap();
+        assert!(value.get("password").is_none());
+    }
 
     #[test]
     fn rdp_wire_value_and_aliases() {

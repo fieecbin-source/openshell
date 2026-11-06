@@ -121,6 +121,26 @@ describe("shell and terminal appearance isolation", () => {
     expect(useSettingsStore.getState().fontSize).toBe(15);
   });
 
+  it("keeps explicitly saved theme, font size and opacity across reloads", async () => {
+    const values = new Map<string, unknown>([
+      ["terminal.theme", "github_light"],
+      ["terminal.font_size", 16],
+      ["terminal.background_opacity", 35],
+    ]);
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const data = args as { key: string; value: unknown };
+      if (command === "settings_set") { values.set(data.key, data.value); return null; }
+      return values.has(data.key) ? { value_json: values.get(data.key) } : null;
+    });
+
+    await useSettingsStore.getState().loadSettings();
+
+    const store = useSettingsStore.getState();
+    expect(store.theme).toBe("github_light");
+    expect(store.fontSize).toBe(16);
+    expect(store.backgroundOpacity).toBe(35);
+  });
+
   it("uses a regular monospace default and preserves an explicitly chosen font", async () => {
     await useSettingsStore.getState().loadSettings();
     expect(useSettingsStore.getState().fontFamily).toContain("Cascadia Code");

@@ -34,6 +34,22 @@ pub struct SyncResult {
     pub head_seq: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConflict {
+    pub id: String,
+    pub record_id: String,
+    pub record_type: String,
+    pub created_at: i64,
+    pub has_local_snapshot: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncConflictChoice {
+    Local,
+    Remote,
+}
+
 pub struct SyncService {
     store: Store,
     vault_manager: Arc<VaultManager>,
@@ -44,6 +60,37 @@ pub struct SyncService {
 }
 
 impl SyncService {
+    pub fn list_conflicts(&self) -> DomainResult<Vec<SyncConflict>> {
+        self.store.with_conn(|conn| {
+            let mut statement = conn.prepare("SELECT id,record_id,record_type,created_at,local_snapshot_json IS NOT NULL FROM sync_conflict WHERE resolved_at IS NULL ORDER BY created_at DESC,id DESC").map_err(|e| DomainError::internal(e.to_string()))?;
+            let rows = statement.query_map([], |r| Ok(SyncConflict { id:r.get(0)?, record_id:r.get(1)?, record_type:r.get(2)?, created_at:r.get(3)?, has_local_snapshot:r.get(4)? })).map_err(|e| DomainError::internal(e.to_string()))?;
+            rows.collect::<Result<Vec<_>,_>>().map_err(|e| DomainError::internal(e.to_string()))
+        })
+    }
+
+    pub async fn resolve_conflict(
+        &self,
+        conflict_id: &str,
+        choice: SyncConflictChoice,
+    ) -> DomainResult<()> {
+        let _operation = self.operation.lock().await;
+        let key = self.vault_manager.with_key(|key, _| Ok(key.clone()))?;
+        let (id,kind,snapshot,ciphertext,checksum): (String,String,Option<String>,String,String) = self.store.with_conn(|conn| {
+            conn.query_row("SELECT record_id,record_type,local_snapshot_json,remote_ciphertext_b64,remote_checksum FROM sync_conflict WHERE id=?1 AND resolved_at IS NULL", [conflict_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|_| DomainError::not_found("sync conflict not found"))
+        })?;
+        let local = matches!(choice, SyncConflictChoice::Local);
+        let record: LocalSyncRecord =
+            if local {
+                serde_json::from_str(&snapshot.ok_or_else(|| {
+                    DomainError::validation("local conflict snapshot is unavailable")
+                })?)
+                .map_err(|_| DomainError::validation("local conflict snapshot is invalid"))?
+            } else {
+                decrypt_entity_record(&key, &kind, &id, 1, &ciphertext, &checksum)
+                    .map_err(|_| DomainError::validation("remote conflict snapshot is invalid"))?
+            };
+        sync_codec::resolve_conflict_record(&self.store, conflict_id, local, &record)
+    }
     pub fn new(store: Store, vault_manager: Arc<VaultManager>) -> Self {
         // Do not restore login material left by earlier versions, even after vault unlock.
         let _ = store.with_conn(|conn| {
@@ -375,6 +422,12 @@ impl SyncService {
     }
 
     async fn sync_inner(&self) -> DomainResult<SyncResult> {
+        let network_secrets = crate::network_secrets::NetworkSecrets::new(
+            self.store.clone(),
+            self.vault_manager.clone(),
+        );
+        network_secrets.proxies()?;
+        network_secrets.forwards(None).await?;
         if !self.vault_manager.is_unlocked() {
             return Err(DomainError::new(
                 ErrorCode::VaultLocked,
@@ -480,30 +533,43 @@ impl SyncService {
         let dirty = sync_codec::collect_dirty_records(&self.store)?;
         let dirty_by_id: HashMap<_, _> = dirty.iter().map(|r| (r.record_id.clone(), r)).collect();
         let mut conflicts = Vec::new();
-        let mut conflicted: HashSet<String> = self.store.with_conn(|conn| {
+        let retained = self.store.with_conn(|conn| {
             let mut statement = conn
-                .prepare("SELECT DISTINCT record_id FROM sync_conflict WHERE resolved_at IS NULL")
+                .prepare("SELECT record_id,record_type,local_snapshot_json,remote_ciphertext_b64,remote_checksum,remote_revision,remote_device_id,remote_deleted,remote_updated_at FROM sync_conflict WHERE resolved_at IS NULL ORDER BY remote_revision DESC,created_at DESC,id DESC")
                 .map_err(|e| DomainError::internal(e.to_string()))?;
-            let rows = statement
-                .query_map([], |r| r.get(0))
+            let rows = statement.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,u64>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,bool>(7)?,r.get::<_,i64>(8)?)))
                 .map_err(|e| DomainError::internal(e.to_string()))?;
-            rows.collect::<Result<_, _>>()
-                .map_err(|e| DomainError::internal(e.to_string()))
+            let mut retained = HashMap::new();
+            for row in rows {
+                let (id,kind,snapshot,ciphertext,checksum,revision,device,deleted,updated) = row.map_err(|e| DomainError::internal(e.to_string()))?;
+                retained.entry(id.clone()).or_insert(ConflictBackupInput {
+                    record_id:id,record_type:SyncRecordType::parse(&kind)?,
+                    local_snapshot:snapshot.map(|value|serde_json::from_str(&value)).transpose().map_err(|e|DomainError::internal(e.to_string()))?,
+                    remote_ciphertext_b64:ciphertext,remote_checksum:checksum,remote_revision:revision,
+                    remote_device_id:device,remote_deleted:deleted,remote_updated_at:updated,
+                });
+            }
+            Ok(retained)
         })?;
+        let mut conflicted: HashSet<String> = retained.keys().cloned().collect();
         for record in &incoming {
-            if let Some(local) = dirty_by_id.get(&record.record_id) {
+            let local = dirty_by_id.get(&record.record_id);
+            let previous = retained.get(&record.record_id);
+            if local.is_some() || previous.is_some() {
                 let revision = self.remote_revision(&record.record_id)?;
-                if record.revision > revision
-                    && record.device_id.as_deref() != Some(&config.device_id)
-                {
+                // A lost upload acknowledgement can leave our own remote echo conflicting too.
+                if record.revision > revision {
                     let envelope = &envelopes[&record.record_id];
                     conflicts.push(ConflictBackupInput {
                         record_id: record.record_id.clone(),
                         record_type: record.record_type,
-                        local_snapshot: Some(
-                            serde_json::to_value(local)
-                                .map_err(|e| DomainError::internal(e.to_string()))?,
-                        ),
+                        local_snapshot: local
+                            .map(serde_json::to_value)
+                            .transpose()
+                            .map_err(|e| DomainError::internal(e.to_string()))?
+                            .or_else(|| {
+                                previous.and_then(|conflict| conflict.local_snapshot.clone())
+                            }),
                         remote_ciphertext_b64: envelope.ciphertext_b64.clone(),
                         remote_checksum: envelope.checksum.clone(),
                         remote_revision: record.revision,
@@ -515,10 +581,33 @@ impl SyncService {
                 }
             }
         }
-        let summary = sync_codec::apply_remote_records(&self.store, &incoming)?;
-        for conflict in conflicts {
-            sync_codec::backup_conflict(&self.store, conflict)?;
+        // Refresh changed local copies even without a new remote revision; retain the old rows.
+        for local in &dirty {
+            if conflicts
+                .iter()
+                .any(|conflict| conflict.record_id == local.record_id)
+            {
+                continue;
+            }
+            if let Some(previous) = retained.get(&local.record_id) {
+                let snapshot = previous
+                    .local_snapshot
+                    .clone()
+                    .map(serde_json::from_value::<LocalSyncRecord>)
+                    .transpose()
+                    .map_err(|e| DomainError::internal(e.to_string()))?;
+                if snapshot.as_ref() != Some(local) {
+                    let mut refreshed = previous.clone();
+                    refreshed.local_snapshot = Some(
+                        serde_json::to_value(local)
+                            .map_err(|e| DomainError::internal(e.to_string()))?,
+                    );
+                    conflicts.push(refreshed);
+                }
+            }
         }
+        let summary =
+            sync_codec::apply_remote_records_with_conflicts(&self.store, &incoming, conflicts)?;
         self.save_cursor(&remote_id, &url, cursor)?;
         let pending = sync_codec::collect_dirty_records(&self.store)?;
         let mut pushed_count = 0;
@@ -610,7 +699,7 @@ impl SyncService {
                     })?;
                 }
             }
-            sync_codec::mark_records_applied(&self.store, &clean)?;
+            sync_codec::mark_uploaded_records(&self.store, &clean, &sent)?;
             pushed_count += response.applied.len();
             for conflict in response.conflicts {
                 let local = sent

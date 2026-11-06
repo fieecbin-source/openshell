@@ -115,6 +115,32 @@ impl OpenSshParser {
                 None
             };
 
+            let mut dependencies = Vec::new();
+            if block.identity_file.is_some() {
+                dependencies.push("IdentityFile");
+            }
+            if block.proxy_jump.is_some() {
+                dependencies.push("ProxyJump");
+            }
+            if !block.local_forwards.is_empty() {
+                dependencies.push("LocalForward");
+            }
+            if !block.remote_forwards.is_empty() {
+                dependencies.push("RemoteForward");
+            }
+            if !block.dynamic_forwards.is_empty() {
+                dependencies.push("DynamicForward");
+            }
+            if !block.warnings.is_empty() {
+                dependencies.push("unsupported directive");
+            }
+            let protocol_options_json = (!dependencies.is_empty()).then(|| serde_json::json!({
+                "import_blocked": format!("{}：{} 需要补录后导入", block.pattern, dependencies.join(", ")),
+                "openssh": { "identity_file": block.identity_file, "proxy_jump": block.proxy_jump,
+                    "local_forwards": block.local_forwards, "remote_forwards": block.remote_forwards,
+                    "dynamic_forwards": block.dynamic_forwards }
+            }));
+
             sessions.push(SessionInput {
                 name: Some(name),
                 protocol: Some(Protocol::Ssh),
@@ -124,6 +150,7 @@ impl OpenSshParser {
                 auth_method: Some(auth_method),
                 host_key_policy: Some(HostKeyPolicy::AcceptNew),
                 keepalive_sec: Some(keepalive_sec),
+                protocol_options_json,
                 notes,
                 ..Default::default()
             });
@@ -136,6 +163,23 @@ impl OpenSshParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_connection_dependencies_block_preview_instead_of_direct_connect() {
+        let (blocks,_) = OpenSshParser::parse_config("Host protected\n HostName host.test\n IdentityFile missing.key\n ProxyJump jump\n LocalForward 8000 127.0.0.1:80\n RemoteForward 9000 127.0.0.1:90\n DynamicForward 1080\n");
+        let inputs = OpenSshParser::to_session_inputs(&blocks);
+        let report = crate::ImportPreviewEngine::generate_preview(
+            inputs,
+            &[],
+            crate::ConflictStrategy::Skip,
+            Vec::new(),
+        );
+        assert_eq!(report.skip_count, 1);
+        assert_eq!(report.candidates[0].action, crate::CandidateAction::Skip);
+        assert!(report.warnings.iter().any(|w| w.contains("IdentityFile")
+            && w.contains("ProxyJump")
+            && w.contains("Forward")));
+    }
 
     #[test]
     fn test_parse_typical_openssh_config() {

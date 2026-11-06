@@ -128,7 +128,6 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
       open
       onClose={onClose}
       title="网络探测与扩展机制"
-      description="TCP 连通性测试与核心插件扩展管理"
       widthClassName="w-full max-w-[560px]"
       footer={
         <Button variant="secondary" onClick={onClose}>
@@ -150,17 +149,17 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
         {activeTab === "checker" ? (
           <form onSubmit={handleProbe} className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
-              <Field label="目标主机 / IP" required className="col-span-2">
+              <Field label="目标主机 / IP" required className="col-span-2" value={host}>
                 <Input
                   type="text"
                   required
                   mono
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="例如: 127.0.0.1 或 192.168.1.1"
+                  aria-label="目标主机"
                 />
               </Field>
-              <Field label="目标端口" required>
+              <Field label="目标端口" required value={port}>
                 <Input
                   type="number"
                   required
@@ -169,12 +168,12 @@ export const PortCheckerModal: React.FC<PortCheckerModalProps> = ({
                   mono
                   value={port}
                   onChange={(e) => setPort(Number(e.target.value))}
-                  placeholder="22"
+                  aria-label="目标端口"
                 />
               </Field>
             </div>
 
-            <Field label="探测超时" hint="单位：毫秒，范围 200 - 10000">
+            <Field label="探测超时（毫秒）">
               <Input
                 type="number"
                 min={200}

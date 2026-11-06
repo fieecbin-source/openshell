@@ -32,8 +32,14 @@ const STATUS_META: Record<
     text: "text-state-warning",
     tone: "border-state-warning/30 bg-state-warning/10",
   },
+  launched: {
+    label: "Windows 远程桌面客户端已启动，连接结果尚不可观测",
+    dot: "bg-state-warning",
+    text: "text-state-warning",
+    tone: "border-state-warning/30 bg-state-warning/10",
+  },
   connected: {
-    label: "已唤起 Windows 远程桌面客户端 (mstsc.exe)",
+    label: "远端登录已完成（native OnLoginComplete）",
     dot: "bg-state-success",
     text: "text-state-success",
     tone: "border-state-success/30 bg-state-success/10",
@@ -102,8 +108,13 @@ export const RdpSessionView: React.FC<RdpSessionViewProps> = ({
   const diskRedirect = !!options.drivestoredirect;
   const clipboardShare = options.redirect_clipboard !== false;
 
-  const meta = STATUS_META[tab.status] ?? STATUS_META.disconnected;
-  const busy = tab.status === "connecting" || tab.status === "reconnecting";
+  const launched =
+    tab.rdpPhase === "launched" &&
+    tab.status !== "connected" &&
+    tab.status !== "disconnected" &&
+    tab.status !== "error";
+  const meta = launched ? STATUS_META.launched : STATUS_META[tab.status] ?? STATUS_META.disconnected;
+  const busy = !launched && (tab.status === "connecting" || tab.status === "reconnecting");
 
   const copy = useCallback(async (text: string, label: string) => {
     if (!text) return;
@@ -140,7 +151,13 @@ export const RdpSessionView: React.FC<RdpSessionViewProps> = ({
             )}
           >
             <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
-            {tab.status === "connected" ? "已启动" : busy ? "启动中" : "未启动"}
+            {tab.status === "connected"
+              ? "已连接"
+              : launched
+                ? "客户端已启动"
+                : busy
+                  ? "启动中"
+                  : "未启动"}
           </span>
         </div>
 
@@ -151,14 +168,21 @@ export const RdpSessionView: React.FC<RdpSessionViewProps> = ({
               <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
               {meta.label}
             </div>
-            {(tab.status === "error" || tab.status === "disconnected") && tab.error && (
+            {(tab.status === "error" || tab.status === "disconnected" || tab.rdpPhase === "failed") &&
+              tab.error && (
               <p className="mt-1.5 break-all font-mono text-[11px] opacity-90">{tab.error}</p>
             )}
-            {tab.status === "connected" && (
-              <p className="mt-1.5 text-[11px] text-ink-secondary">
-                远程桌面窗口由 Windows 独立承载，切换到其它标签不会中断连接；关闭 mstsc 窗口后点击下方按钮可重新唤起。
+            {launched && (
+              <p className="mt-1.5 text-[11px] opacity-80">
+                启动 mstsc 仅代表本地客户端已唤起，是否真正连上远端需等待后端状态回传。
               </p>
             )}
+            {tab.status === "connected" && (
+              <p className="mt-1.5 text-[11px] opacity-80">
+                后端已确认远端登录完成；本地客户端进程退出或会话断开时会自动更新状态。
+              </p>
+            )}
+
           </div>
 
           {/* 显示配置徽章 */}
@@ -221,7 +245,7 @@ export const RdpSessionView: React.FC<RdpSessionViewProps> = ({
               className="inline-flex items-center gap-1.5 rounded-xl bg-action px-3.5 py-2 text-xs font-semibold text-white shadow-apple-sm transition hover:bg-action/90 disabled:opacity-50"
               title="重新生成 .rdp 并调用 mstsc.exe"
             >
-              {tab.status === "connected" ? (
+              {launched ? (
                 <RefreshIcon className="h-3.5 w-3.5" />
               ) : (
                 <PlayIcon className="h-3.5 w-3.5" />

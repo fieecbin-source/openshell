@@ -335,7 +335,7 @@ export async function sftpStartTransfer(
   direction: "upload" | "download",
   localPath: string,
   remotePath: string,
-  resume = true
+  resume = false
 ): Promise<string> {
   return await invoke<string>("sftp_start_transfer", {
     connId,
@@ -353,6 +353,14 @@ export async function sftpListTransfers(): Promise<import("../types/ipc").Transf
 
 export async function sftpPauseTransfer(taskId: string): Promise<void> {
   await invoke("sftp_pause_transfer", { taskId });
+}
+
+export async function sftpResumeTransfer(taskId: string): Promise<void> {
+  await invoke("sftp_resume_transfer", { taskId });
+}
+
+export async function terminalEncode(text: string, encoding: string): Promise<number[]> {
+  return await invoke<number[]>("terminal_encode", { text, encoding });
 }
 
 export async function sftpCancelTransfer(taskId: string): Promise<void> {
@@ -473,8 +481,8 @@ export async function importerPreviewFinalShell(
   });
 }
 
-export async function importerCommit(candidates: import("../types/ipc").ImportCandidate[]): Promise<number> {
-  return await invoke<number>("importer_commit", { candidates });
+export async function importerCommit(candidates: import("../types/ipc").ImportCandidate[], archiveToken?: string): Promise<number> {
+  return await invoke<number>("importer_commit", { candidates, archiveToken: archiveToken ?? null });
 }
 
 export async function importerExportBundleJson(): Promise<string> {
@@ -661,13 +669,13 @@ export async function proxyListGet(): Promise<import("../types/ipc").ProxyServer
 }
 
 export async function proxyListSave(
-  proxies: import("../types/ipc").ProxyServerConfig[]
+  proxies: import("../types/ipc").ProxyServerInput[]
 ): Promise<import("../types/ipc").ProxyServerConfig[]> {
   return await invoke<import("../types/ipc").ProxyServerConfig[]>("proxy_list_save", { proxies });
 }
 
 export async function proxyTest(
-  proxy: import("../types/ipc").ProxyServerConfig
+  proxy: import("../types/ipc").ProxyServerInput
 ): Promise<import("../types/ipc").ProxyTestResult> {
   return await invoke<import("../types/ipc").ProxyTestResult>("proxy_test", { proxy });
 }
@@ -743,3 +751,23 @@ export async function openTelnet(
 // AI 终端助手（阶段 1）：模型配置与凭据命令统一由 ai/aiIpc 提供。
 export * from "./ai/aiIpc";
 
+
+export async function syncListConflicts(): Promise<import("../types/ipc").SyncConflict[]> {
+  return await invoke<import("../types/ipc").SyncConflict[]>("sync_list_conflicts");
+}
+
+export async function syncResolveConflict(conflictId: string, choice: "local" | "remote"): Promise<void> {
+  await invoke("sync_resolve_conflict", { conflictId, choice });
+}
+
+export async function importerDiscardPreview(archiveToken: string): Promise<void> {
+  await invoke("importer_discard_preview", { archiveToken });
+}
+
+export async function rdpGetStatus(launchId: string): Promise<import("../types/ipc").RdpRuntimeStatus> {
+  return await invoke<import("../types/ipc").RdpRuntimeStatus>("rdp_get_status", { launchId });
+}
+
+export async function rdpClose(launchId: string): Promise<void> {
+  await invoke("rdp_close", { launchId });
+}

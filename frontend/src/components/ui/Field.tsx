@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { Children, cloneElement, forwardRef, isValidElement, useId } from "react";
 import type {
   InputHTMLAttributes,
   ReactNode,
@@ -19,30 +19,39 @@ const CONTROL_BAD =
 
 export interface FieldProps {
   label?: ReactNode;
-  hint?: ReactNode;
   error?: string | null;
   required?: boolean;
+  value?: string | number | null;
   htmlFor?: string;
   className?: string;
   children: ReactNode;
 }
 
-export function Field({ label, hint, error, required, htmlFor, className, children }: FieldProps) {
+export function RequiredMark({ value }: { value?: string | number | null }) {
+  if (String(value ?? "").trim()) return null;
+  return <span aria-hidden="true" title="必填" className="ml-1 text-state-danger">★</span>;
+}
+
+export function Field({ label, error, required, value, htmlFor, className, children }: FieldProps) {
+  const generatedId = useId();
+  const fieldId = htmlFor ?? generatedId;
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       {label !== undefined && (
-        <label htmlFor={htmlFor} className="text-os-xs font-medium text-ink-secondary">
+        <label htmlFor={fieldId} className="text-os-xs font-medium text-ink-secondary">
           {label}
-          {required && <span className="ml-0.5 text-state-danger">*</span>}
+          {required && <RequiredMark value={value} />}
         </label>
       )}
-      {children}
-      {error ? (
+      {Children.map(children, (child) =>
+        isValidElement<InputProps>(child) && (child.type === Input || child.type === Select || child.type === Textarea)
+          ? cloneElement(child, { id: child.props.id ?? fieldId, "aria-required": required || child.props["aria-required"] })
+          : child,
+      )}
+      {error && (
         <p role="alert" className="text-os-xs text-state-danger">
           {error}
         </p>
-      ) : (
-        hint !== undefined && <p className="text-os-xs text-ink-tertiary">{hint}</p>
       )}
     </div>
   );

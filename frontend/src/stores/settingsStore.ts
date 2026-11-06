@@ -33,6 +33,30 @@ export interface TerminalThemeConfig {
 }
 
 export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
+  finalshell: {
+    name: "FinalShell 经典暗黑 (推荐)",
+    background: "#0c1017",
+    foreground: "#e2e8f0",
+    cursor: "#00e676",
+    cursorAccent: "#0c1017",
+    selectionBackground: "#1e3a5f80",
+    black: "#161b22",
+    red: "#f85149",
+    green: "#3fb950",
+    yellow: "#d29922",
+    blue: "#58a6ff",
+    magenta: "#bc8cff",
+    cyan: "#39c5bb",
+    white: "#e2e8f0",
+    brightBlack: "#484f58",
+    brightRed: "#ff7b72",
+    brightGreen: "#56d364",
+    brightYellow: "#e3b341",
+    brightBlue: "#79c0ff",
+    brightMagenta: "#d2a8ff",
+    brightCyan: "#56d4dd",
+    brightWhite: "#ffffff",
+  },
   dark: {
     name: "Midnight (OpenShell)",
     background: "#0d0f14",
@@ -525,7 +549,7 @@ const LEGACY_FONT_FAMILIES = [
 export const DEFAULT_SETTINGS = {
   theme: "clean_light" as TerminalTheme,
   fontSize: 14,
-  fontFamily: '"SFMono-Regular", "SF Mono", "JetBrains Mono", "Cascadia Code", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace',
+  fontFamily: '"DejaVu Sans Mono", "Cascadia Code", "Cascadia Mono", "Segoe UI Mono", "Microsoft YaHei UI", Consolas, Menlo, monospace',
   fontWeight: 400 as 400 | 500 | 600,
   cursorBlink: true,
   cursorStyle: "bar" as CursorStyle,
@@ -533,7 +557,11 @@ export const DEFAULT_SETTINGS = {
   renderer: "dom" as RendererKind,
   logSessionOutput: false,
   keepaliveDefaultSec: 30,
+  // 壁纸素材（fs_bg*.jpg）缺少可核实的再分发凭证，默认不得引用；
+  // 用户自己保存的 backgroundId 在 loadSettings 中仍会原样恢复。
+  backgroundId: "",
   backgroundOpacity: 50,
+  backgroundBlur: 0,
 } as const;
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -549,10 +577,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   logSessionOutput: DEFAULT_SETTINGS.logSessionOutput,
   settingsModalOpen: false,
   keepaliveDefaultSec: DEFAULT_SETTINGS.keepaliveDefaultSec,
-  backgroundId: "",
+  backgroundId: DEFAULT_SETTINGS.backgroundId,
   backgroundCustom: null,
   backgroundOpacity: DEFAULT_SETTINGS.backgroundOpacity,
-  backgroundBlur: 0,
+  backgroundBlur: DEFAULT_SETTINGS.backgroundBlur,
 
   loadSettings: async () => {
     try {

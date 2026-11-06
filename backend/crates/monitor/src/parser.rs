@@ -1,6 +1,196 @@
 //! 监控数据解析器：Linux /proc 与降级输出解析。
 
-use openshell_core_domain::{DiskMountMetrics, HostMetrics, ProcessMetrics, SessionId};
+use openshell_core_domain::{
+    DiskMountMetrics, DomainError, DomainResult, HostMetrics, ProcessMetrics, SessionId,
+};
+
+/// Validate before changing the baseline used by the next sample.
+pub fn parse_sample(
+    session_id: SessionId,
+    timestamp_ms: i64,
+    raw_output: &str,
+    exit_code: Option<u32>,
+    prev: &mut PrevSampleState,
+) -> DomainResult<HostMetrics> {
+    if exit_code != Some(0) {
+        return Err(invalid_sample("command exit status"));
+    }
+    let sections = split_sections(raw_output);
+    let stat = required_section(&sections.stat_section, "STAT")?;
+    let mem = required_section(&sections.mem_section, "MEM")?;
+    let net = required_section(&sections.net_section, "NET")?;
+    let df = required_section(&sections.df_section, "DF")?;
+    let load = required_section(&sections.load_section, "LOAD")?;
+    let ps = required_section(&sections.ps_section, "PS")?;
+    let uptime = required_section(&sections.uptime_section, "UPTIME")?;
+
+    if !stat.lines().any(|line| line.starts_with("cpu ")) {
+        return Err(invalid_sample("STAT"));
+    }
+    for line in stat.lines().filter(|line| line.starts_with("cpu")) {
+        let fields = unsigned_fields(line.split_whitespace().skip(1), "STAT")?;
+        if fields.len() < 4
+            || fields
+                .iter()
+                .try_fold(0u64, |sum, n| sum.checked_add(*n))
+                .is_none()
+        {
+            return Err(invalid_sample("STAT"));
+        }
+    }
+    let mut memory = std::collections::HashMap::new();
+    for line in mem.lines() {
+        if let Some((name, value)) = line.split_once(':') {
+            if matches!(
+                name,
+                "MemTotal" | "MemAvailable" | "MemFree" | "Buffers" | "Cached"
+            ) {
+                let value = value
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|v| *v <= u64::MAX / 1024)
+                    .ok_or_else(|| invalid_sample("MEM"))?;
+                memory.insert(name, value);
+            }
+        }
+    }
+    let total = memory
+        .get("MemTotal")
+        .copied()
+        .filter(|v| *v > 0)
+        .ok_or_else(|| invalid_sample("MEM"))?;
+    let cached = memory
+        .get("Buffers")
+        .copied()
+        .unwrap_or(0)
+        .checked_add(memory.get("Cached").copied().unwrap_or(0))
+        .filter(|v| *v <= total)
+        .ok_or_else(|| invalid_sample("MEM"))?;
+    let available = match memory.get("MemAvailable") {
+        Some(value) => *value,
+        None => memory
+            .get("MemFree")
+            .filter(|_| memory.contains_key("Buffers") && memory.contains_key("Cached"))
+            .and_then(|free| free.checked_add(cached))
+            .ok_or_else(|| invalid_sample("MEM"))?,
+    };
+    if available > total {
+        return Err(invalid_sample("MEM"));
+    }
+    let mut interfaces = 0;
+    let mut totals = (0u64, 0u64);
+    for line in net.lines() {
+        if let Some((name, values)) = line.split_once(':') {
+            let fields = unsigned_fields(values.split_whitespace(), "NET")?;
+            if name.trim().is_empty() || fields.len() < 16 {
+                return Err(invalid_sample("NET"));
+            }
+            interfaces += 1;
+            if name.trim() != "lo" {
+                totals.0 = totals
+                    .0
+                    .checked_add(fields[0])
+                    .ok_or_else(|| invalid_sample("NET"))?;
+                totals.1 = totals
+                    .1
+                    .checked_add(fields[8])
+                    .ok_or_else(|| invalid_sample("NET"))?;
+            }
+        }
+    }
+    if interfaces == 0 {
+        return Err(invalid_sample("NET"));
+    }
+    let mut disk_rows = 0;
+    for line in df.lines().skip(1).filter(|line| !line.trim().is_empty()) {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() < 6 {
+            return Err(invalid_sample("DF"));
+        }
+        let values = unsigned_fields(fields[1..4].iter().copied(), "DF")?;
+        if values.iter().any(|v| *v > u64::MAX / 1024)
+            || !valid_number(fields[4].trim_end_matches('%'))
+        {
+            return Err(invalid_sample("DF"));
+        }
+        disk_rows += 1;
+    }
+    if disk_rows == 0 {
+        return Err(invalid_sample("DF"));
+    }
+    let loads: Vec<_> = load.split_whitespace().take(3).collect();
+    if loads.len() != 3 || loads.iter().any(|v| !valid_number(v)) {
+        return Err(invalid_sample("LOAD"));
+    }
+    if !uptime.split_whitespace().next().is_some_and(valid_number) {
+        return Err(invalid_sample("UPTIME"));
+    }
+    let process_header = ps.lines().next().unwrap_or("").to_ascii_uppercase();
+    let process_rates_available = process_header.contains("CPU") && process_header.contains("MEM");
+    if process_rates_available {
+        for line in ps.lines().skip(1).filter(|line| !line.trim().is_empty()) {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            if fields.len() < 5 || !valid_number(fields[2]) || !valid_number(fields[3]) {
+                return Err(invalid_sample("PS"));
+            }
+        }
+    }
+    if parse_ps(ps).is_empty() {
+        return Err(invalid_sample("PS"));
+    }
+
+    let mut unavailable = Vec::new();
+    if prev.total_cpu_time == 0 {
+        unavailable.extend(["cpu_percent", "cpu_cores"]);
+    }
+    if prev.timestamp_ms == 0 {
+        unavailable.extend(["net_rx_bps", "net_tx_bps"]);
+    }
+    if !stat.lines().any(|line| {
+        line.strip_prefix("cpu")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    }) && !unavailable.contains(&"cpu_cores")
+    {
+        unavailable.push("cpu_cores");
+    }
+    if !memory.contains_key("Buffers") || !memory.contains_key("Cached") {
+        unavailable.push("memory_cached_bytes");
+    }
+    if !process_rates_available {
+        unavailable.push("top_processes");
+    }
+    let mut metrics = parse_host_metrics(session_id, timestamp_ms, raw_output, prev);
+    metrics.unavailable_fields = unavailable.into_iter().map(str::to_owned).collect();
+    Ok(metrics)
+}
+
+fn invalid_sample(field: &str) -> DomainError {
+    DomainError::validation(format!("monitor sample missing or invalid: {field}"))
+        .with_retryable(true)
+}
+
+fn required_section<'a>(section: &'a Option<String>, name: &str) -> DomainResult<&'a str> {
+    section
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| invalid_sample(name))
+}
+
+fn unsigned_fields<'a>(
+    fields: impl Iterator<Item = &'a str>,
+    name: &str,
+) -> DomainResult<Vec<u64>> {
+    fields
+        .map(|field| field.parse::<u64>().map_err(|_| invalid_sample(name)))
+        .collect()
+}
+
+fn valid_number(value: &str) -> bool {
+    value
+        .parse::<f64>()
+        .is_ok_and(|value| value.is_finite() && value >= 0.0)
+}
 
 /// 上一次采样快照状态（用于计算 CPU% 和网络速率差值）。
 #[derive(Debug, Clone, Default)]
@@ -142,6 +332,7 @@ pub fn parse_host_metrics(
         disk_mounts,
         top_processes,
         uptime_seconds,
+        unavailable_fields: Vec::new(),
     }
 }
 
@@ -504,8 +695,94 @@ fn parse_uptime(uptime: &str) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) const VALID_SAMPLE: &str = "===STAT===\ncpu 0 0 0 1\n===MEM===\nMemTotal: 100 kB\nMemAvailable: 100 kB\n===NET===\nlo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n===DF===\nFilesystem 1024-blocks Used Available Capacity Mounted on\n/dev/test 100 0 100 0% /\n===LOAD===\n0 0 0\n===PS===\nPID USER %CPU %MEM COMMAND\n1 test 0 0 init\n===UPTIME===\n0 0\n";
+
+    #[test]
+    fn invalid_sample_never_advances_timestamp() {
+        for (raw, exit) in [("", Some(0)), (VALID_SAMPLE, Some(1)), (VALID_SAMPLE, None)] {
+            let mut previous = PrevSampleState {
+                timestamp_ms: 123,
+                ..Default::default()
+            };
+            assert!(parse_sample(SessionId::new(), 456, raw, exit, &mut previous).is_err());
+            assert_eq!(previous.timestamp_ms, 123);
+        }
+        for tag in ["STAT", "MEM", "NET", "DF", "LOAD", "PS", "UPTIME"] {
+            let raw = VALID_SAMPLE.replace(&format!("==={tag}==="), "===MISSING===");
+            assert!(
+                parse_sample(
+                    SessionId::new(),
+                    456,
+                    &raw,
+                    Some(0),
+                    &mut PrevSampleState::default()
+                )
+                .is_err(),
+                "accepted missing {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_numbers_do_not_replace_the_previous_sample() {
+        for (valid, invalid) in [
+            ("cpu 0 0 0 1", "cpu 0 broken 0 1"),
+            ("MemTotal: 100", "MemTotal: invalid"),
+            ("lo: 0 0 0", "lo: 0 broken 0"),
+            ("/dev/test 100 0 100", "/dev/test invalid 0 100"),
+            ("===LOAD===\n0 0 0", "===LOAD===\nNaN 0 0"),
+            ("1 test 0 0 init", "1 test NaN 0 init"),
+            ("===UPTIME===\n0 0", "===UPTIME===\nNaN 0"),
+        ] {
+            let raw = VALID_SAMPLE.replace(valid, invalid);
+            let mut previous = PrevSampleState {
+                timestamp_ms: 123,
+                total_cpu_time: 42,
+                ..Default::default()
+            };
+            assert!(
+                parse_sample(SessionId::new(), 456, &raw, Some(0), &mut previous).is_err(),
+                "accepted invalid {valid}"
+            );
+            assert_eq!(previous.timestamp_ms, 123);
+            assert_eq!(previous.total_cpu_time, 42);
+        }
+    }
+
+    #[test]
+    fn valid_zero_values_are_preserved() {
+        let metrics = parse_sample(
+            SessionId::new(),
+            456,
+            VALID_SAMPLE,
+            Some(0),
+            &mut PrevSampleState::default(),
+        )
+        .unwrap();
+        assert_eq!(metrics.memory_used_bytes, 0);
+        assert_eq!(metrics.load_1, 0.0);
+        assert_eq!(metrics.uptime_seconds, 0);
+        assert_eq!(metrics.timestamp_ms, 456);
+    }
+
+    #[test]
+    fn first_sample_marks_unmeasured_rates_then_recovers() {
+        let mut previous = PrevSampleState::default();
+        let first =
+            parse_sample(SessionId::new(), 100, VALID_SAMPLE, Some(0), &mut previous).unwrap();
+        assert!(first.unavailable_fields.contains(&"cpu_percent".into()));
+        assert!(first.unavailable_fields.contains(&"net_rx_bps".into()));
+        assert!(first
+            .unavailable_fields
+            .contains(&"memory_cached_bytes".into()));
+        let second =
+            parse_sample(SessionId::new(), 200, VALID_SAMPLE, Some(0), &mut previous).unwrap();
+        assert!(!second.unavailable_fields.contains(&"cpu_percent".into()));
+        assert!(!second.unavailable_fields.contains(&"net_rx_bps".into()));
+    }
 
     #[test]
     fn test_parse_meminfo_basic() {

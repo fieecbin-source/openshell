@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex as StdMutex};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", content = "details")]
@@ -71,7 +72,10 @@ fn is_loopback_bind(host: &str) -> bool {
 /// 启动前的静态校验（不依赖真实连接，便于单测）。
 ///
 /// 返回动态转发需要使用的 SOCKS5 口令（未启用认证时为 `None`）。
-fn validate_rule(rule: &PortForwardRule) -> DomainResult<Option<String>> {
+fn validate_rule(
+    rule: &PortForwardRule,
+    socks_password: Option<String>,
+) -> DomainResult<Option<String>> {
     // 监听非回环地址会把内网服务暴露给局域网/公网，必须由用户显式确认风险。
     if !is_loopback_bind(&rule.bind_host) && !rule.expose_warning_ack {
         return Err(DomainError::new(
@@ -91,14 +95,14 @@ fn validate_rule(rule: &PortForwardRule) -> DomainResult<Option<String>> {
         && matches!(rule.socks_auth, SocksAuth::Userpass)
     {
         let user = rule.socks_username.as_deref().unwrap_or("").trim();
-        let pass = rule.socks_password_ref.as_deref().unwrap_or("").trim();
-        if user.is_empty() || pass.is_empty() {
+        let pass = socks_password.as_deref().unwrap_or("");
+        if user.is_empty() || pass.trim().is_empty() {
             return Err(DomainError::new(
                 ErrorCode::ForwardBind,
                 "动态转发已选择「用户名口令」认证，但用户名或口令为空；请补全后再启动（不会在缺少口令时以无认证模式运行）",
             ));
         }
-        return Ok(Some(pass.to_string()));
+        return Ok(Some(pass.to_owned()));
     }
 
     Ok(None)
@@ -139,11 +143,12 @@ impl ForwardManager {
         &self,
         rule: PortForwardRule,
         conn: Arc<SshConnection>,
+        socks_password: Option<String>,
     ) -> DomainResult<()> {
         let id = rule.id.clone();
-        self.stop_rule(&id).await;
+        self.stop_rule(&id).await?;
 
-        let socks_password = validate_rule(&rule)?;
+        let socks_password = validate_rule(&rule, socks_password)?;
 
         if rule.rule_type == PortForwardType::Remote {
             let dest_host = rule
@@ -223,21 +228,31 @@ impl ForwardManager {
         let status_for_task = Arc::clone(&status);
         let id_for_log = id.to_string();
         let bind_for_log = bind_addr.clone();
+        let mut closed = conn.closed_channel();
         let handle = tokio::spawn(async move {
-            // 监听循环一旦出错就写回 Error 状态，避免前端一直显示「监听中」。
-            let result: Result<(), String> = async move {
+            let result: Result<(), String> = tokio::select! {
+                _ = async {
+                    while !*closed.borrow() {
+                        if closed.changed().await.is_err() { break; }
+                    }
+                } => Err("SSH connection closed".into()),
+                result = async move {
+                // Dropping the listener future also cancels accepted streams and pending handshakes.
+                let mut children = JoinSet::new();
                 match rule_clone.rule_type {
                     PortForwardType::Local => {
                         let dest_host = rule_clone.dest_host.unwrap_or_default();
                         let dest_port = rule_clone.dest_port.unwrap_or(80);
                         loop {
-                            let (mut local_stream, _peer) = listener
-                                .accept()
-                                .await
+                            let accepted = tokio::select! {
+                                accepted = listener.accept() => accepted,
+                                Some(_) = children.join_next(), if !children.is_empty() => continue,
+                            };
+                            let (mut local_stream, _peer) = accepted
                                 .map_err(|e| format!("accept on {bind_for_log} failed: {e}"))?;
                             let conn_clone = Arc::clone(&conn);
                             let d_host = dest_host.clone();
-                            tokio::spawn(async move {
+                            children.spawn(async move {
                                 match conn_clone.open_direct_tcpip(&d_host, dest_port).await {
                                     Ok(mut ssh_stream) => {
                                         let _ = tokio::io::copy_bidirectional(
@@ -263,14 +278,16 @@ impl ForwardManager {
                         let username = rule_clone.socks_username.clone();
                         let password = socks_password.clone();
                         loop {
-                            let (mut local_stream, _peer) = listener
-                                .accept()
-                                .await
+                            let accepted = tokio::select! {
+                                accepted = listener.accept() => accepted,
+                                Some(_) = children.join_next(), if !children.is_empty() => continue,
+                            };
+                            let (mut local_stream, _peer) = accepted
                                 .map_err(|e| format!("accept on {bind_for_log} failed: {e}"))?;
                             let conn_clone = Arc::clone(&conn);
                             let u_opt = username.clone();
                             let p_opt = password.clone();
-                            tokio::spawn(async move {
+                            children.spawn(async move {
                                 let handshake_res = handle_socks5_handshake(
                                     &mut local_stream,
                                     auth_mode,
@@ -292,6 +309,7 @@ impl ForwardManager {
                                     .await
                                 {
                                     Ok(mut ssh_stream) => {
+                                        if local_stream.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await.is_err() { return; }
                                         let _ = tokio::io::copy_bidirectional(
                                             &mut local_stream,
                                             &mut ssh_stream,
@@ -299,6 +317,7 @@ impl ForwardManager {
                                         .await;
                                     }
                                     Err(err) => {
+                                        let _ = local_stream.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await;
                                         tracing::warn!(
                                             target = %target_host,
                                             port = target_port,
@@ -313,8 +332,8 @@ impl ForwardManager {
                     // Remote rules are registered before opening a local listener.
                     PortForwardType::Remote => Ok(()),
                 }
-            }
-            .await;
+            } => result,
+            };
 
             if let Err(err) = result {
                 tracing::error!(rule_id = %id_for_log, error = %err, "port forward listener stopped");
@@ -337,17 +356,49 @@ impl ForwardManager {
     }
 
     /// 停止转发规则。
-    pub async fn stop_rule(&self, id: &PortForwardId) {
-        let mut running = self.running.write().await;
-        if let Some(mut rf) = running.remove(id) {
-            drop(running);
-            if let Some((conn, host, port)) = rf.remote.take() {
-                if let Err(error) = conn.stop_remote_forward(&host, port).await {
-                    tracing::warn!(%error, "failed to cancel remote forwarding");
+    pub async fn stop_rule(&self, id: &PortForwardId) -> DomainResult<()> {
+        let (task_id, remote) = {
+            let running = self.running.read().await;
+            let Some(rf) = running.get(id) else {
+                return Ok(());
+            };
+            (rf.handle.id(), rf.remote.clone())
+        };
+        let result = if let Some((conn, host, port)) = remote {
+            let already_closed = *conn.closed_channel().borrow();
+            if already_closed {
+                Ok(())
+            } else {
+                let result = conn.stop_remote_forward(&host, port).await;
+                let now_closed = *conn.closed_channel().borrow();
+                if now_closed {
+                    Ok(())
+                } else {
+                    result
                 }
             }
-            rf.handle.abort();
+        } else {
+            Ok(())
+        };
+        let mut running = self.running.write().await;
+        match running.get_mut(id) {
+            // A concurrent stop/restart must not remove the replacement instance.
+            Some(rf) if rf.handle.id() == task_id => {
+                if let Err(error) = result {
+                    set_status(&rf.status, ForwardStatus::Error(error.message.clone()));
+                    return Err(error);
+                }
+                rf.remote = None;
+                rf.handle.abort();
+            }
+            _ => return Ok(()),
         }
+        let stopped = running.remove(id);
+        drop(running);
+        if let Some(mut rf) = stopped {
+            let _ = (&mut rf.handle).await;
+        }
+        Ok(())
     }
 
     /// 停止所有活跃转发规则。
@@ -360,6 +411,7 @@ impl ForwardManager {
                 let _ = conn.stop_remote_forward(&host, port).await;
             }
             rf.handle.abort();
+            let _ = (&mut rf.handle).await;
         }
     }
 }
@@ -394,6 +446,7 @@ mod tests {
             socks_auth: SocksAuth::None,
             socks_username: None,
             socks_password_ref: None,
+            has_socks_password: false,
             expose_warning_ack: false,
             sort_order: 1024,
             created_at: 0,
@@ -408,13 +461,13 @@ mod tests {
     fn rejects_non_loopback_bind_without_ack() {
         let mut r = rule(PortForwardType::Local);
         r.bind_host = "0.0.0.0".to_string();
-        let err = validate_rule(&r).unwrap_err();
+        let err = validate_rule(&r, None).unwrap_err();
         assert_eq!(err.code, ErrorCode::ForwardBind);
         assert!(err.message.contains("暴露"));
 
         // 用户显式确认后允许
         r.expose_warning_ack = true;
-        assert!(validate_rule(&r).is_ok());
+        assert!(validate_rule(&r, None).is_ok());
     }
 
     /// SOCKS5 选择了用户名口令认证但未配置口令时必须拒绝启动。
@@ -423,20 +476,19 @@ mod tests {
         let mut r = rule(PortForwardType::Dynamic);
         r.socks_auth = SocksAuth::Userpass;
         r.socks_username = Some("user".to_string());
-        assert!(validate_rule(&r).is_err());
+        assert!(validate_rule(&r, None).is_err());
 
-        r.socks_password_ref = Some("s3cret".to_string());
-        let pass = validate_rule(&r).expect("should pass");
+        let pass = validate_rule(&r, Some("s3cret".to_string())).expect("should pass");
         assert_eq!(pass.as_deref(), Some("s3cret"));
     }
 
     #[test]
     fn validates_remote_forward_exposure() {
         let mut r = rule(PortForwardType::Remote);
-        assert!(validate_rule(&r).is_ok());
+        assert!(validate_rule(&r, None).is_ok());
         r.bind_host = "0.0.0.0".into();
-        assert!(validate_rule(&r).is_err());
+        assert!(validate_rule(&r, None).is_err());
         r.expose_warning_ack = true;
-        assert!(validate_rule(&r).is_ok());
+        assert!(validate_rule(&r, None).is_ok());
     }
 }

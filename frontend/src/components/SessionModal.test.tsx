@@ -7,23 +7,27 @@ import type { Session, SessionInput, SshKey } from "../types/ipc";
 
 vi.mock("./ui/GlassMaterial", () => ({ GlassMaterial: () => null }));
 
-const { vault } = vi.hoisted(() => ({ vault: {
-  status: { state: "unlocked" }, checkStatus: vi.fn().mockResolvedValue(undefined),
-} }));
+const { vault } = vi.hoisted(() => ({
+  vault: {
+    status: { state: "unlocked" }, checkStatus: vi.fn().mockResolvedValue(undefined),
+  }
+}));
 const actions = vi.hoisted(() => ({ createSession: vi.fn(), updateSession: vi.fn() }));
 vi.mock("../stores/sessionStore", () => ({ useSessionStore: () => ({ sessions: [], groups: [], ...actions }) }));
 vi.mock("../stores/serialStore", () => ({ useSerialStore: () => ({ ports: [], loadPorts: vi.fn() }) }));
-vi.mock("../stores/vaultStore", () => ({ useVaultStore: Object.assign(
-  (selector?: (state: typeof vault) => unknown) => selector ? selector(vault) : vault,
-  { getState: () => vault },
-) }));
+vi.mock("../stores/vaultStore", () => ({
+  useVaultStore: Object.assign(
+    (selector?: (state: typeof vault) => unknown) => selector ? selector(vault) : vault,
+    { getState: () => vault },
+  )
+}));
 vi.mock("../lib/ipc", () => ({
   listSshKeys: vi.fn(), importSshKey: vi.fn(), pickSshKeyFile: vi.fn(),
   deleteSshKey: vi.fn(), createCredential: vi.fn(),
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-let cleanup = () => {};
+let cleanup = () => { };
 afterEach(() => { cleanup(); vault.status.state = "unlocked"; vi.clearAllMocks(); });
 
 function click(text: string) {
@@ -49,7 +53,7 @@ async function render(keys: SshKey[] = [], initialValues: Partial<SessionInput> 
   document.body.append(container);
   const root = createRoot(container);
   cleanup = () => { act(() => root.unmount()); container.remove(); };
-  await act(async () => root.render(<SessionModal isOpen onClose={() => {}} initialValues={initialValues} editingSession={editingSession} />));
+  await act(async () => root.render(<SessionModal isOpen onClose={() => { }} initialValues={initialValues} editingSession={editingSession} />));
   return container;
 }
 
@@ -137,7 +141,7 @@ it("keeps the selected file when the vault is locked and saves only after unlock
 
 it("saves a system selected from the first-host flow", async () => {
   const container = await render([], { host: "demo.example.invalid", icon_key: "os:ubuntu", auth_method: "password" });
-  await act(async () => click("图标"));
+  await act(async () => click("主机图标"));
   expect(container.querySelector<HTMLInputElement>('input[value="os:ubuntu"]')!.checked).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[value="os:debian"]')!.click());
   actions.createSession.mockResolvedValue({ id: "created" });
@@ -148,7 +152,7 @@ it("saves a system selected from the first-host flow", async () => {
 it("loads the saved system when editing and can restore the default icon", async () => {
   const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
   const container = await render([], {}, session);
-  await act(async () => click("图标"));
+  await act(async () => click("主机图标"));
   expect(container.querySelector<HTMLInputElement>('input[value="os:macos"]')!.checked).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[value="os:tux"]')!.click());
   actions.updateSession.mockResolvedValue({ ...session, icon_key: null });
@@ -158,7 +162,7 @@ it("loads the saved system when editing and can restore the default icon", async
 
 it("filters the icon grid by keyword and auto-detects a device from session info", async () => {
   const container = await render([], { name: "Office router", host: "192.168.1.1", protocol: "ssh" });
-  await act(async () => click("图标"));
+  await act(async () => click("主机图标"));
   act(() => container.querySelector<HTMLButtonElement>('button[title="根据会话名称、主机地址和用户名匹配图标"]')!.click());
   expect(container.querySelector<HTMLInputElement>('input[value="device:router"]')!.checked).toBe(true);
   act(() => fillByLabel("搜索图标", "ubuntu"));
@@ -169,13 +173,51 @@ it("filters the icon grid by keyword and auto-detects a device from session info
 it("edits the icon from its own top-level tab", async () => {
   const session = { id: "existing", name: "Production", protocol: "ssh", host: "demo.example.invalid", port: 22, username: "deploy", auth_method: "password", icon_key: "os:macos" } as Session;
   const container = await render([], {}, session);
-  await act(async () => click("高级与跳板机"));
+  await act(async () => click("高级与终端"));
   expect(container.textContent).not.toContain("首次连接会显示主机指纹");
-  await act(async () => click("图标"));
+  await act(async () => click("主机图标"));
   expect(container.querySelector<HTMLInputElement>('input[name="icon-tab-host-icon"][value="os:macos"]')!.checked).toBe(true);
   act(() => container.querySelector<HTMLInputElement>('input[name="icon-tab-host-icon"][value="os:ubuntu"]')!.click());
   expect(container.querySelector<HTMLInputElement>('input[name="icon-tab-host-icon"][value="os:ubuntu"]')!.checked).toBe(true);
   actions.updateSession.mockResolvedValue({ ...session, icon_key: "os:ubuntu" });
   await act(async () => click("仅保存"));
   expect(actions.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({ icon_key: "os:ubuntu" }));
+});
+
+it("renders dedicated protocol titles and allows compact switching for new sessions", async () => {
+  const container = await render([], { protocol: "ssh" });
+  expect(container.querySelector("h3")?.textContent).toBe("新建 SSH 连接");
+  const switcher = container.querySelector<HTMLSelectElement>('select[aria-label="切换连接类型"]');
+  expect(switcher).toBeTruthy();
+
+  await act(async () => {
+    switcher!.value = "rdp";
+    switcher!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(container.querySelector("h3")?.textContent).toBe("新建 Windows 远程桌面 (RDP)");
+
+  await act(async () => {
+    switcher!.value = "serial";
+    switcher!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(container.querySelector("h3")?.textContent).toBe("新建串口连接 (Serial)");
+
+  await act(async () => {
+    switcher!.value = "telnet";
+    switcher!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(container.querySelector("h3")?.textContent).toBe("新建 Telnet 连接");
+
+  await act(async () => {
+    switcher!.value = "local_shell";
+    switcher!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(container.querySelector("h3")?.textContent).toBe("新建本地终端");
+});
+
+it("ensures all input and textarea fields in the modal have no placeholder attribute", async () => {
+  const container = await render([], { protocol: "ssh" });
+  const inputs = Array.from(container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
+  const inputsWithPlaceholder = inputs.filter((el) => el.getAttribute("placeholder") !== null);
+  expect(inputsWithPlaceholder).toEqual([]);
 });

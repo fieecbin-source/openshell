@@ -82,4 +82,104 @@ describe("useSyncStore", () => {
     expect(useSyncStore.getState().error).not.toContain("Network timeout");
     expect(useSyncStore.getState().syncing).toBe(false);
   });
+
+  it("should load conflicts via sync_list_conflicts", async () => {
+    const mockConflicts = [
+      {
+        id: "conf_1",
+        record_id: "sess_100",
+        record_type: "session",
+        created_at: 1700000000000,
+        has_local_snapshot: true,
+      },
+    ];
+
+    vi.mocked(invoke).mockResolvedValueOnce(mockConflicts);
+
+    const conflicts = await useSyncStore.getState().loadConflicts();
+
+    expect(invoke).toHaveBeenCalledWith("sync_list_conflicts");
+    expect(conflicts).toEqual(mockConflicts);
+    expect(useSyncStore.getState().conflicts).toEqual(mockConflicts);
+  });
+
+  it("should retain existing conflicts and report error when loadConflicts fails", async () => {
+    const existing = [
+      {
+        id: "conf_old",
+        record_id: "sess_old",
+        record_type: "session",
+        created_at: 1700000000000,
+        has_local_snapshot: true,
+      },
+    ];
+    useSyncStore.setState({ conflicts: existing });
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("Network disconnect"));
+
+    await expect(useSyncStore.getState().loadConflicts()).rejects.toThrow("Network disconnect");
+    // 不伪造无冲突，保留已有列表并呈现失败
+    expect(useSyncStore.getState().conflicts).toEqual(existing);
+    expect(useSyncStore.getState().error).toBeTruthy();
+  });
+
+  it("should resolve conflict with local choice and refresh conflicts and config", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(undefined) // sync_resolve_conflict
+      .mockResolvedValueOnce([]) // loadConflicts after resolve
+      .mockResolvedValueOnce({ is_logged_in: true, conflict_count: 0 }); // loadConfig after resolve
+
+    await useSyncStore.getState().resolveConflict("conf_1", "local");
+
+    expect(invoke).toHaveBeenCalledWith("sync_resolve_conflict", {
+      conflictId: "conf_1",
+      choice: "local",
+    });
+    expect(useSyncStore.getState().conflicts).toEqual([]);
+    expect(useSyncStore.getState().resolvingConflictId).toBeNull();
+  });
+
+  it("should resolve conflict with remote choice and prevent duplicate flight invocation", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(undefined) // sync_resolve_conflict
+      .mockResolvedValueOnce([]) // loadConflicts
+      .mockResolvedValueOnce({ is_logged_in: true, conflict_count: 0 }); // loadConfig
+
+    const p1 = useSyncStore.getState().resolveConflict("conf_2", "remote");
+    // Duplicate call while p1 is in flight
+    const p2 = useSyncStore.getState().resolveConflict("conf_2", "remote");
+
+    await Promise.all([p1, p2]);
+
+    // Should only be called once because resolvingConflictId guarded against duplicate submission
+    const resolveCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter((call) => call[0] === "sync_resolve_conflict");
+    expect(resolveCalls.length).toBe(1);
+    expect(resolveCalls[0][1]).toEqual({ conflictId: "conf_2", choice: "remote" });
+  });
+
+  it("should handle resolve failure by setting error and keeping conflicts intact", async () => {
+    useSyncStore.setState({
+      conflicts: [
+        {
+          id: "conf_fail",
+          record_id: "sess_fail",
+          record_type: "session",
+          created_at: 1700000000000,
+          has_local_snapshot: true,
+        },
+      ],
+    });
+
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("Database locked"));
+
+    await expect(
+      useSyncStore.getState().resolveConflict("conf_fail", "local")
+    ).rejects.toThrow("Database locked");
+
+    expect(useSyncStore.getState().error).toBeTruthy();
+    // Conflicts list must not be wiped on failure
+    expect(useSyncStore.getState().conflicts.length).toBe(1);
+    expect(useSyncStore.getState().resolvingConflictId).toBeNull();
+  });
 });

@@ -3,9 +3,7 @@ import { useForwardStore } from "../stores/forwardStore";
 import { useSessionStore } from "../stores/sessionStore";
 import type {
   PortForwardRule,
-  PortForwardRuleInput,
   PortForwardType,
-  SocksAuth,
 } from "../types/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { Badge, EmptyState, Panel } from "./ui/Surface";
@@ -32,12 +30,6 @@ const RULE_TYPE_LABEL: Record<PortForwardType, string> = {
   local: "本地 -L",
   remote: "远程 -R",
   dynamic: "动态 SOCKS5 -D",
-};
-
-const RULE_TYPE_DIRECTION_DESC: Record<PortForwardType, string> = {
-  local: "本地端口转发 (-L)：监听本机端口，将流量经 SSH 隧道转发至远端目标地址",
-  remote: "远端反向转发 (-R)：监听远端 SSH 服务器端口，将流量经隧道反向转发至本机侧目标",
-  dynamic: "动态 SOCKS5 代理 (-D)：在本机启动 SOCKS5 代理服务器，按请求目标动态经 SSH 转发",
 };
 
 export const PortForwardModal: React.FC<PortForwardModalProps> = ({
@@ -67,11 +59,11 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
   const [bindPort, setBindPort] = useState<number>(8080);
   const [destHost, setDestHost] = useState("127.0.0.1");
   const [destPort, setDestPort] = useState<number>(80);
-  const [socksAuth, setSocksAuth] = useState<SocksAuth>("none");
+  const [socksAuth, setSocksAuth] = useState<string>("none");
   const [socksUsername, setSocksUsername] = useState("");
-  // 动态转发的 SOCKS5 口令。后端要求「选了用户名口令认证就必须给出非空口令」，
-  // 否则会拒绝启动（历史上口令被写死为 None，等于任意凭据都放行）。
   const [socksPassword, setSocksPassword] = useState("");
+  const [clearSocksPassword, setClearSocksPassword] = useState(false);
+  const [hasStoredSocksPassword, setHasStoredSocksPassword] = useState(false);
   const [exposeAck, setExposeAck] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(true);
@@ -98,6 +90,8 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
     setSocksAuth("none");
     setSocksUsername("");
     setSocksPassword("");
+    setClearSocksPassword(false);
+    setHasStoredSocksPassword(false);
     setExposeAck(false);
     setAutoStart(false);
     setAutoReconnect(true);
@@ -114,9 +108,13 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
     setBindPort(rule.bind_port || 8080);
     setDestHost(rule.dest_host || "127.0.0.1");
     setDestPort(rule.dest_port || 80);
-    setSocksAuth(rule.socks_auth || "none");
+    const normalizedAuth =
+      (rule.socks_auth as string) === "user_pass" ? "userpass" : (rule.socks_auth || "none");
+    setSocksAuth(normalizedAuth);
     setSocksUsername(rule.socks_username || "");
-    setSocksPassword(rule.socks_password_ref || "");
+    setSocksPassword("");
+    setClearSocksPassword(false);
+    setHasStoredSocksPassword(Boolean((rule as any).has_socks_password || rule.socks_password_ref));
     setExposeAck(rule.expose_warning_ack || false);
     setAutoStart(rule.auto_start || false);
     setAutoReconnect(rule.auto_reconnect ?? true);
@@ -133,20 +131,31 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
       setErrorMsg("绑定 0.0.0.0 具有全网暴露风险，必须确认安全风险方可保存！");
       return;
     }
-    if (
-      ruleType === "dynamic" &&
-      socksAuth === "user_pass" &&
-      (!socksUsername.trim() || !socksPassword)
-    ) {
-      setErrorMsg("选择用户名口令认证时必须填写用户名与口令，否则无法启动代理");
-      return;
+    const isUserPass = socksAuth === "userpass" || (socksAuth as string) === "user_pass";
+    if (ruleType === "dynamic" && isUserPass) {
+      if (!socksUsername.trim()) {
+        setErrorMsg("选择用户名口令认证时必须填写认证用户名");
+        return;
+      }
+      if (!editingRuleId && !socksPassword) {
+        setErrorMsg("选择用户名口令认证时必须填写认证密码");
+        return;
+      }
+      if (editingRuleId && clearSocksPassword && !socksPassword) {
+        setErrorMsg("已选择清除原密码，请填写新密码或改选无须密码认证");
+        return;
+      }
+      if (editingRuleId && !hasStoredSocksPassword && !socksPassword) {
+        setErrorMsg("选择用户名口令认证时必须填写认证密码");
+        return;
+      }
     }
 
     setSubmitting(true);
     setErrorMsg(null);
     try {
       const effectiveSessionId = sessionId || targetSessionId.trim() || null;
-      const input: PortForwardRuleInput = {
+      const input: any = {
         session_id: effectiveSessionId,
         name: name.trim(),
         rule_type: ruleType,
@@ -154,13 +163,33 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
         bind_port: Number(bindPort),
         dest_host: ruleType === "dynamic" ? null : destHost.trim() || "127.0.0.1",
         dest_port: ruleType === "dynamic" ? null : Number(destPort),
-        socks_auth: socksAuth,
-        socks_username: socksAuth === "user_pass" ? socksUsername.trim() : null,
-        socks_password_ref: socksAuth === "user_pass" ? socksPassword : null,
+        socks_auth: ruleType === "dynamic" ? (isUserPass ? "userpass" : "none") : "none",
+        socks_username: (ruleType === "dynamic" && isUserPass) ? socksUsername.trim() : null,
         expose_warning_ack: exposeAck,
         auto_start: autoStart,
         auto_reconnect: autoReconnect,
       };
+
+      if (ruleType === "dynamic" && isUserPass) {
+        if (editingRuleId) {
+          if (clearSocksPassword) {
+            input.socks_clear_password = true;
+            input.socks_password = null;
+          } else if (socksPassword) {
+            input.socks_password = socksPassword;
+            input.socks_clear_password = false;
+          } else {
+            input.socks_clear_password = false;
+          }
+        } else {
+          input.socks_password = socksPassword || null;
+        }
+      } else if (editingRuleId) {
+        input.socks_clear_password = true;
+        input.socks_password = null;
+      }
+
+      delete input.socks_password_ref;
 
       if (editingRuleId) {
         await updateRule(editingRuleId, input);
@@ -174,6 +203,15 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
       setErrorMsg(formatFriendlyError(e));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleToggle = async (rule: PortForwardRule) => {
+    setErrorMsg(null);
+    try {
+      await toggleRule(rule, connId);
+    } catch (err) {
+      setErrorMsg(formatFriendlyError(err));
     }
   };
 
@@ -197,7 +235,6 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
         open
         onClose={onClose}
         title="端口转发与 SOCKS5 代理"
-        description="本地端口转发 (-L)、远程反向转发 (-R) 及动态 SOCKS5 代理 (-D)"
         widthClassName="w-full max-w-[740px]"
         footer={
           <>
@@ -227,7 +264,6 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
             <EmptyState
               icon={<ArrowUpDownIcon className="h-8 w-8" />}
               title="暂无端口转发规则"
-              description="新建规则以创建本地转发 (-L)、远程转发 (-R) 或动态 SOCKS5 代理 (-D)。"
               action={
                 <Button
                   variant="primary"
@@ -305,7 +341,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                         )}
                         {rule.rule_type === "dynamic" && (
                           <span className="font-sans text-os-2xs text-ink-tertiary">
-                            · SOCKS5 动态转发（认证: {rule.socks_auth === "none" ? "无密码" : "用户名密码"}）
+                            · SOCKS5 动态转发（认证: {rule.socks_auth === "none" ? "无密码" : "用户名密码"}
+                            {rule.socks_username ? ` · ${rule.socks_username}` : ""}
+                            {Boolean((rule as any).has_socks_password || rule.socks_password_ref) ? " · 已设密码" : ""}
+                            ）
                           </span>
                         )}
                       </div>
@@ -315,7 +354,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                       <Button
                         size="sm"
                         variant={isListening ? "secondary" : "primary"}
-                        onClick={() => toggleRule(rule, connId)}
+                        onClick={() => handleToggle(rule)}
                       >
                         {isListening ? "停止" : "启动"}
                       </Button>
@@ -378,7 +417,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
           )}
 
           {!sessionId && (
-            <Field label="所属 SSH 会话" hint="将此转发规则关联到指定 SSH 主机">
+            <Field label="所属 SSH 会话">
               <Select
                 value={targetSessionId}
                 onChange={(e) => setTargetSessionId(e.target.value)}
@@ -393,7 +432,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
             </Field>
           )}
 
-          <Field label="规则类型" hint={RULE_TYPE_DIRECTION_DESC[ruleType]}>
+          <Field label="规则类型">
             <Segmented<PortForwardType>
               value={ruleType}
               onChange={setRuleType}
@@ -406,10 +445,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
             />
           </Field>
 
-          <Field label="规则名称" required>
+          <Field label="规则名称" required value={name}>
             <Input
               type="text"
-              placeholder="例如: MySQL 隧道 / 内网 Web 暴露"
+              aria-label="规则名称"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -500,28 +539,56 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
             <div className="space-y-3">
               <Field label="SOCKS5 认证模式">
                 <Select
-                  value={socksAuth}
-                  onChange={(e) => setSocksAuth(e.target.value as SocksAuth)}
+                  value={socksAuth === "user_pass" ? "userpass" : socksAuth}
+                  onChange={(e) => setSocksAuth(e.target.value)}
                 >
                   <option value="none">无须密码认证 (No-Auth)</option>
-                  <option value="user_pass">用户名与密码认证 (RFC 1929)</option>
+                  <option value="userpass">用户名与密码认证 (RFC 1929)</option>
                 </Select>
               </Field>
 
-              {socksAuth === "user_pass" && (
+              {(socksAuth === "userpass" || socksAuth === "user_pass") && (
                 <>
-                  <Field label="认证用户名">
+                  <Field label="认证用户名" required value={socksUsername}>
                     <Input
                       type="text"
-                      placeholder="用户名"
+                      aria-label="认证用户名"
                       value={socksUsername}
                       onChange={(e) => setSocksUsername(e.target.value)}
                     />
                   </Field>
-                  <Field label="认证口令 (密码)">
+                  <Field
+                    label={
+                      <div className="flex items-center justify-between w-full">
+                        <span>
+                          认证密码
+                          {editingRuleId && hasStoredSocksPassword && !clearSocksPassword && (
+                            <span className="ml-1.5 font-normal text-accent text-os-2xs">已存</span>
+                          )}
+                        </span>
+                        {editingRuleId && hasStoredSocksPassword && (
+                          <label className="flex items-center gap-1 text-[11px] font-normal text-ink-tertiary cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={clearSocksPassword}
+                              onChange={(e) => {
+                                setClearSocksPassword(e.target.checked);
+                                if (e.target.checked) setSocksPassword("");
+                              }}
+                              className="rounded border-line/20 text-accent"
+                            />
+                            <span>清除</span>
+                          </label>
+                        )}
+                      </div>
+                    }
+                    required={!editingRuleId || !hasStoredSocksPassword || clearSocksPassword}
+                    value={socksPassword || (editingRuleId && hasStoredSocksPassword && !clearSocksPassword ? "saved" : "")}
+                  >
                     <Input
                       type="password"
-                      placeholder="SOCKS5 认证口令"
+                      aria-label="认证密码"
+                      disabled={clearSocksPassword}
                       value={socksPassword}
                       onChange={(e) => setSocksPassword(e.target.value)}
                     />
@@ -535,14 +602,12 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
             checked={autoStart}
             onChange={setAutoStart}
             label="自动启动"
-            hint="连接会话时自动启动此转发规则"
           />
 
           <Switch
             checked={autoReconnect}
             onChange={setAutoReconnect}
             label="断线自动恢复"
-            hint="SSH 重连后自动重新建立此端口转发隧道"
           />
         </div>
       </Modal>

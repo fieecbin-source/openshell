@@ -1,22 +1,36 @@
 import { GlassMaterial } from "./ui/GlassMaterial";
 import React, { useEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { FolderIcon, KeyIcon, PlusIcon, ServerIcon, SearchIcon, ShieldIcon, StarIcon, PencilIcon, TrashIcon, GridIcon, ListIcon } from "./ui/icons";
+import { ConnectionTypeModal } from "./ConnectionTypeModal";
 import { HostIcon } from "./ui/HostIcon";
 import { DEVICE_ICONS } from "../lib/hostIcons";
 import { Button } from "./ui/Button";
 import { Field, Input } from "./ui/Field";
 import { Modal } from "./ui/Overlay";
 import { formatFriendlyError } from "../lib/errors";
-import type { Group, Session } from "../types/ipc";
+import type { Group, Protocol, Session } from "../types/ipc";
 import { useSessionStore } from "../stores/sessionStore";
 import { useTerminalStore } from "../stores/terminalStore";
 
 interface HomeHubProps {
   onNewSession: (groupId?: string, iconKey?: string) => void;
+  /** 按指定协议打开新建连接弹窗，可同时带入当前分组 */
+  onNewSessionWithProtocol?: (protocol?: Protocol, groupId?: string) => void;
   onEditSession: (session: Session) => void;
   onConnectSession: (session: Session) => void;
   onPortCheckerOpen?: (host?: string, port?: number) => void;
 }
+
+/** 无自定义分组时按协议聚合的固定顺序与展示名 */
+const PROTOCOL_SECTIONS: Array<{ protocol: Protocol; name: string; dot: string }> = [
+  { protocol: "ssh", name: "SSH 连接", dot: "#0ea5e9" },
+  { protocol: "sftp", name: "SFTP 连接", dot: "#6366f1" },
+  { protocol: "rdp", name: "Windows 远程桌面", dot: "#8b5cf6" },
+  { protocol: "serial", name: "串口通信", dot: "#f59e0b" },
+  { protocol: "telnet", name: "Telnet 会话", dot: "#10b981" },
+  { protocol: "local_shell", name: "本地终端", dot: "#14b8a6" },
+];
 
 type FilterKey = "all" | "favorites" | "online" | string;
 
@@ -108,12 +122,15 @@ interface Section {
   name: string;
   dot: string;
   groupId: string | null;
+  /** 协议聚合分组对应的协议，用于分组内快捷新建时预选类型 */
+  protocol?: Protocol;
   sessions: Session[];
   online: number;
 }
 
 export const HomeHub: React.FC<HomeHubProps> = ({
   onNewSession,
+  onNewSessionWithProtocol,
   onEditSession,
   onConnectSession,
   onPortCheckerOpen,
@@ -129,6 +146,29 @@ export const HomeHub: React.FC<HomeHubProps> = ({
   const [groupName, setGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [connectionPicker, setConnectionPicker] = useState<{ source: HTMLElement; trigger: HTMLElement; groupId?: string } | null>(null);
+
+  const openConnectionPicker = (anchor: HTMLElement, groupId?: string) => {
+    setConnectionPicker({ source: anchor.closest<HTMLElement>("[data-add-surface]") ?? anchor, trigger: anchor, groupId });
+  };
+
+  const closeConnectionPicker = () => {
+    const trigger = connectionPicker?.trigger;
+    // 先恢复来源区块，再显式归还焦点，兼容立即隐藏区块的减少动画模式。
+    flushSync(() => setConnectionPicker(null));
+    trigger?.focus();
+  };
+
+  const chooseProtocol = (protocol: Protocol) => {
+    const groupId = connectionPicker?.groupId;
+    // 先释放选择框的焦点约束，再让专属表单接管自动焦点。
+    flushSync(() => setConnectionPicker(null));
+    if (onNewSessionWithProtocol) {
+      onNewSessionWithProtocol(protocol, groupId);
+    } else {
+      onNewSession(groupId);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -224,6 +264,41 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           online: countOnline(filteredSessions),
         },
       ];
+    }
+
+    // 没有自定义分组时，首页默认按协议类型聚合；只有一种类型则退化为单一平铺分组
+    if (groups.length === 0) {
+      const presentProtocols = Array.from(new Set(filteredSessions.map((s) => s.protocol)));
+      const orderedProtocols = PROTOCOL_SECTIONS
+        .map((item) => item.protocol)
+        .filter((protocol) => presentProtocols.includes(protocol));
+
+      if (orderedProtocols.length <= 1) {
+        return [
+          {
+            key: "__all__",
+            name: "全部连接",
+            dot: GROUP_DOTS[0],
+            groupId: null,
+            sessions: filteredSessions,
+            online: countOnline(filteredSessions),
+          },
+        ];
+      }
+
+      return orderedProtocols.map((protocol) => {
+        const meta = PROTOCOL_SECTIONS.find((item) => item.protocol === protocol)!;
+        const list = filteredSessions.filter((s) => s.protocol === protocol);
+        return {
+          key: `protocol:${protocol}`,
+          name: meta.name,
+          dot: meta.dot,
+          groupId: null,
+          protocol,
+          sessions: list,
+          online: countOnline(list),
+        };
+      });
     }
 
     const orderedGroups = [...groups].sort(
@@ -418,7 +493,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
             {isOnline ? (
               <span className="flex items-center gap-1 font-semibold text-state-success">
                 <span className="h-1.5 w-1.5 rounded-full bg-state-success" />
-                会话进行中 · 点击切入
+                会话进行中
               </span>
             ) : (
               <span>最近使用：{formatRelative(s.last_used_at)}</span>
@@ -435,7 +510,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
   return (
     <div className="flex h-full flex-1 flex-col overflow-hidden select-none workspace-background">
       {/* 顶部主横幅与快速控制栏 */}
-      <div className="glass-host relative shrink-0 border-b border-line/15 liquid-glass-chrome p-6">
+      <div data-add-surface className="glass-host relative shrink-0 border-b border-line/15 liquid-glass-chrome p-6">
         <GlassMaterial radius={0} />
         <div className="mx-auto flex max-w-6xl flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
@@ -459,7 +534,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
             </div>
           </div>
 
-          {/* 核心入口：醒目的大号“新建连接”按钮与快捷工具 */}
+          {/* 核心入口与快捷工具 */}
           <div className="flex items-center gap-3">
             {onPortCheckerOpen && (
               <button
@@ -477,11 +552,14 @@ export const HomeHub: React.FC<HomeHubProps> = ({
               新建分组
             </Button>
             <button
-              onClick={() => onNewSession(newGroupId)}
+              type="button"
+              onClick={(event) => openConnectionPicker(event.currentTarget, newGroupId)}
+              aria-haspopup="dialog"
+              aria-expanded={Boolean(connectionPicker)}
               className="flex items-center gap-2 rounded-xl bg-action px-4 py-2.5 text-xs font-semibold text-white shadow-apple-md transition duration-150 hover:bg-action active:scale-98"
             >
               <PlusIcon className="h-4 w-4" />
-              <span>新建服务器</span>
+              <span>添加</span>
             </button>
           </div>
         </div>
@@ -549,7 +627,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索别名、IP、用户或备注..."
+                aria-label="搜索连接"
                 className="w-full rounded-xl border border-line/15 bg-surface pl-8 pr-3 py-1.5 text-xs text-ink placeholder-ink-tertiary transition shadow-apple-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
               <SearchIcon className="absolute left-2.5 top-2 h-3.5 w-3.5 text-ink-tertiary" />
@@ -581,7 +659,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-6xl">
           {firstRun && (
-            <section aria-label="添加第一台主机" className="mx-auto my-8 max-w-xl rounded-3xl bg-surface px-6 py-8 text-center shadow-apple-md sm:px-10">
+            <section data-add-surface aria-label="添加第一台主机" className="mx-auto my-8 max-w-xl rounded-3xl bg-surface px-6 py-8 text-center shadow-apple-md sm:px-10">
               <h2 className="text-lg font-semibold tracking-tight text-ink">添加第一台主机</h2>
               <div className="my-6 grid grid-cols-3 gap-2 sm:grid-cols-5">
                 {DEVICE_ICONS.slice(0, 10).map((system) => (
@@ -597,18 +675,25 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                   </button>
                 ))}
               </div>
-              <Button variant="primary" leading={<PlusIcon className="h-4 w-4" />} onClick={() => onNewSession(newGroupId)}>新建服务器</Button>
+              <Button
+                variant="primary"
+                leading={<PlusIcon className="h-4 w-4" />}
+                onClick={(event) => openConnectionPicker(event.currentTarget, newGroupId)}
+                aria-haspopup="dialog"
+              >
+                添加
+              </Button>
             </section>
           )}
           {!firstRun && filteredSessions.length === 0 ? (
             /* macOS 风格紧凑空状态：小图标 + 单行文案 + 右侧动作 */
-            <div className="mt-4 flex min-h-[104px] items-center justify-between gap-3 rounded-2xl border border-line/15 bg-surface px-4 py-5 text-left shadow-apple-sm">
+            <div data-add-surface className="mt-4 flex min-h-[104px] items-center justify-between gap-3 rounded-2xl border border-line/15 bg-surface px-4 py-5 text-left shadow-apple-sm">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line/15 bg-surface-muted text-ink-secondary">
                   <ServerIcon className="h-5 w-5" />
                 </div>
                 <p className="min-w-0 truncate text-os-sm font-medium text-ink">
-                  {hasActiveFilters ? "未找到匹配的机器" : "还没有主机，添加一台开始连接"}
+                  {hasActiveFilters ? "未找到匹配的机器" : "暂无连接"}
                 </p>
               </div>
               {hasActiveFilters ? (
@@ -619,17 +704,18 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                   variant="primary"
                   leading={<PlusIcon className="h-3.5 w-3.5" />}
                   className="shrink-0"
-                  onClick={() => onNewSession(newGroupId)}
+                  onClick={(event) => openConnectionPicker(event.currentTarget, newGroupId)}
+                  aria-haspopup="dialog"
                 >
-                  新建服务器
+                  添加
                 </Button>
               )}
             </div>
           ) : sections.length > 0 ? (
             <div className={firstRun ? "mt-6 space-y-6" : "space-y-6"}>
               {sections.map((section) => (
-                <section key={section.key} aria-label={`${section.name}服务器分组`}>
-                  {/* 分组标题：名称 + 数量 + 在线数 + 快捷新建 */}
+                <section data-add-surface key={section.key} aria-label={`${section.name}服务器分组`}>
+                  {/* 自定义分组保留组内添加入口，默认类型分组不重复展示。 */}
                   <div className="mb-2.5 flex items-center justify-between gap-2 border-b border-line/15 pb-1.5">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: section.dot }} />
@@ -643,14 +729,15 @@ export const HomeHub: React.FC<HomeHubProps> = ({
                         </span>
                       )}
                     </div>
-                    <button
-                      onClick={() => onNewSession(section.groupId ?? undefined)}
-                      aria-label={`在${section.name}新建服务器`}
+                    {section.groupId && <button
+                      onClick={(event) => openConnectionPicker(event.currentTarget, section.groupId ?? undefined)}
+                      aria-label={`在${section.name}添加连接`}
+                      aria-haspopup="dialog"
                       className="inline-flex shrink-0 items-center gap-1.5 rounded-os-md border border-accent/20 bg-surface px-2.5 py-1.5 text-os-xs font-medium text-accent transition hover:bg-accent/5 sm:px-3"
                     >
                       <PlusIcon className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">新建服务器</span>
-                    </button>
+                      <span className="hidden sm:inline">添加</span>
+                    </button>}
                   </div>
 
                   {section.sessions.length > 0 ? (
@@ -746,6 +833,12 @@ export const HomeHub: React.FC<HomeHubProps> = ({
         </div>
       </div>
 
+      {connectionPicker && <ConnectionTypeModal
+        source={connectionPicker.source}
+        onClose={closeConnectionPicker}
+        onSelect={chooseProtocol}
+      />}
+
       <Modal open={groupModalOpen} onClose={() => { if (!creatingGroup) setGroupModalOpen(false); }}
         title="新建分组"
         widthClassName="w-full max-w-[420px]"
@@ -758,7 +851,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({
           </>
         }>
         <form id="home-group-form" onSubmit={handleCreateGroup} className="pt-0.5">
-          <Field label="分组名称" htmlFor="home-group-name" required error={groupError}>
+          <Field label="分组名称" htmlFor="home-group-name" required error={groupError} value={groupName}>
             <Input id="home-group-name" autoFocus maxLength={80} value={groupName} disabled={creatingGroup}
               invalid={!!groupError} autoComplete="off"
               className="h-[38px]"

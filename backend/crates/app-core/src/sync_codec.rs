@@ -340,87 +340,90 @@ fn collect_rows(
 }
 
 pub fn collect_dirty_records(store: &Store) -> DomainResult<Vec<LocalSyncRecord>> {
-    store.with_conn(|conn| {
-        let mut records = Vec::new();
+    store.with_conn(|conn| collect_dirty_records_from_connection(conn))
+}
 
-        records.extend(collect_rows(
-            conn,
-            "SELECT id, parent_id, name, kind, sort_order, color, icon_key, notes, created_at, \
+fn collect_dirty_records_from_connection(conn: &Connection) -> DomainResult<Vec<LocalSyncRecord>> {
+    let mut records = Vec::new();
+
+    records.extend(collect_rows(
+        conn,
+        "SELECT id, parent_id, name, kind, sort_order, color, icon_key, notes, created_at, \
              updated_at, deleted_at, version, origin_device_id FROM session_group WHERE dirty = 1",
-            |row| {
-                make_record(
-                    SyncRecordType::Group,
-                    row.get(0)?,
-                    row.get(11)?,
-                    row.get(9)?,
-                    row.get(12)?,
-                    row.get(10)?,
-                    GroupPayload {
-                        parent_id: row.get(1)?,
-                        name: row.get(2)?,
-                        kind: row.get(3)?,
-                        sort_order: row.get(4)?,
-                        color: row.get(5)?,
-                        icon_key: row.get(6)?,
-                        notes: row.get(7)?,
-                        created_at: row.get(8)?,
-                    },
-                )
-            },
-        )?);
+        |row| {
+            make_record(
+                SyncRecordType::Group,
+                row.get(0)?,
+                row.get(11)?,
+                row.get(9)?,
+                row.get(12)?,
+                row.get(10)?,
+                GroupPayload {
+                    parent_id: row.get(1)?,
+                    name: row.get(2)?,
+                    kind: row.get(3)?,
+                    sort_order: row.get(4)?,
+                    color: row.get(5)?,
+                    icon_key: row.get(6)?,
+                    notes: row.get(7)?,
+                    created_at: row.get(8)?,
+                },
+            )
+        },
+    )?);
 
-        records.extend(collect_rows(
-            conn,
-            "SELECT id, record_type, ciphertext, nonce, aad, crypto_suite, key_version, created_at, \
+    records.extend(collect_rows(
+        conn,
+        "SELECT id, record_type, ciphertext, nonce, aad, crypto_suite, key_version, created_at, \
              updated_at, deleted_at, version, origin_device_id FROM secret WHERE dirty = 1",
-            |row| {
-                make_record(
-                    SyncRecordType::Secret,
-                    row.get(0)?,
-                    row.get(10)?,
-                    row.get(8)?,
-                    row.get(11)?,
-                    row.get(9)?,
-                    SecretPayload {
-                        record_type: row.get(1)?,
-                        ciphertext: row.get(2)?,
-                        nonce: row.get(3)?,
-                        aad: row.get(4)?,
-                        crypto_suite: row.get(5)?,
-                        key_version: row.get(6)?,
-                        created_at: row.get(7)?,
-                    },
-                )
-            },
-        )?);
+        |row| {
+            make_record(
+                SyncRecordType::Secret,
+                row.get(0)?,
+                row.get(10)?,
+                row.get(8)?,
+                row.get(11)?,
+                row.get(9)?,
+                SecretPayload {
+                    record_type: row.get(1)?,
+                    ciphertext: row.get(2)?,
+                    nonce: row.get(3)?,
+                    aad: row.get(4)?,
+                    crypto_suite: row.get(5)?,
+                    key_version: row.get(6)?,
+                    created_at: row.get(7)?,
+                },
+            )
+        },
+    )?);
 
-        records.extend(collect_rows(
-            conn,
-            "SELECT id, name, kind, username, secret_id, hint, save_policy, expires_at, created_at, \
+    records.extend(collect_rows(
+        conn,
+        "SELECT id, name, kind, username, secret_id, hint, save_policy, expires_at, created_at, \
              updated_at, deleted_at, version, origin_device_id FROM credential WHERE dirty = 1",
-            |row| {
-                make_record(
-                    SyncRecordType::Credential,
-                    row.get(0)?,
-                    row.get(11)?,
-                    row.get(9)?,
-                    row.get(12)?,
-                    row.get(10)?,
-                    CredentialPayload {
-                        name: row.get(1)?,
-                        kind: row.get(2)?,
-                        username: row.get(3)?,
-                        secret_id: row.get(4)?,
-                        hint: row.get(5)?,
-                        save_policy: row.get(6)?,
-                        expires_at: row.get(7)?,
-                        created_at: row.get(8)?,
-                    },
-                )
-            },
-        )?);
+        |row| {
+            make_record(
+                SyncRecordType::Credential,
+                row.get(0)?,
+                row.get(11)?,
+                row.get(9)?,
+                row.get(12)?,
+                row.get(10)?,
+                CredentialPayload {
+                    name: row.get(1)?,
+                    kind: row.get(2)?,
+                    username: row.get(3)?,
+                    secret_id: row.get(4)?,
+                    hint: row.get(5)?,
+                    save_policy: row.get(6)?,
+                    expires_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                },
+            )
+        },
+    )?);
 
-        records.extend(collect_rows(
+    records.extend(collect_rows(
             conn,
             "SELECT id, name, algorithm, key_size, public_key, fingerprint_sha256, secret_id, \
              passphrase_credential_id, has_passphrase, comment, created_at, updated_at, deleted_at, \
@@ -449,7 +452,7 @@ pub fn collect_dirty_records(store: &Store) -> DomainResult<Vec<LocalSyncRecord>
             },
         )?);
 
-        records.extend(collect_rows(
+    records.extend(collect_rows(
             conn,
             "SELECT id, group_id, name, protocol, host, port, username, auth_method, credential_id, \
              ssh_key_id, host_key_policy, proxy_jump_json, proxy_id, terminal_profile_id, encoding, \
@@ -502,68 +505,68 @@ pub fn collect_dirty_records(store: &Store) -> DomainResult<Vec<LocalSyncRecord>
             },
         )?);
 
-        records.extend(collect_rows(
-            conn,
-            "SELECT id, host, port, key_type, public_key, fingerprint_sha256, status, \
+    records.extend(collect_rows(
+        conn,
+        "SELECT id, host, port, key_type, public_key, fingerprint_sha256, status, \
              previous_fingerprint, first_seen_at, last_seen_at, changed_at, source, created_at, \
              updated_at, deleted_at, version, origin_device_id FROM known_host WHERE dirty = 1",
-            |row| {
-                make_record(
-                    SyncRecordType::KnownHost,
-                    row.get(0)?,
-                    row.get(15)?,
-                    row.get(13)?,
-                    row.get(16)?,
-                    row.get(14)?,
-                    KnownHostPayload {
-                        host: row.get(1)?,
-                        port: row.get(2)?,
-                        key_type: row.get(3)?,
-                        public_key: row.get(4)?,
-                        fingerprint_sha256: row.get(5)?,
-                        status: row.get(6)?,
-                        previous_fingerprint: row.get(7)?,
-                        first_seen_at: row.get(8)?,
-                        last_seen_at: row.get(9)?,
-                        changed_at: row.get(10)?,
-                        source: row.get(11)?,
-                        created_at: row.get(12)?,
-                    },
-                )
-            },
-        )?);
+        |row| {
+            make_record(
+                SyncRecordType::KnownHost,
+                row.get(0)?,
+                row.get(15)?,
+                row.get(13)?,
+                row.get(16)?,
+                row.get(14)?,
+                KnownHostPayload {
+                    host: row.get(1)?,
+                    port: row.get(2)?,
+                    key_type: row.get(3)?,
+                    public_key: row.get(4)?,
+                    fingerprint_sha256: row.get(5)?,
+                    status: row.get(6)?,
+                    previous_fingerprint: row.get(7)?,
+                    first_seen_at: row.get(8)?,
+                    last_seen_at: row.get(9)?,
+                    changed_at: row.get(10)?,
+                    source: row.get(11)?,
+                    created_at: row.get(12)?,
+                },
+            )
+        },
+    )?);
 
-        records.extend(collect_rows(
-            conn,
-            "SELECT id, group_id, kind, name, body, variables_json, macro_steps_json, send_mode, \
+    records.extend(collect_rows(
+        conn,
+        "SELECT id, group_id, kind, name, body, variables_json, macro_steps_json, send_mode, \
              shortcut, sort_order, tags_json, created_at, updated_at, deleted_at, version, \
              origin_device_id FROM snippet WHERE dirty = 1",
-            |row| {
-                make_record(
-                    SyncRecordType::Snippet,
-                    row.get(0)?,
-                    row.get(14)?,
-                    row.get(12)?,
-                    row.get(15)?,
-                    row.get(13)?,
-                    SnippetPayload {
-                        group_id: row.get(1)?,
-                        kind: row.get(2)?,
-                        name: row.get(3)?,
-                        body: row.get(4)?,
-                        variables: json_text(row.get(5)?),
-                        macro_steps: optional_json_text(row.get(6)?),
-                        send_mode: row.get(7)?,
-                        shortcut: row.get(8)?,
-                        sort_order: row.get(9)?,
-                        tags: json_text(row.get(10)?),
-                        created_at: row.get(11)?,
-                    },
-                )
-            },
-        )?);
+        |row| {
+            make_record(
+                SyncRecordType::Snippet,
+                row.get(0)?,
+                row.get(14)?,
+                row.get(12)?,
+                row.get(15)?,
+                row.get(13)?,
+                SnippetPayload {
+                    group_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    name: row.get(3)?,
+                    body: row.get(4)?,
+                    variables: json_text(row.get(5)?),
+                    macro_steps: optional_json_text(row.get(6)?),
+                    send_mode: row.get(7)?,
+                    shortcut: row.get(8)?,
+                    sort_order: row.get(9)?,
+                    tags: json_text(row.get(10)?),
+                    created_at: row.get(11)?,
+                },
+            )
+        },
+    )?);
 
-        records.extend(collect_rows(
+    records.extend(collect_rows(
             conn,
             "SELECT id, session_id, name, type, bind_host, bind_port, dest_host, dest_port, \
              auto_start, auto_reconnect, reconnect_max, socks_auth, socks_username, \
@@ -599,35 +602,34 @@ pub fn collect_dirty_records(store: &Store) -> DomainResult<Vec<LocalSyncRecord>
             },
         )?);
 
-        records.extend(collect_rows(
-            conn,
-            "SELECT id, scope, scope_id, key, value_json, value_type, updated_at, version, \
+    records.extend(collect_rows(
+        conn,
+        "SELECT id, scope, scope_id, key, value_json, value_type, updated_at, version, \
              origin_device_id FROM setting WHERE dirty = 1 AND syncable = 1 AND scope = 'user' \
              AND key IN ('terminal.theme', 'terminal.font_size', 'terminal.font_family', \
              'terminal.cursor_blink', 'terminal.cursor_style', 'terminal.scrollback', \
              'terminal.keepalive_default_sec')",
-            |row| {
-                make_record(
-                    SyncRecordType::Setting,
-                    row.get(0)?,
-                    row.get(7)?,
-                    row.get(6)?,
-                    row.get(8)?,
-                    None,
-                    SettingPayload {
-                        scope: row.get(1)?,
-                        scope_id: row.get(2)?,
-                        key: row.get(3)?,
-                        value: json_text(row.get(4)?),
-                        value_type: row.get(5)?,
-                    },
-                )
-            },
-        )?);
+        |row| {
+            make_record(
+                SyncRecordType::Setting,
+                row.get(0)?,
+                row.get(7)?,
+                row.get(6)?,
+                row.get(8)?,
+                None,
+                SettingPayload {
+                    scope: row.get(1)?,
+                    scope_id: row.get(2)?,
+                    key: row.get(3)?,
+                    value: json_text(row.get(4)?),
+                    value_type: row.get(5)?,
+                },
+            )
+        },
+    )?);
 
-        records.sort_by_key(|record| (record.record_type.apply_order(), record.updated_at));
-        Ok(records)
-    })
+    records.sort_by_key(|record| (record.record_type.apply_order(), record.updated_at));
+    Ok(records)
 }
 
 fn revision_i64(revision: u64) -> DomainResult<i64> {
@@ -924,6 +926,10 @@ fn upsert_snippet(tx: &Transaction<'_>, record: &LocalSyncRecord) -> DomainResul
 
 fn upsert_port_forward(tx: &Transaction<'_>, record: &LocalSyncRecord) -> DomainResult<()> {
     let payload: PortForwardPayload = decode_payload(record)?;
+    openshell_store::repositories::port_forward::validate_password_reference(
+        tx,
+        payload.socks_password_ref.as_deref(),
+    )?;
     tx.execute(
         "INSERT INTO port_forward (id, session_id, name, type, bind_host, bind_port, dest_host, \
          dest_port, auto_start, auto_reconnect, reconnect_max, socks_auth, socks_username, \
@@ -1080,6 +1086,14 @@ pub fn apply_remote_records(
     store: &Store,
     records: &[LocalSyncRecord],
 ) -> DomainResult<ApplySummary> {
+    apply_remote_records_with_conflicts(store, records, Vec::new())
+}
+
+pub fn apply_remote_records_with_conflicts(
+    store: &Store,
+    records: &[LocalSyncRecord],
+    mut conflicts: Vec<ConflictBackupInput>,
+) -> DomainResult<ApplySummary> {
     for record in records {
         validate_remote_record(record)?;
     }
@@ -1093,6 +1107,19 @@ pub fn apply_remote_records(
             .map_err(db_error)?;
         tx.pragma_update(None, "defer_foreign_keys", 1i64)
             .map_err(db_error)?;
+        // Capture the latest local edits under the same SQLite transaction as the remote apply.
+        let current = collect_dirty_records_from_connection(&tx)?;
+
+        for conflict in &mut conflicts {
+            if conflict.local_snapshot.is_some() {
+                if let Some(snapshot) = current.iter().find(|record| record.record_id == conflict.record_id) {
+                    conflict.local_snapshot = Some(serde_json::to_value(snapshot).map_err(json_error)?);
+                } else {
+                    let retained: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sync_conflict WHERE record_id=?1 AND resolved_at IS NULL AND local_snapshot_json IS NOT NULL)", [&conflict.record_id], |row|row.get(0)).map_err(db_error)?;
+                    if !retained { return Err(DomainError::conflict("本地记录已变化，请重新同步")); }
+                }
+            }
+        }
 
         let mut summary = ApplySummary::default();
         for record in ordered {
@@ -1107,6 +1134,15 @@ pub fn apply_remote_records(
             if current_revision.is_some_and(|revision| revision >= record.revision as i64) {
                 continue;
             }
+            if current
+                .iter()
+                .any(|local| local.record_id == record.record_id)
+                && !conflicts.iter().any(|conflict| {
+                    conflict.record_id == record.record_id && conflict.local_snapshot.is_some()
+                })
+            {
+                return Err(DomainError::conflict("本地记录已变化，请重新同步"));
+            }
 
             if record.deleted {
                 apply_tombstone(&tx, record)?;
@@ -1118,22 +1154,249 @@ pub fn apply_remote_records(
             update_sync_record(&tx, record)?;
         }
 
+        for conflict in conflicts {
+            backup_conflict_in_transaction(&tx, conflict)?;
+        }
+
         tx.commit().map_err(db_error)?;
         Ok(summary)
     })
 }
 
+/// Archive records and proxy metadata commit together; a failed dependency leaves no partial restore.
+pub(crate) type ArchiveExpected =
+    std::collections::HashMap<(SyncRecordType, String), (i64, i64, i64, Option<i64>)>;
+
+pub(crate) fn apply_archive_records(
+    store: &Store,
+    records: &[LocalSyncRecord],
+    expected_sessions: &std::collections::HashMap<String, (i64, i64, i64)>,
+    expected_entities: &ArchiveExpected,
+    proxies: &[openshell_core_domain::ProxyServerConfig],
+) -> DomainResult<()> {
+    for record in records {
+        validate_remote_record(record)?;
+    }
+    let mut ordered: Vec<_> = records.iter().collect();
+    ordered.sort_by_key(|record| record.record_type.apply_order());
+    store.with_conn(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_error)?;
+        tx.pragma_update(None, "defer_foreign_keys", 1).map_err(db_error)?;
+        for (id, expected) in expected_sessions {
+            let current: (i64, i64, i64) = tx.query_row(
+                "SELECT s.version,s.updated_at,COALESCE(r.local_rev,0) FROM session s LEFT JOIN sync_record r ON r.record_id=s.id WHERE s.id=?1 AND s.deleted_at IS NULL",
+                [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(db_error)?;
+            if &current != expected { return Err(DomainError::validation("会话已修改，请重新预览归档")); }
+        }
+        for ((kind,id),expected) in expected_entities {
+            let current:(i64,i64,i64,Option<i64>)=tx.query_row(&format!("SELECT e.version,e.updated_at,COALESCE(r.local_rev,0),e.deleted_at FROM {} e LEFT JOIN sync_record r ON r.record_id=e.id WHERE e.id=?1",kind.table()),[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).map_err(db_error)?;
+            if &current!=expected {return Err(DomainError::conflict("归档依赖已修改，请重新预览"));}
+        }
+        for record in ordered {
+            if !expected_sessions.contains_key(&record.record_id) && !expected_entities.contains_key(&(record.record_type,record.record_id.clone())) {
+                let exists: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE id=?1)", record.record_type.table()), [&record.record_id], |row| row.get(0)).map_err(db_error)?;
+                if exists { return Err(DomainError::validation("归档目标 ID 冲突，请重新预览")); }
+            }
+            upsert_record(&tx, record)?;
+            if record.record_type == SyncRecordType::Group {
+                tx.execute("UPDATE session_group SET expanded=?1 WHERE id=?2", params![record.payload["expanded"].as_bool().unwrap_or(true),record.record_id]).map_err(db_error)?;
+            }
+            if record.record_type == SyncRecordType::Session {
+                tx.execute("UPDATE session SET use_count=?1,last_used_at=?2,last_result=?3 WHERE id=?4",
+                    params![record.payload["use_count"].as_i64().unwrap_or(0),record.payload["last_used_at"].as_i64(),record.payload["last_result"].as_str(),record.record_id]).map_err(db_error)?;
+            }
+            update_sync_record(&tx, record)?;
+            tx.execute(&format!("UPDATE {} SET dirty=1 WHERE id=?1", record.record_type.table()), [&record.record_id]).map_err(db_error)?;
+            tx.execute("UPDATE sync_record SET local_rev=local_rev+1,sync_state='dirty' WHERE record_id=?1", [&record.record_id]).map_err(db_error)?;
+        }
+        if !proxies.is_empty() {
+            let row: Option<(String,String)> = tx.query_row("SELECT id,value_json FROM setting WHERE scope='global' AND scope_id IS NULL AND key='proxy_list'", [], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(db_error)?;
+            let (id, mut existing) = match row {
+                Some((id,value)) => (id, serde_json::from_str::<Vec<Value>>(&value).map_err(json_error)?),
+                None => (Ulid::new().to_string(),Vec::new()),
+            };
+            if existing.iter().any(|proxy| proxy.get("password").and_then(Value::as_str).is_some_and(|value| !value.is_empty())) {
+                return Err(DomainError::validation("请先解锁并迁移已有代理密码"));
+            }
+            existing.extend(proxies.iter().map(serde_json::to_value).collect::<Result<Vec<_>,_>>().map_err(json_error)?);
+            tx.execute("INSERT INTO setting(id,scope,key,value_json,value_type,syncable,updated_at) VALUES(?1,'global','proxy_list',?2,'array',0,?3) ON CONFLICT(id) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at",
+                params![id,serde_json::to_string(&existing).map_err(json_error)?,now_ms()]).map_err(db_error)?;
+        }
+        for record in records {validate_restored_dependencies(&tx,record)?;}
+        tx.commit().map_err(db_error)
+    })
+}
+
+fn validate_restored_dependencies(
+    tx: &Transaction<'_>,
+    record: &LocalSyncRecord,
+) -> DomainResult<()> {
+    for (field, table) in [
+        ("parent_id", "session_group"),
+        ("group_id", "session_group"),
+        ("credential_id", "credential"),
+        ("passphrase_credential_id", "credential"),
+        ("ssh_key_id", "ssh_key"),
+        ("secret_id", "secret"),
+        ("session_id", "session"),
+        ("socks_password_ref", "secret"),
+    ] {
+        if let Some(id) = record.payload.get(field).and_then(Value::as_str) {
+            let exists: bool = tx
+                .query_row(
+                    &format!(
+                        "SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1 AND deleted_at IS NULL)"
+                    ),
+                    [id],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            if !exists {
+                return Err(DomainError::validation(
+                    "冲突副本依赖已删除，请先恢复依赖后重试",
+                ));
+            }
+            if table == "credential" || table == "ssh_key" {
+                let secret_exists: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} e JOIN secret s ON s.id=e.secret_id WHERE e.id=?1 AND s.deleted_at IS NULL)"), [id], |row| row.get(0)).map_err(db_error)?;
+                if !secret_exists {
+                    return Err(DomainError::validation(
+                        "冲突副本缺少凭据秘密，请先恢复凭据",
+                    ));
+                }
+                if table == "ssh_key" {
+                    let passphrase_exists: bool = tx.query_row("SELECT has_passphrase=0 OR EXISTS(SELECT 1 FROM credential c JOIN secret s ON s.id=c.secret_id WHERE c.id=k.passphrase_credential_id AND c.deleted_at IS NULL AND s.deleted_at IS NULL) FROM ssh_key k WHERE k.id=?1", [id], |row| row.get(0)).map_err(db_error)?;
+                    if !passphrase_exists {
+                        return Err(DomainError::validation("私钥口令凭据已删除，请先恢复凭据"));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(id) = record.payload.get("proxy_id").and_then(Value::as_str) {
+        let value: Option<String> = tx.query_row(
+            "SELECT value_json FROM setting WHERE scope='global' AND scope_id IS NULL AND key='proxy_list'",
+            [], |row| row.get(0),
+        ).optional().map_err(db_error)?;
+        let proxies: Vec<Value> =
+            serde_json::from_str(value.as_deref().unwrap_or("[]")).map_err(json_error)?;
+        let raw = proxies
+            .iter()
+            .find(|proxy| proxy["id"].as_str() == Some(id))
+            .ok_or_else(|| DomainError::validation("冲突副本的代理已删除，请先恢复代理"))?;
+        if raw["password"]
+            .as_str()
+            .is_some_and(|password| !password.is_empty())
+        {
+            return Err(DomainError::validation("请先解锁并迁移代理密码"));
+        }
+        let proxy: openshell_core_domain::ProxyServerConfig =
+            serde_json::from_value(raw.clone())
+                .map_err(|_| DomainError::validation("代理配置无效"))?;
+        if let Some(reference) = proxy.password_ref {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM secret WHERE id=?1 AND record_type='proxy_password' AND deleted_at IS NULL)", [reference], |row| row.get(0)).map_err(db_error)?;
+            if !exists {
+                return Err(DomainError::validation(
+                    "代理密码引用已失效，请先恢复代理密码",
+                ));
+            }
+        }
+    }
+    if let Some(id) = record
+        .payload
+        .get("proxy_jump")
+        .and_then(|jump| jump.get("session_id"))
+        .and_then(Value::as_str)
+    {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM session WHERE id=?1 AND deleted_at IS NULL)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if !exists {
+            return Err(DomainError::validation("冲突副本的跳板会话已删除"));
+        }
+    }
+    Ok(())
+}
+
+/// Restore one snapshot and its upload base in one transaction.
+pub fn resolve_conflict_record(
+    store: &Store,
+    conflict_id: &str,
+    local: bool,
+    record: &LocalSyncRecord,
+) -> DomainResult<()> {
+    validate_remote_record(record)?;
+    store.with_conn(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_error)?;
+        tx.pragma_update(None, "defer_foreign_keys", 1i64).map_err(db_error)?;
+        let (id, kind, revision, created, snapshot): (String, String, u64, i64, Option<String>) = tx.query_row(
+            "SELECT record_id,record_type,remote_revision,created_at,local_snapshot_json FROM sync_conflict WHERE id=?1 AND resolved_at IS NULL", [conflict_id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(db_error)?;
+        if id != record.record_id || kind != record.record_type.as_str() { return Err(DomainError::validation("conflict record mismatch")); }
+        let newer: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sync_conflict WHERE record_id=?1 AND resolved_at IS NULL AND remote_revision>?2)", params![id,revision], |r| r.get(0)).map_err(db_error)?;
+        if newer { return Err(DomainError::validation("resolve the latest conflict first")); }
+        let baseline = snapshot.as_deref().map(serde_json::from_str::<Value>).transpose().map_err(json_error)?.and_then(|value| value["_resolution_local_rev"].as_i64());
+        let current: Option<i64> = tx.query_row("SELECT local_rev FROM sync_record WHERE record_id=?1", [&id], |row|row.get(0)).optional().map_err(db_error)?;
+        let changed = match baseline {
+            Some(expected) => current != Some(expected),
+            None => tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE id=?1 AND dirty=1 AND updated_at>?2)", record.record_type.table()), params![id,created], |row|row.get(0)).map_err(db_error)?,
+        };
+        if changed { return Err(DomainError::conflict("冲突发生后本地记录已修改，未覆盖当前修改")); }
+        let mut restored = record.clone(); restored.revision = revision;
+        if restored.deleted { apply_tombstone(&tx,&restored)?; } else {
+            upsert_record(&tx,&restored)?;
+            validate_restored_dependencies(&tx,&restored)?;
+        }
+        update_sync_record(&tx,&restored)?;
+        if local {
+            tx.execute(&format!("UPDATE {} SET dirty=1 WHERE id=?1", record.record_type.table()), [&id]).map_err(db_error)?;
+            tx.execute("UPDATE sync_record SET sync_state='dirty' WHERE record_id=?1", [&id]).map_err(db_error)?;
+        }
+        tx.execute("UPDATE sync_conflict SET resolved_at=?1 WHERE record_id=?2 AND remote_revision<=?3 AND resolved_at IS NULL", params![now_ms(),id,revision]).map_err(db_error)?;
+        tx.execute("UPDATE sync_meta SET conflict_count=(SELECT COUNT(DISTINCT record_id) FROM sync_conflict WHERE resolved_at IS NULL)", []).map_err(db_error)?;
+        let _ = created;
+        tx.commit().map_err(db_error)
+    })
+}
+
 /// 服务端确认提交后，把对应业务记录与同步元数据一并标记为 clean。
 pub fn mark_records_applied(store: &Store, applied: &[AppliedSyncRecord]) -> DomainResult<()> {
+    mark_applied_transaction(store, applied, None)
+}
+
+pub fn mark_uploaded_records(
+    store: &Store,
+    applied: &[AppliedSyncRecord],
+    sent: &[LocalSyncRecord],
+) -> DomainResult<()> {
+    mark_applied_transaction(store, applied, Some(sent))
+}
+
+fn mark_applied_transaction(
+    store: &Store,
+    applied: &[AppliedSyncRecord],
+    sent: Option<&[LocalSyncRecord]>,
+) -> DomainResult<()> {
     store.with_conn(|conn| {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
         let updated_at = now_ms();
+        let current=if sent.is_some() {collect_dirty_records_from_connection(&tx)?}else{Vec::new()};
 
         for record in applied {
             let revision = revision_i64(record.revision)?;
             let table = record.record_type.table();
+            if let Some(sent)=sent {
+                let snapshot=sent.iter().find(|source|source.record_id==record.record_id).ok_or_else(||DomainError::validation("Server acknowledged an unknown sync record"))?;
+                if current.iter().find(|source|source.record_id==record.record_id)!=Some(snapshot) {
+                    tx.execute("INSERT INTO sync_record(record_id,record_type,updated_at,revision,schema_version) VALUES (?1,?2,?3,?4,2) ON CONFLICT(record_id) DO UPDATE SET revision=excluded.revision,base_version=excluded.revision",params![record.record_id,record.record_type.as_str(),updated_at,revision]).map_err(db_error)?;
+                    continue;
+                }
+            }
             tx.execute(
                 &format!("UPDATE {table} SET dirty = 0, version = ?2 WHERE id = ?1"),
                 params![&record.record_id, revision],
@@ -1171,7 +1434,40 @@ pub fn mark_records_applied(store: &Store, applied: &[AppliedSyncRecord]) -> Dom
 
 /// 保存冲突双方，供界面恢复；远端内容始终保持密文。
 pub fn backup_conflict(store: &Store, input: ConflictBackupInput) -> DomainResult<String> {
+    store.with_conn(|conn| {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let mut input = input;
+        if input.local_snapshot.is_some() {
+            let current = collect_dirty_records_from_connection(&tx)?
+                .into_iter()
+                .find(|record| record.record_id == input.record_id)
+                .ok_or_else(|| DomainError::conflict("本地记录已变化，请重新同步"))?;
+            input.local_snapshot = Some(serde_json::to_value(current).map_err(json_error)?);
+        }
+        let id = backup_conflict_in_transaction(&tx, input)?;
+        tx.commit().map_err(db_error)?;
+        Ok(id)
+    })
+}
+
+fn backup_conflict_in_transaction(
+    tx: &Transaction<'_>,
+    mut input: ConflictBackupInput,
+) -> DomainResult<String> {
     let conflict_id = Ulid::new().to_string();
+    if let Some(snapshot) = input.local_snapshot.as_mut() {
+        let revision: Option<i64> = tx
+            .query_row(
+                "SELECT local_rev FROM sync_record WHERE record_id=?1",
+                [&input.record_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        snapshot["_resolution_local_rev"] = serde_json::json!(revision.unwrap_or(0));
+    }
     let local_snapshot = input
         .local_snapshot
         .as_ref()
@@ -1189,32 +1485,28 @@ pub fn backup_conflict(store: &Store, input: ConflictBackupInput) -> DomainResul
     let remote_revision = revision_i64(input.remote_revision)?;
     let created_at = now_ms();
 
-    store.with_conn(|conn| {
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db_error)?;
-        tx.execute(
-            "INSERT INTO sync_conflict (id, record_id, record_type, local_snapshot_json, \
+    tx.execute(
+        "INSERT INTO sync_conflict (id, record_id, record_type, local_snapshot_json, \
              remote_ciphertext_b64, remote_checksum, remote_revision, remote_device_id, \
              remote_deleted, remote_updated_at, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                &conflict_id,
-                &input.record_id,
-                input.record_type.as_str(),
-                local_snapshot,
-                &input.remote_ciphertext_b64,
-                &input.remote_checksum,
-                remote_revision,
-                &input.remote_device_id,
-                input.remote_deleted,
-                input.remote_updated_at,
-                created_at,
-            ],
-        )
-        .map_err(db_error)?;
-        tx.execute(
-            "INSERT INTO sync_record (record_id, record_type, base_version, local_rev, \
+        params![
+            &conflict_id,
+            &input.record_id,
+            input.record_type.as_str(),
+            local_snapshot,
+            &input.remote_ciphertext_b64,
+            &input.remote_checksum,
+            remote_revision,
+            &input.remote_device_id,
+            input.remote_deleted,
+            input.remote_updated_at,
+            created_at,
+        ],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO sync_record (record_id, record_type, base_version, local_rev, \
              server_checksum, sync_state, conflict_json, updated_at, schema_version, revision, \
              device_id, deleted, remote_ciphertext_b64) \
              VALUES (?1, ?2, ?3, ?3, ?4, 'conflict', ?5, ?6, ?7, ?3, ?8, ?9, ?10) \
@@ -1224,30 +1516,28 @@ pub fn backup_conflict(store: &Store, input: ConflictBackupInput) -> DomainResul
              updated_at = excluded.updated_at, schema_version = excluded.schema_version, \
              revision = excluded.revision, device_id = excluded.device_id, \
              deleted = excluded.deleted, remote_ciphertext_b64 = excluded.remote_ciphertext_b64",
-            params![
-                &input.record_id,
-                input.record_type.as_str(),
-                remote_revision,
-                &input.remote_checksum,
-                conflict_json,
-                created_at,
-                SYNC_SCHEMA_VERSION,
-                &input.remote_device_id,
-                input.remote_deleted,
-                &input.remote_ciphertext_b64,
-            ],
-        )
-        .map_err(db_error)?;
-        tx.execute(
-            "UPDATE sync_meta SET conflict_count = \
+        params![
+            &input.record_id,
+            input.record_type.as_str(),
+            remote_revision,
+            &input.remote_checksum,
+            conflict_json,
+            created_at,
+            SYNC_SCHEMA_VERSION,
+            &input.remote_device_id,
+            input.remote_deleted,
+            &input.remote_ciphertext_b64,
+        ],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "UPDATE sync_meta SET conflict_count = \
              (SELECT COUNT(*) FROM sync_conflict WHERE resolved_at IS NULL), \
              sync_state = 'conflict'",
-            [],
-        )
-        .map_err(db_error)?;
-        tx.commit().map_err(db_error)?;
-        Ok(conflict_id.clone())
-    })
+        [],
+    )
+    .map_err(db_error)?;
+    Ok(conflict_id)
 }
 
 #[cfg(test)]
@@ -1616,6 +1906,17 @@ mod tests {
         )
         .expect("mark applied");
 
+        store
+            .with_conn(|conn| {
+                conn.execute(
+                    "UPDATE session_group SET dirty=1,version=4 WHERE id='group'",
+                    [],
+                )
+                .map_err(db_error)?;
+                Ok(())
+            })
+            .expect("edit after upload before next conflict");
+
         let conflict_id = backup_conflict(
             &store,
             ConflictBackupInput {
@@ -1642,7 +1943,7 @@ mod tests {
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .map_err(db_error)?;
-                assert_eq!(local, (0, 3));
+                assert_eq!(local, (1, 4));
                 let conflict: (i64, i64, String) = conn
                     .query_row(
                         "SELECT remote_deleted, remote_updated_at, remote_device_id \

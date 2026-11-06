@@ -4,6 +4,8 @@ import type {
   LocalShellKind,
   Protocol,
   RdpLaunchResult,
+  RdpRuntimeStatus,
+  SerialProfileConfig,
   Session,
   TabStatus,
 } from "../types/ipc";
@@ -19,10 +21,13 @@ import {
   forwardList,
   forwardStart,
   launchRdp,
+  rdpGetStatus,
+  rdpClose,
   writeTerminal,
   sendSerial,
 } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
+import { encodeTextForSession } from "../lib/terminal-actions";
 
 export interface ConnectOverrides {
   host?: string;
@@ -47,6 +52,15 @@ export interface TerminalTab {
   baudRate?: number;
   /** Windows 远程桌面会话：最近一次 rdp_launch 的结果（进程 PID、临时 .rdp 路径等） */
   rdpInfo?: RdpLaunchResult | null;
+  /**
+   * 远程桌面阶段。mstsc 启动成功不代表远程桌面已经连上，
+   * 在 gpt 提供真实连接状态（rdp_get_status）之前，绝不把启动当成 connected。
+   */
+  rdpPhase?: "starting" | "launched" | "failed" | null;
+  /** 仅记录本地客户端唤起时间，不代表远端在线时长 */
+  rdpLaunchedAt?: number | null;
+  /** 串口会话首次打开时的完整配置，重连时必须原样复用 */
+  serialConfig?: SerialProfileConfig;
   /** 本地终端会话：使用的 shell 类型（powershell / cmd / wsl ...） */
   shellKind?: LocalShellKind | null;
   /** 连接就绪时间戳（毫秒），供连接详情面板计算实时在线时长 */
@@ -133,6 +147,20 @@ function clearAutoReconnectTimer(tabId: string): void {
 /** 支持断线自动重连的协议（RDP 由 mstsc 承载，本地终端无远端连接） */
 const AUTO_RECONNECT_PROTOCOLS: Protocol[] = ["ssh", "sftp", "telnet", "serial"];
 
+/**
+ * 串口配置必须显式指定端口，缺失时绝不能回退到 COM1 或 Mock，
+ * 否则会悄悄连上用户没有选择的设备。
+ */
+function readSerialProfileConfig(raw: unknown): SerialProfileConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const config = raw as Partial<SerialProfileConfig>;
+  const portName = typeof config.port_name === "string" ? config.port_name.trim() : "";
+  if (!portName) return null;
+  const baudRate =
+    typeof config.baud_rate === "number" && config.baud_rate > 0 ? config.baud_rate : 115200;
+  return { ...(config as SerialProfileConfig), port_name: portName, baud_rate: baudRate };
+}
+
 function releaseTab(tabId: string, connectionId?: string | null): Promise<void> {
   const task = (async () => {
     await closeTerminal(tabId).catch(() => {});
@@ -196,6 +224,11 @@ interface TerminalState {
     command: string,
     options?: { allTabs?: boolean; appendCr?: boolean }
   ) => Promise<void>;
+  /**
+   * 向单个目标标签发送文本：按该会话的编码转换，串口走 sendSerial，其余走 writeTerminal。
+   * 不增删换行、不写命令历史、不改变 activeTabId；目标不可用或发送失败必须 reject。
+   */
+  sendTextToTab: (tabId: string, text: string) => Promise<void>;
 
   closeTab: (tabId: string) => Promise<void>;
   setActiveTab: (tabId: string) => void;
@@ -261,6 +294,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       status: "connecting",
       baudRate: session.protocol_options_json?.baud_rate || 115200,
       rdpInfo: null,
+      rdpPhase: protocol === "rdp" ? "starting" : null,
+      rdpLaunchedAt: null,
+      serialConfig:
+        protocol === "serial" ? readSerialProfileConfig(session.protocol_options_json) ?? undefined : undefined,
       shellKind,
       connectedAt: null,
       reconnectAttempt: 0,
@@ -309,31 +346,48 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       return tabId;
     }
 
-    // Windows 远程桌面：生成 .rdp 并唤起 mstsc.exe，结果落进 rdpInfo
+    // Windows 远程桌面：生成 .rdp 并唤起 mstsc.exe。mstsc 启动成功不代表远端已连上，
+    // 在拿到真实连接状态前只标记 launched，绝不写 connected / connectedAt。
     if (protocol === "rdp") {
       try {
         const rdpInfo = await launchRdp(session.id);
-        if (!get().tabs.some((item) => item.tabId === tabId)) return tabId;
+        if (!get().tabs.some((item) => item.tabId === tabId)) {
+          // 启动请求迟到且标签已被关闭：释放刚刚创建的实例，避免遗留自有进程
+          await rdpClose(rdpInfo.launch_id).catch(() => {});
+          return tabId;
+        }
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
               ? {
                   ...t,
                   rdpInfo,
-                  status: "connected" as TabStatus,
+                  rdpPhase: "launched" as const,
+                  rdpLaunchedAt: Date.now(),
+                  status: "connecting" as TabStatus,
                   error: undefined,
-                  connectedAt: Date.now(),
+                  connectedAt: null,
                   reconnectAttempt: 0,
                 }
               : t
           ),
         }));
+        // 只有 rdp_get_status 回传 connected（native OnLoginComplete）才算真正连上
+        startRdpPolling(tabId, rdpInfo.launch_id);
       } catch (err: any) {
         const errMsg = formatFriendlyError(err);
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, status: "error" as TabStatus, rdpInfo: null, error: errMsg }
+              ? {
+                  ...t,
+                  status: "error" as TabStatus,
+                  rdpInfo: null,
+                  rdpPhase: "failed" as const,
+                  rdpLaunchedAt: null,
+                  connectedAt: null,
+                  error: errMsg,
+                }
               : t
           ),
         }));
@@ -342,17 +396,40 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
 
     if (protocol === "serial") {
-      try {
-        const serialOpts = session.protocol_options_json || {
-          port_name: "COM1",
-          baud_rate: 115200,
-        };
+      const serialConfig = readSerialProfileConfig(session.protocol_options_json);
+      if (!serialConfig) {
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? {
+                  ...t,
+                  status: "error" as TabStatus,
+                  connectionId: null,
+                  error: "串口会话未配置端口号，请先编辑会话并选择端口",
+                  serialConfig: undefined,
+                }
+              : t
+          ),
+        }));
+        return tabId;
+      }
 
-        const activeCardId = cardId || tabId;
-        await openSerial(activeCardId, serialOpts, false).catch(async () => {
-          // 若真实串口不存在，自动切换到 Mock 后端保证可测试与可交互
-          await openSerial(activeCardId, serialOpts, true);
-        });
+      const activeCardId = cardId || tabId;
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.tabId === tabId
+            ? { ...t, serialConfig, baudRate: serialConfig.baud_rate }
+            : t
+        ),
+      }));
+
+      try {
+        // 只尝试一次真实串口，绝不回退 Mock；失败必须让用户看到并自行重试。
+        await openSerial(activeCardId, serialConfig, false);
+        if (!get().tabs.some((item) => item.tabId === tabId)) {
+          await closeSerial(activeCardId).catch(() => {});
+          return tabId;
+        }
 
         set((state) => ({
           tabs: state.tabs.map((t) =>
@@ -360,12 +437,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               ? {
                   ...t,
                   status: "connected",
+                  error: undefined,
                   connectedAt: Date.now(),
                   reconnectAttempt: 0,
                 }
               : t
           ),
         }));
+
+        // 串口视图（ASCII/HEX）在断开时保留订阅，重连成功后原地恢复 RX 轮询
+        const { resumeSerialRead } = await import("./serialStore");
+        resumeSerialRead(activeCardId);
 
         return tabId;
       } catch (err: any) {
@@ -382,7 +464,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               : t
           ),
         }));
-        get().markDisconnected(tabId, errMsg);
         return tabId;
       }
     } else {
@@ -482,10 +563,29 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set({ commandHistory: [] });
   },
 
+  sendTextToTab: async (tabId, text) => {
+    const tab = get().tabs.find((item) => item.tabId === tabId);
+    if (!tab) throw new Error("目标标签不存在或已关闭");
+    if (tab.status !== "connected" || !COMMAND_TARGET_PROTOCOLS.includes(tab.protocol)) {
+      throw new Error(`目标标签当前不可发送：${tab.sessionName}`);
+    }
+
+    const { useSessionStore } = await import("./sessionStore");
+    const encoding = useSessionStore
+      .getState()
+      .sessions.find((item) => item.id === tab.sessionId)?.encoding;
+    // 编码失败/发送失败都向上抛出，由调用者决定如何提示；这里不吞错。
+    const bytes = await encodeTextForSession(text, encoding);
+    if (tab.protocol === "serial") {
+      await sendSerial(tab.cardId || tab.tabId, Array.from(bytes));
+    } else {
+      await writeTerminal(tab.tabId, bytes);
+    }
+  },
+
   sendCommandToTabs: async (command, options) => {
     const appendCr = options?.appendCr !== false;
     const payload = appendCr ? `${command}\r` : command;
-    const bytes = new TextEncoder().encode(payload);
 
     const state = get();
     const targets = options?.allTabs
@@ -501,13 +601,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     for (const tab of targets) {
       try {
-        if (tab.protocol === "serial") {
-          await sendSerial(tab.cardId || tab.tabId, Array.from(bytes));
-        } else {
-          await writeTerminal(tab.tabId, bytes);
-        }
+        // 统一走按会话编码的单目标发送入口，不再各调用点直接 UTF-8 写 PTY
+        await get().sendTextToTab(tab.tabId, payload);
       } catch (e) {
         console.warn(`sendCommandToTabs: 写入 ${tab.tabId} 失败`, e);
+        const message = formatFriendlyError(e);
+        set((current) => ({
+          tabs: current.tabs.map((t) => (t.tabId === tab.tabId ? { ...t, error: message } : t)),
+        }));
       }
     }
   },
@@ -542,13 +643,40 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   reconnectTab: async (tabId: string, overrides?: ConnectOverrides) => {
     const tab = get().tabs.find((t) => t.tabId === tabId);
-    if (!tab || tab.status === "connecting") return;
-    // RDP 允许在「已连接」状态下再次唤起 mstsc；其余协议必须先断开才能重连
+    if (!tab) return;
     const isRdp = tab.protocol === "rdp";
+    // RDP 的 launched/已连接状态也允许重启（mstsc 已唤起但连接状态仍是 connecting）
+    const rdpRestartable =
+      isRdp &&
+      (tab.rdpPhase === "launched" ||
+        tab.status === "connected" ||
+        tab.status === "disconnected" ||
+        tab.status === "error");
+    if (!rdpRestartable && tab.status === "connecting") return;
     if (!isRdp && tab.status === "connected") return;
 
     // 手动/自动重连启动时取消尚未触发的下一次退避定时器
     clearAutoReconnectTimer(tabId);
+
+    // RDP：先停掉状态轮询并关闭本标签自有的 mstsc 实例，再启动新实例。
+    // 只关闭 tab.rdpInfo 记录的 launch_id，不能按 session 误杀其他标签的实例。
+    if (isRdp) {
+      stopRdpPolling(tabId);
+      const previousLaunchId = tab.rdpInfo?.launch_id;
+      if (previousLaunchId) {
+        await rdpClose(previousLaunchId).catch((e) => {
+          console.warn(`reconnectTab: 关闭旧远程桌面实例失败 ${previousLaunchId}`, e);
+        });
+      }
+    }
+
+    // 串口：重连前停止旧定时发送与 RX 轮询，避免旧任务在新连接上继续发送；
+    // 订阅关系保留，重连成功后由 resumeSerialRead 原地恢复。
+    if (tab.protocol === "serial") {
+      const { pauseSerialRead, stopSerialSendTimer } = await import("./serialStore");
+      stopSerialSendTimer();
+      pauseSerialRead(tab.cardId || tab.tabId);
+    }
 
     set((state) => ({
       tabs: state.tabs.map((t) =>
@@ -569,31 +697,45 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     await releaseTab(tabId, tab.connectionId);
     if (!get().tabs.some((item) => item.tabId === tabId)) return;
 
-    // Windows 远程桌面：重新生成 .rdp 并唤起 mstsc.exe
+    // Windows 远程桌面：重新生成 .rdp 并唤起 mstsc.exe；启动成功仍不等于远端已连接。
     if (tab.protocol === "rdp") {
       try {
         const rdpInfo = await launchRdp(tab.sessionId);
-        if (!get().tabs.some((item) => item.tabId === tabId)) return;
+        if (!get().tabs.some((item) => item.tabId === tabId)) {
+          await rdpClose(rdpInfo.launch_id).catch(() => {});
+          return;
+        }
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
               ? {
                   ...t,
                   rdpInfo,
-                  status: "connected" as TabStatus,
+                  rdpPhase: "launched" as const,
+                  rdpLaunchedAt: Date.now(),
+                  status: "connecting" as TabStatus,
                   error: undefined,
-                  connectedAt: Date.now(),
+                  connectedAt: null,
                   reconnectAttempt: 0,
                 }
               : t
           ),
         }));
+        startRdpPolling(tabId, rdpInfo.launch_id);
       } catch (err: any) {
         const message = formatFriendlyError(err);
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
-              ? { ...t, status: "error" as TabStatus, rdpInfo: null, error: message }
+              ? {
+                  ...t,
+                  status: "error" as TabStatus,
+                  rdpInfo: null,
+                  rdpPhase: "failed" as const,
+                  rdpLaunchedAt: null,
+                  connectedAt: null,
+                  error: message,
+                }
               : t
           ),
         }));
@@ -624,15 +766,42 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
 
     if (tab.protocol === "serial") {
+      let serialConfig = tab.serialConfig ?? null;
+      if (!serialConfig) {
+        const { useSessionStore } = await import("./sessionStore");
+        const session = useSessionStore
+          .getState()
+          .sessions.find((item) => item.id === tab.sessionId);
+        serialConfig = readSerialProfileConfig(session?.protocol_options_json);
+      }
+
+      // 配置缺失时不能猜端口，更不能回退 COM1/Mock；停止本轮重连并明确报错。
+      if (!serialConfig) {
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.tabId === tabId
+              ? {
+                  ...t,
+                  status: "error" as TabStatus,
+                  connectionId: null,
+                  error: "串口配置缺失：未指定端口，已停止重连",
+                  connectedAt: null,
+                }
+              : t
+          ),
+        }));
+        return;
+      }
+
+      const activeCardId = tab.cardId || tab.tabId;
       try {
-        const activeCardId = tab.cardId || tab.tabId;
-        const serialOpts = {
-          port_name: "COM1",
-          baud_rate: tab.baudRate || 115200,
-        };
-        await openSerial(activeCardId, serialOpts, false).catch(async () => {
-          await openSerial(activeCardId, serialOpts, true);
-        });
+        // 设备异常时旧句柄可能仍处于打开状态；先释放再按原配置重开。
+        await closeSerial(activeCardId).catch(() => {});
+        await openSerial(activeCardId, serialConfig, false);
+        if (!get().tabs.some((item) => item.tabId === tabId)) {
+          await closeSerial(activeCardId).catch(() => {});
+          return;
+        }
         set((state) => ({
           tabs: state.tabs.map((t) =>
             t.tabId === tabId
@@ -640,12 +809,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                   ...t,
                   status: "connected",
                   error: undefined,
+                  serialConfig,
+                  baudRate: serialConfig.baud_rate,
                   connectedAt: Date.now(),
                   reconnectAttempt: 0,
                 }
               : t
           ),
         }));
+        const { resumeSerialRead } = await import("./serialStore");
+        resumeSerialRead(activeCardId);
       } catch (err: any) {
         const message = formatFriendlyError(err);
         get().markDisconnected(tabId, message);
@@ -688,6 +861,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (!tab) return;
 
     clearAutoReconnectTimer(tabId);
+
+    // 远程桌面被动断开/退出时停止状态轮询，避免迟到的 connected 结果复活会话
+    if (tab.protocol === "rdp") stopRdpPolling(tabId);
+
+    // 串口被动断开：停止定时发送并暂停 RX 轮询；订阅保留，重连成功后恢复。
+    if (tab.protocol === "serial") {
+      void import("./serialStore").then(({ pauseSerialRead, stopSerialSendTimer }) => {
+        stopSerialSendTimer();
+        pauseSerialRead(tab.cardId || tab.tabId);
+      });
+    }
 
     set((state) => ({
       tabs: state.tabs.map((t) =>
@@ -780,6 +964,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (!tab) return;
 
     clearAutoReconnectTimer(tabId);
+    // 关闭标签先停掉该标签的状态轮询，防止标签移除后仍被迟到结果复活
+    stopRdpPolling(tabId);
 
     // 先移除标签，让仍在连接中的响应立即失效，再异步释放资源。
     set((state) => {
@@ -802,6 +988,25 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         "closeCard",
         async () => {
           if (tab.cardId) await closeCard(tab.cardId);
+        },
+      ],
+      [
+        // 串口主动关闭：停止定时发送、RX 轮询与订阅，再释放设备句柄
+        "teardownSerial",
+        async () => {
+          if (tab.protocol === "serial") {
+            const { teardownSerialSession } = await import("./serialStore");
+            teardownSerialSession(tab.cardId || tab.tabId);
+          }
+        },
+      ],
+      [
+        // 只关闭本标签自己的 RDP 实例，不能影响同 session 的其他标签
+        "closeRdp",
+        async () => {
+          if (tab.protocol === "rdp" && tab.rdpInfo?.launch_id) {
+            await rdpClose(tab.rdpInfo.launch_id);
+          }
         },
       ],
       [
@@ -937,3 +1142,142 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     });
   },
 }));
+
+/** RDP 运行状态轮询间隔；mstsc 启动后由后端 native 事件回传真实状态 */
+const RDP_POLL_INTERVAL_MS = 2000;
+
+interface RdpPollEntry {
+  launchId: string;
+  timer: ReturnType<typeof setInterval>;
+}
+
+/** 按标签隔离的 RDP 轮询；同一 session 打开多个标签时互不干扰 */
+const rdpPollers = new Map<string, RdpPollEntry>();
+
+/** 停止指定标签的 RDP 状态轮询（关闭/重连/到达终态时调用） */
+function stopRdpPolling(tabId: string): void {
+  const entry = rdpPollers.get(tabId);
+  if (!entry) return;
+  clearInterval(entry.timer);
+  rdpPollers.delete(tabId);
+}
+
+/** 把后端运行状态映射到标签；仅 connected 才表示 native OnLoginComplete */
+function applyRdpRuntimeStatus(tabId: string, status: RdpRuntimeStatus): void {
+  const tab = useTerminalStore.getState().tabs.find((item) => item.tabId === tabId);
+  // 标签已关闭或 launch_id 已被新实例替换：丢弃迟到结果，绝不复活
+  if (!tab || tab.rdpInfo?.launch_id !== status.launch_id) {
+    stopRdpPolling(tabId);
+    return;
+  }
+
+  if (status.state === "connected") {
+    // 已是 connected 时保持首次登录完成时间，不重复记成功时间
+    if (tab.status === "connected" && tab.connectedAt != null) return;
+    useTerminalStore.setState((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.tabId === tabId
+          ? {
+              ...t,
+              status: "connected" as TabStatus,
+              rdpPhase: "launched" as const,
+              error: undefined,
+              exitCode: null,
+              connectedAt: Date.now(),
+            }
+          : t
+      ),
+    }));
+    return;
+  }
+
+  if (status.state === "starting" || status.state === "launched") {
+    // 已完成登录后，后端仍可能报 launched；不能把已连接会话降级回 connecting
+    if (tab.status === "connected") return;
+    useTerminalStore.setState((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.tabId === tabId
+          ? {
+              ...t,
+              status: "connecting" as TabStatus,
+              rdpPhase: status.state === "launched" ? ("launched" as const) : ("starting" as const),
+              error: undefined,
+              connectedAt: null,
+            }
+          : t
+      ),
+    }));
+    return;
+  }
+
+  // failed / disconnected / closed 是终态：停止轮询，如实映射，不写成功时间
+  stopRdpPolling(tabId);
+  const terminalState = status.state === "failed";
+  const message =
+    status.error ||
+    (status.state === "closed"
+      ? "远程桌面会话已关闭"
+      : status.state === "disconnected"
+        ? "远程桌面连接已断开"
+        : "远程桌面启动失败");
+  useTerminalStore.setState((state) => ({
+    tabs: state.tabs.map((t) =>
+      t.tabId === tabId
+        ? {
+            ...t,
+            status: terminalState ? ("error" as TabStatus) : ("disconnected" as TabStatus),
+            rdpPhase: terminalState ? ("failed" as const) : null,
+            rdpLaunchedAt: null,
+            connectedAt: null,
+            error: message,
+            exitCode: status.exit_code ?? null,
+          }
+        : t
+    ),
+  }));
+}
+
+async function pollRdpStatus(tabId: string, launchId: string): Promise<void> {
+  const entry = rdpPollers.get(tabId);
+  if (!entry || entry.launchId !== launchId) return;
+  const tab = useTerminalStore.getState().tabs.find((item) => item.tabId === tabId);
+  if (!tab || tab.rdpInfo?.launch_id !== launchId) {
+    stopRdpPolling(tabId);
+    return;
+  }
+
+  try {
+    const status = await rdpGetStatus(launchId);
+    // 等待响应期间标签可能已关闭或已换新实例
+    if (rdpPollers.get(tabId)?.launchId !== launchId) return;
+    applyRdpRuntimeStatus(tabId, status);
+  } catch (e) {
+    if (rdpPollers.get(tabId)?.launchId !== launchId) return;
+    // 无法查询状态时不能继续假装启动中；停止轮询并显示真实错误
+    stopRdpPolling(tabId);
+    const message = formatFriendlyError(e);
+    useTerminalStore.setState((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.tabId === tabId
+          ? {
+              ...t,
+              status: "error" as TabStatus,
+              rdpPhase: "failed" as const,
+              rdpLaunchedAt: null,
+              connectedAt: null,
+              error: message,
+            }
+          : t
+      ),
+    }));
+  }
+}
+
+/** 启动指定标签 / launch_id 的 RDP 状态轮询；重复启动会先清理旧轮询 */
+function startRdpPolling(tabId: string, launchId: string): void {
+  stopRdpPolling(tabId);
+  const timer = setInterval(() => {
+    void pollRdpStatus(tabId, launchId);
+  }, RDP_POLL_INTERVAL_MS);
+  rdpPollers.set(tabId, { launchId, timer });
+}

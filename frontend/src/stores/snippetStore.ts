@@ -31,7 +31,12 @@ export const useSnippetStore = create<SnippetState>((set, get) => ({
     set({ loading: true });
     try {
       const list = await snippetList(groupId);
-      set({ snippets: list, loading: false });
+      const normalized = (list || []).map((snip) => ({
+        ...snip,
+        kind: snip.kind ?? "snippet",
+        body: snip.body ?? null,
+      }));
+      set({ snippets: normalized, loading: false });
     } catch (e) {
       console.warn("load snippets error", e);
       set({ loading: false });
@@ -39,13 +44,23 @@ export const useSnippetStore = create<SnippetState>((set, get) => ({
   },
 
   createSnippet: async (input: SnippetInput) => {
-    const snip = await snippetCreate(input);
+    const normalized: SnippetInput = {
+      ...input,
+      kind: input.kind ?? "snippet",
+      body: input.body ?? null,
+    };
+    const snip = await snippetCreate(normalized);
     await get().loadSnippets(get().activeGroupId || undefined);
     return snip;
   },
 
   updateSnippet: async (id: string, input: SnippetInput) => {
-    const snip = await snippetUpdate(id, input);
+    const normalized: SnippetInput = {
+      ...input,
+      kind: input.kind ?? "snippet",
+      body: input.body ?? null,
+    };
+    const snip = await snippetUpdate(id, normalized);
     await get().loadSnippets(get().activeGroupId || undefined);
     return snip;
   },

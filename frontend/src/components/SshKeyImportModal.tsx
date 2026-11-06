@@ -80,16 +80,16 @@ export function SshKeyImportModal({ onClose, onSaved, vaultUnlock }: Props) {
       </>}
     >
       <form id="ssh-key-import-form" onSubmit={save} autoComplete="off" className="flex flex-col gap-4">
-        <Field label="自定义私钥名" htmlFor="ssh-key-name" required>
-          <Input id="ssh-key-name" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} placeholder="如：生产服务器" autoFocus />
+        <Field label="自定义私钥名" htmlFor="ssh-key-name" required value={name}>
+          <Input id="ssh-key-name" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} autoFocus />
         </Field>
-        <Field label="导入私钥文件" htmlFor="ssh-key-file" required>
+        <Field label="导入私钥文件" htmlFor="ssh-key-file" required value={file?.file_name ?? ""}>
           <div className="flex gap-2">
-            <Input id="ssh-key-file" value={file?.file_name ?? ""} readOnly placeholder="尚未选择私钥" className="min-w-0 flex-1" />
+            <Input id="ssh-key-file" value={file?.file_name ?? ""} aria-required="true" readOnly className="min-w-0 flex-1" />
             <Button onClick={chooseFile} disabled={busy}>选择文件</Button>
           </div>
         </Field>
-        <Field label="私钥密码（可选）" htmlFor="ssh-key-password">
+        <Field label="私钥密码" htmlFor="ssh-key-password">
           <Input id="ssh-key-password" type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} disabled={busy} autoComplete="off" />
         </Field>
         {vaultUnlock}

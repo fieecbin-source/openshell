@@ -1,19 +1,24 @@
 import React, { useState } from "react";
 import { useSerialStore } from "../stores/serialStore";
+import { useSessionStore } from "../stores/sessionStore";
 import type { SerialNewlineMode } from "../types/ipc";
 import { Button, IconButton } from "./ui/Button";
-import { Input, Select } from "./ui/Field";
+import { Field, Input, Select } from "./ui/Field";
 import { Checkbox, Segmented } from "./ui/Controls";
 import { cn } from "./ui/cn";
 import { PauseIcon, PlayIcon, PlusIcon, SendIcon, XIcon } from "./ui/icons";
 
 interface SerialSendBarProps {
   cardId: string;
+  sessionId?: string;
 }
 
 type SendMode = "ascii" | "hex";
 
-export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
+export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId, sessionId }) => {
+  const encoding = useSessionStore((s) =>
+    sessionId ? s.sessions.find((item) => item.id === sessionId)?.encoding : undefined
+  );
   const {
     sendText,
     setSendText,
@@ -43,7 +48,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendCurrent(cardId);
+      sendCurrent(cardId, encoding).catch(() => {});
       setHistoryIndex(-1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
@@ -86,7 +91,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
           >
             <button
               type="button"
-              onClick={() => sendSnippet(cardId, sn)}
+              onClick={() => { void sendSnippet(cardId, sn, encoding).catch(() => {}); }}
               className="mr-1 font-mono text-os-2xs font-medium text-ink-secondary transition-colors duration-os hover:text-accent"
               title={`点击发送: ${sn.payload} (${sn.isHex ? "HEX" : "ASCII"})`}
             >
@@ -119,21 +124,25 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
           onSubmit={handleCreateSnippet}
           className="flex flex-wrap items-center gap-2 rounded-os-md border border-line/10 bg-surface p-2"
         >
-          <Input
-            type="text"
-            placeholder="名称 (如: 读取传感器)"
-            value={newSnippetName}
-            onChange={(e) => setNewSnippetName(e.target.value)}
-            className="h-[28px] w-[160px] text-os-2xs"
-          />
-          <Input
-            type="text"
-            mono
-            placeholder={newSnippetIsHex ? "HEX (如: 01 03 00 00)" : "内容 (如: AT+CSQ\\r\\n)"}
-            value={newSnippetPayload}
-            onChange={(e) => setNewSnippetPayload(e.target.value)}
-            className="h-[28px] min-w-[160px] flex-1 text-os-2xs"
-          />
+          <Field label="名称" required value={newSnippetName}>
+            <Input
+              type="text"
+              aria-label="片段名称"
+              value={newSnippetName}
+              onChange={(e) => setNewSnippetName(e.target.value)}
+              className="h-[28px] w-[160px] text-os-2xs"
+            />
+          </Field>
+          <Field label="内容" required value={newSnippetPayload} className="flex-1">
+            <Input
+              type="text"
+              mono
+              aria-label="片段内容"
+              value={newSnippetPayload}
+              onChange={(e) => setNewSnippetPayload(e.target.value)}
+              className="h-[28px] min-w-[160px] flex-1 text-os-2xs"
+            />
+          </Field>
           <Checkbox
             checked={newSnippetIsHex}
             onChange={setNewSnippetIsHex}
@@ -174,11 +183,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
           value={sendText}
           onChange={(e) => setSendText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={
-            sendIsHex
-              ? "输入 HEX 字节（如 01 03 00 00 00 0A），回车发送"
-              : "输入串口指令（按上下方向键切换历史），回车发送"
-          }
+          aria-label="串口指令"
           className="min-w-[200px] flex-1"
         />
 
@@ -214,7 +219,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
           <span className="text-os-2xs text-ink-tertiary">ms</span>
           <button
             type="button"
-            onClick={() => (isTimerRunning ? stopTimer() : startTimer(cardId))}
+            onClick={() => (isTimerRunning ? stopTimer() : startTimer(cardId, encoding))}
             className={cn(
               "flex h-[20px] items-center gap-1 rounded-[6px] px-1.5 text-os-2xs font-semibold transition-colors duration-os",
               isTimerRunning
@@ -233,7 +238,7 @@ export const SerialSendBar: React.FC<SerialSendBarProps> = ({ cardId }) => {
           variant="primary"
           size="sm"
           leading={<SendIcon className="h-3.5 w-3.5" />}
-          onClick={() => sendCurrent(cardId)}
+          onClick={() => { void sendCurrent(cardId, encoding).catch(() => {}); }}
         >
           发送
         </Button>

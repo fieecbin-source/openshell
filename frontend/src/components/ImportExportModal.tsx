@@ -1,7 +1,8 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { ConflictStrategy, ImportPreviewReport } from "../types/ipc";
 import {
   importerCommit,
+  importerDiscardPreview,
   importerExportBundleEncrypted,
   importerExportBundleJson,
   importerPreviewBundleEncrypted,
@@ -10,6 +11,7 @@ import {
   importerPreviewOpenSsh,
 } from "../lib/ipc";
 import { useSessionStore } from "../stores/sessionStore";
+import { useSnippetStore } from "../stores/snippetStore";
 import { formatFriendlyError } from "../lib/errors";
 import { Button } from "./ui/Button";
 import { Field, Input, Textarea } from "./ui/Field";
@@ -29,6 +31,15 @@ import {
 interface ImportExportModalProps {
   onClose: () => void;
 }
+
+const discardArchiveToken = async (token?: string | null) => {
+  if (!token) return;
+  try {
+    await importerDiscardPreview(token);
+  } catch (e) {
+    console.warn("Failed to discard archive preview token:", e);
+  }
+};
 
 /** 触发本地文件下载。元素必须挂载到 DOM，且延迟释放 URL，避免 WebView 取消下载。 */
 function downloadBlob(blob: Blob, filename: string) {
@@ -82,13 +93,13 @@ function StrategyPicker({
 }
 
 export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose }) => {
-  const { loadAll } = useSessionStore();
   const [activeTab, setActiveTab] = useState<ImportTab>("openssh");
 
   // 输入内容
   const [inputText, setInputText] = useState("");
   const [strategy, setStrategy] = useState<ConflictStrategy>("skip");
   const [previewReport, setPreviewReport] = useState<ImportPreviewReport | null>(null);
+  const [committedWarnings, setCommittedWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -103,11 +114,52 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
   const [restorePassword, setRestorePassword] = useState("");
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
+  const activeTokenRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    activeTokenRef.current = previewReport?.archive_token ?? null;
+  }, [previewReport]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (activeTokenRef.current) {
+        void discardArchiveToken(activeTokenRef.current);
+      }
+    };
+  }, []);
+
+  const handleClose = () => {
+    generationRef.current++;
+    if (previewReport?.archive_token) {
+      void discardArchiveToken(previewReport.archive_token);
+    }
+    setPreviewReport(null);
+    onClose();
+  };
+
   const switchTab = (tab: ImportTab) => {
+    generationRef.current++;
+    if (previewReport?.archive_token) {
+      void discardArchiveToken(previewReport.archive_token);
+    }
     setActiveTab(tab);
     setPreviewReport(null);
+    setCommittedWarnings([]);
     setErrorMsg(null);
     setSuccessMsg(null);
+  };
+
+  const handleStrategyChange = (next: ConflictStrategy) => {
+    generationRef.current++;
+    if (previewReport?.archive_token) {
+      void discardArchiveToken(previewReport.archive_token);
+    }
+    setPreviewReport(null);
+    setStrategy(next);
   };
 
   const handlePreview = async () => {
@@ -115,9 +167,15 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
       setErrorMsg("请粘贴需要导入的文本内容");
       return;
     }
+    const currentGen = ++generationRef.current;
+    if (previewReport?.archive_token) {
+      void discardArchiveToken(previewReport.archive_token);
+    }
+    setPreviewReport(null);
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
+    setCommittedWarnings([]);
     try {
       let report: ImportPreviewReport;
       if (activeTab === "openssh") {
@@ -125,24 +183,50 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
       } else {
         report = await importerPreviewFinalShell(inputText, strategy);
       }
+      if (!mountedRef.current || generationRef.current !== currentGen) {
+        if (report?.archive_token) {
+          void discardArchiveToken(report.archive_token);
+        }
+        return;
+      }
       setPreviewReport(report);
     } catch (e: any) {
-      setErrorMsg(formatFriendlyError(e));
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setErrorMsg(formatFriendlyError(e));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setLoading(false);
+      }
     }
   };
 
   const handleCommit = async () => {
-    if (!previewReport || previewReport.candidates.length === 0) return;
+    if (!previewReport || (previewReport.candidates.length === 0 && !previewReport.archive_token)) return;
+    const token = previewReport.archive_token;
     setLoading(true);
     setErrorMsg(null);
     try {
-      const count = await importerCommit(previewReport.candidates);
-      setSuccessMsg(`成功导入 ${count} 个会话。`);
+      const count = await importerCommit(previewReport.candidates, token);
+      setCommittedWarnings(previewReport.warnings || []);
+      setSuccessMsg(
+        token
+          ? `已成功恢复 ${count} 个会话及对应归档配置。`
+          : `成功导入 ${count} 个会话。`
+      );
       setPreviewReport(null);
       setInputText("");
-      await loadAll();
+      setRestoreJsonText("");
+      setRestoreBytes(null);
+      setRestoreFileName("");
+      try {
+        await Promise.all([
+          useSessionStore.getState().loadAll(),
+          useSnippetStore.getState().loadSnippets(),
+        ]);
+      } catch (refreshErr) {
+        console.warn("Commit succeeded but view refresh failed:", refreshErr);
+      }
     } catch (e: any) {
       setErrorMsg(formatFriendlyError(e));
     } finally {
@@ -195,8 +279,13 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     e.target.value = "";
     if (!file) return;
 
+    generationRef.current++;
+    if (previewReport?.archive_token) {
+      void discardArchiveToken(previewReport.archive_token);
+    }
     setErrorMsg(null);
     setSuccessMsg(null);
+    setCommittedWarnings([]);
     setPreviewReport(null);
     setRestoreFileName(file.name);
     setRestoreJsonText("");
@@ -225,38 +314,63 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
       return;
     }
 
+    const currentGen = ++generationRef.current;
+    if (previewReport?.archive_token) {
+      void discardArchiveToken(previewReport.archive_token);
+    }
+    setPreviewReport(null);
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
+    setCommittedWarnings([]);
     try {
       const report = isEncrypted
         ? await importerPreviewBundleEncrypted(restoreBytes!, restorePassword, strategy)
         : await importerPreviewBundleJson(restoreJsonText, strategy);
+
+      if (!mountedRef.current || generationRef.current !== currentGen) {
+        if (report?.archive_token) {
+          void discardArchiveToken(report.archive_token);
+        }
+        return;
+      }
       setPreviewReport(report);
     } catch (e: any) {
-      setErrorMsg(formatFriendlyError(e));
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setErrorMsg(formatFriendlyError(e));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setLoading(false);
+      }
     }
   };
 
   const previewPanel = previewReport ? (
     <Panel className="flex flex-col gap-3 bg-surface-muted">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-os-xs font-medium text-ink">检测到会话 {previewReport.total} 个</span>
-        <Badge tone="success">新建 {previewReport.new_count}</Badge>
-        <Badge tone="accent">更新 {previewReport.update_count}</Badge>
-        <Badge>跳过 {previewReport.skip_count}</Badge>
+        <span className="text-os-xs font-medium text-ink">
+          {previewReport.total > 0
+            ? `检测到会话 ${previewReport.total} 个`
+            : "检测到归档配置数据（片段/分组/密钥/代理等）"}
+        </span>
+        {previewReport.total > 0 && (
+          <>
+            <Badge tone="success">新建 {previewReport.new_count}</Badge>
+            <Badge tone="accent">更新 {previewReport.update_count}</Badge>
+            <Badge>跳过 {previewReport.skip_count}</Badge>
+          </>
+        )}
         <Button
           variant="primary"
           size="sm"
           className="ml-auto"
           onClick={handleCommit}
           loading={loading}
-          disabled={previewReport.candidates.length === 0}
+          disabled={previewReport.candidates.length === 0 && !previewReport.archive_token}
           leading={<UploadIcon className="h-3.5 w-3.5" />}
         >
-          确认导入
+          {activeTab === "restore" ? "确认恢复" : "确认导入"}
         </Button>
       </div>
 
@@ -270,44 +384,49 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
         </InlineNotice>
       )}
 
-      <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-        {previewReport.candidates.map((c, idx) => (
-          <div
-            key={idx}
-            className="flex items-center justify-between gap-3 rounded-os-md border border-line/10 bg-surface px-2.5 py-2"
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              <FileIcon className="h-3.5 w-3.5 shrink-0 text-ink-tertiary" />
-              <span className="truncate text-os-xs font-medium text-ink">
-                {c.input.name || "未命名"}
-              </span>
-              <span className="truncate font-mono text-os-2xs text-ink-tertiary">
-                {c.input.username}@{c.input.host}:{c.input.port || 22}
-              </span>
-            </div>
-            <Badge
-              tone={
-                c.action === "create" ? "success" : c.action === "update" ? "accent" : "neutral"
-              }
-              className="shrink-0"
+      {previewReport.candidates.length > 0 ? (
+        <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+          {previewReport.candidates.map((c, idx) => (
+            <div
+              key={idx}
+              className="flex items-center justify-between gap-3 rounded-os-md border border-line/10 bg-surface px-2.5 py-2"
             >
-              {c.action === "create" ? "新建" : c.action === "update" ? "更新" : "跳过"}
-            </Badge>
-          </div>
-        ))}
-      </div>
+              <div className="flex min-w-0 items-center gap-2">
+                <FileIcon className="h-3.5 w-3.5 shrink-0 text-ink-tertiary" />
+                <span className="truncate text-os-xs font-medium text-ink">
+                  {c.input.name || "未命名"}
+                </span>
+                <span className="truncate font-mono text-os-2xs text-ink-tertiary">
+                  {c.input.username}@{c.input.host}:{c.input.port || 22}
+                </span>
+              </div>
+              <Badge
+                tone={
+                  c.action === "create" ? "success" : c.action === "update" ? "accent" : "neutral"
+                }
+                className="shrink-0"
+              >
+                {c.action === "create" ? "新建" : c.action === "update" ? "更新" : "跳过"}
+              </Badge>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="py-2 text-os-xs text-ink-tertiary">
+          此备份不含普通会话条目，仅包含归档配置（片段/分组/密钥/代理等），可点击上方按钮直接恢复。
+        </div>
+      )}
     </Panel>
   ) : null;
 
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={handleClose}
       title="会话导入与数据备份"
-      description="支持 OpenSSH、FinalShell 格式以及加密保险库归档"
       widthClassName="w-full max-w-[760px]"
       footer={
-        <Button variant="secondary" onClick={onClose}>
+        <Button variant="secondary" onClick={handleClose}>
           关闭
         </Button>
       }
@@ -335,13 +454,21 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
             {successMsg}
           </InlineNotice>
         )}
+        {committedWarnings.length > 0 && (
+          <InlineNotice tone="warning" title="已导入会话的待补录依赖">
+            <ul className="flex flex-col gap-0.5">
+              {committedWarnings.map((w, idx) => (
+                <li key={idx}>{w}</li>
+              ))}
+            </ul>
+          </InlineNotice>
+        )}
 
         {activeTab === "restore" ? (
           <div className="flex flex-col gap-3">
             <Panel className="flex flex-col gap-3">
               <SectionHeader
                 title="选择备份文件"
-                description="支持本客户端导出的明文 .json 备份与加密 .osvault 归档"
               />
 
               <div className="flex items-center gap-2.5">
@@ -369,12 +496,11 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
                 <Field
                   label="加密归档保护密码"
                   htmlFor="restore-password"
-                  hint="请输入导出该归档时设置的密码。"
+                  required value={restorePassword}
                 >
                   <Input
                     id="restore-password"
                     type="password"
-                    placeholder="输入归档保护密码"
                     value={restorePassword}
                     onChange={(e) => setRestorePassword(e.target.value)}
                     mono
@@ -386,10 +512,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
             <StrategyPicker
               strategy={strategy}
               name="restoreStrategy"
-              onChange={(next) => {
-                setStrategy(next);
-                setPreviewReport(null);
-              }}
+              onChange={handleStrategyChange}
             />
 
             <div className="flex justify-end">
@@ -408,16 +531,12 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
           </div>
         ) : activeTab !== "export" ? (
           <div className="flex flex-col gap-3">
-            <Field label={activeTab === "openssh" ? "粘贴 ~/.ssh/config 文本内容" : "粘贴 FinalShell JSON 导出配置"}>
+            <Field label={activeTab === "openssh" ? "OpenSSH 配置" : "FinalShell 配置"} required value={inputText}>
               <Textarea
                 rows={7}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder={
-                  activeTab === "openssh"
-                    ? "Host my-server\n  HostName 192.168.1.100\n  User root\n  Port 22\n  ProxyJump bastion"
-                    : '{"items": [{"name": "Server1", "host": "192.168.1.100", "port": 22, "username": "root"}]}'
-                }
+                aria-label="导入配置"
                 className="font-mono text-os-xs"
               />
             </Field>
@@ -425,10 +544,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
             <StrategyPicker
               strategy={strategy}
               name="strategy"
-              onChange={(next) => {
-                setStrategy(next);
-                setPreviewReport(null);
-              }}
+              onChange={handleStrategyChange}
             />
 
             <div className="flex justify-end">
@@ -450,7 +566,6 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
             <Panel className="flex flex-col gap-2">
               <SectionHeader
                 title="明文 JSON 导出"
-                description="导出所有会话列表、分组、快捷命令与端口转发配置（不包含密码机密）"
                 actions={
                   <Button
                     variant="secondary"
@@ -473,14 +588,12 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
                     加密归档包 (.osvault)
                   </span>
                 }
-                description="采用 Argon2id KDF + XChaCha20-Poly1305 封装，由独立强密码全量保护"
               />
 
-              <Field label="设置加密包独立保护密码" htmlFor="export-password">
+              <Field label="归档密码" htmlFor="export-password" required value={exportPassword}>
                 <Input
                   id="export-password"
                   type="password"
-                  placeholder="输入强密码以加密归档"
                   value={exportPassword}
                   onChange={(e) => setExportPassword(e.target.value)}
                   mono

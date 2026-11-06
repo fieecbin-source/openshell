@@ -25,6 +25,11 @@ export interface TreeApi {
   renderSession: (session: import("../types/ipc").Session) => React.ReactNode;
   hoveredGroupId: string | null;
   draggingKind: DragPayload["kind"] | null;
+  subGroupParentId?: string | null;
+  subGroupName?: string;
+  onSubGroupNameChange?: (name: string) => void;
+  onSubmitSubGroup?: (e: React.FormEvent) => void;
+  onCancelSubGroup?: () => void;
 }
 
 interface SessionTreeNodeProps {
@@ -133,6 +138,34 @@ export const SessionTreeNode: React.FC<SessionTreeNodeProps> = ({ node, depth, a
           className="ml-2.5 space-y-0.5 border-l border-line/15 pl-2"
           style={{ marginLeft: 10 + depth * 12 }}
         >
+          {api.subGroupParentId === group.id && (
+            <form onSubmit={api.onSubmitSubGroup} className="my-1 flex items-center space-x-1 pr-2 animate-in fade-in">
+              <input
+                type="text"
+                value={api.subGroupName ?? ""}
+                onChange={(e) => api.onSubGroupNameChange?.(e.target.value)}
+                placeholder="子分组名称"
+                autoFocus
+                className="flex-1 rounded-lg border border-accent/40 bg-surface px-2 py-1 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") api.onCancelSubGroup?.();
+                }}
+              />
+              <button
+                type="submit"
+                className="rounded-lg bg-action px-2 py-1 text-[11px] font-semibold text-white hover:bg-action/90"
+              >
+                确定
+              </button>
+              <button
+                type="button"
+                onClick={api.onCancelSubGroup}
+                className="rounded-lg border border-line/15 px-1.5 py-1 text-[11px] text-ink-secondary hover:bg-line/5"
+              >
+                取消
+              </button>
+            </form>
+          )}
           {children.map((child) => (
             <SessionTreeNode key={child.group.id} node={child} depth={depth + 1} api={api} />
           ))}

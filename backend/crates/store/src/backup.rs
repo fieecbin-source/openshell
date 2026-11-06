@@ -28,6 +28,47 @@ pub const DEFAULT_KEEP_BACKUPS: usize = 5;
 /// 自动快照份数的合法上限，避免用户把保留数调到无限大。
 pub const MAX_KEEP_BACKUPS: usize = 20;
 
+#[cfg(test)]
+mod plaintext_regression_tests {
+    use super::*;
+
+    #[test]
+    fn backup_refuses_unmigrated_proxy_password() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        crate::SettingsRepo::new(store.clone())
+            .set(
+                "global",
+                None,
+                "proxy_list",
+                serde_json::json!([{"password":"synthetic-legacy-secret"}]),
+                false,
+            )
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(create(&store, dir.path(), "test", BackupReason::Manual).is_err());
+        assert!(list(dir.path()).unwrap().is_empty());
+    }
+}
+
+/// Read canonical retention before legacy settings; a read failure must not delete snapshots.
+pub fn retention_count(store: &Store, fallback: usize) -> DomainResult<usize> {
+    let settings = crate::SettingsRepo::new(store.clone());
+    let canonical = settings.get("user", None, "update.backup_keep")?;
+    let setting = match canonical {
+        Some(record) => Some(record),
+        None => settings.get("user", None, "update.backupKeep")?,
+    };
+    match setting {
+        Some(record) => record
+            .value_json
+            .as_u64()
+            .map(|value| value.clamp(1, MAX_KEEP_BACKUPS as u64) as usize)
+            .ok_or_else(|| DomainError::validation("备份保留数量无效，未裁剪备份")),
+        None => Ok(fallback.clamp(1, MAX_KEEP_BACKUPS)),
+    }
+}
+
 const TS_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]T[hour][minute][second][subsecond digits:3]Z");
 
@@ -101,6 +142,27 @@ pub fn create(
     app_version: &str,
     reason: BackupReason,
 ) -> DomainResult<BackupInfo> {
+    store.with_conn(|conn| {
+        let table_exists = |name: &str| -> DomainResult<bool> {
+            conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [name], |r| r.get(0)).map_err(map_sql_error)
+        };
+        if table_exists("setting")? {
+            let mut statement = conn.prepare("SELECT value_json FROM setting WHERE key='proxy_list'").map_err(map_sql_error)?;
+            let rows = statement.query_map([], |r| r.get::<_, String>(0)).map_err(map_sql_error)?;
+            for row in rows {
+                let value: serde_json::Value = serde_json::from_str(&row.map_err(map_sql_error)?)
+                    .map_err(|_| DomainError::validation("代理列表格式无效，无法安全备份"))?;
+                if value.as_array().is_some_and(|entries| entries.iter().any(|p| p.get("password").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()))) {
+                    return Err(DomainError::new(ErrorCode::VaultLocked, "请解锁保险库并迁移代理密码后再备份"));
+                }
+            }
+        }
+        if table_exists("port_forward")? {
+            let legacy: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM port_forward p WHERE p.socks_password_ref IS NOT NULL AND NOT EXISTS(SELECT 1 FROM secret s WHERE s.id=p.socks_password_ref AND s.record_type='socks_password'))", [], |r| r.get(0)).map_err(map_sql_error)?;
+            if legacy { return Err(DomainError::new(ErrorCode::VaultLocked, "请解锁保险库并迁移 SOCKS 密码后再备份")); }
+        }
+        Ok(())
+    })?;
     std::fs::create_dir_all(backups_dir).map_err(DomainError::from)?;
     // 快照是**明文** SQLite（与主库同级敏感），目录收紧到仅当前用户可读写
     tighten_dir(backups_dir);

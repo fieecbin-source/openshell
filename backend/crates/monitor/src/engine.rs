@@ -1,7 +1,7 @@
 //! 监控采样调度引擎。
 
 use crate::history::MetricHistoryManager;
-use crate::parser::{parse_host_metrics, PrevSampleState};
+use crate::parser::{parse_sample, PrevSampleState};
 use openshell_core_domain::{now_ms, DomainError, DomainResult, ErrorCode, HostMetrics, SessionId};
 use openshell_ssh::SshConnection;
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ pub struct MonitorEngine {
     history: MetricHistoryManager,
     running_tasks: Arc<RwLock<HashMap<SessionId, JoinHandle<()>>>>,
     event_tx: broadcast::Sender<HostMetrics>,
+    latest: Arc<RwLock<HashMap<SessionId, DomainResult<HostMetrics>>>>,
 }
 
 impl Default for MonitorEngine {
@@ -32,6 +33,7 @@ impl MonitorEngine {
             history: MetricHistoryManager::new(),
             running_tasks: Arc::new(RwLock::new(HashMap::new())),
             event_tx: tx,
+            latest: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -41,6 +43,24 @@ impl MonitorEngine {
 
     pub fn subscribe(&self) -> broadcast::Receiver<HostMetrics> {
         self.event_tx.subscribe()
+    }
+
+    pub async fn get_latest(&self, session_id: &SessionId) -> DomainResult<Option<HostMetrics>> {
+        self.latest
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+            .transpose()
+    }
+
+    async fn record_sample(&self, session_id: SessionId, result: DomainResult<HostMetrics>) {
+        let mut latest = self.latest.write().await;
+        if let Ok(metrics) = &result {
+            self.history.push(metrics.clone()).await;
+            let _ = self.event_tx.send(metrics.clone());
+        }
+        latest.insert(session_id, result);
     }
 
     /// 开启对某 SSH 连接的周期性监控采集。
@@ -55,8 +75,8 @@ impl MonitorEngine {
             return Ok(()); // 已在采集中
         }
 
-        let history_clone = self.history.clone();
-        let event_tx_clone = self.event_tx.clone();
+        self.latest.write().await.remove(&session_id);
+        let engine = self.clone();
         let session_id_clone = session_id.clone();
         let interval_sec = interval_sec.clamp(1, 30);
 
@@ -68,38 +88,35 @@ impl MonitorEngine {
             loop {
                 // 先采样再休眠：首屏（CPU / 进程面板）立即有数据，
                 // 否则前端要等到第一个间隔（默认 3s）之后才能拿到快照。
-                let output = conn.open_exec(DEFAULT_COMMAND).await;
-                match output {
-                    Ok(out) => {
+                let result = match conn.open_exec(DEFAULT_COMMAND).await {
+                    Ok(out) => parse_sample(
+                        session_id_clone.clone(),
+                        now_ms(),
+                        &String::from_utf8_lossy(&out.stdout),
+                        out.exit_code,
+                        &mut prev_state,
+                    ),
+                    Err(error) => Err(error),
+                };
+                match &result {
+                    Ok(_) => {
                         consecutive_failures = 0;
-                        current_interval = interval_sec; // 恢复设定周期
-
-                        let raw_str = String::from_utf8_lossy(&out.stdout);
-                        let now = now_ms();
-                        let metrics = parse_host_metrics(
-                            session_id_clone.clone(),
-                            now,
-                            &raw_str,
-                            &mut prev_state,
-                        );
-
-                        history_clone.push(metrics.clone()).await;
-                        let _ = event_tx_clone.send(metrics);
+                        current_interval = interval_sec;
                     }
-                    Err(e) => {
+                    Err(error) => {
                         consecutive_failures += 1;
                         tracing::warn!(
                             session_id = %session_id_clone,
                             failures = consecutive_failures,
-                            error = %e,
-                            "monitor sampling exec failed"
+                            error = %error,
+                            "monitor sampling failed"
                         );
-                        // 连续 3 次失败退避到 30 秒（对齐 MON-003）
                         if consecutive_failures >= 3 {
                             current_interval = 30;
                         }
                     }
                 }
+                engine.record_sample(session_id_clone.clone(), result).await;
 
                 tokio::time::sleep(tokio::time::Duration::from_secs(current_interval)).await;
             }
@@ -114,7 +131,9 @@ impl MonitorEngine {
         let mut tasks = self.running_tasks.write().await;
         if let Some(handle) = tasks.remove(session_id) {
             handle.abort();
+            let _ = handle.await;
         }
+        self.latest.write().await.remove(session_id);
     }
 
     /// 结束远端进程（SIGTERM 15 或 SIGKILL 9，对齐 MON-006）。
@@ -137,5 +156,118 @@ impl MonitorEngine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::tests::VALID_SAMPLE;
+
+    #[tokio::test]
+    async fn stop_waits_for_the_old_sampler_to_release() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct ReleaseGuard(Arc<AtomicBool>);
+        impl Drop for ReleaseGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let engine = MonitorEngine::new();
+        let session = SessionId::new();
+        let released = Arc::new(AtomicBool::new(false));
+        let flag = released.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _guard = ReleaseGuard(flag);
+            ready_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready_rx.await.unwrap();
+        engine
+            .running_tasks
+            .write()
+            .await
+            .insert(session.clone(), task);
+        engine.stop_monitoring(&session).await;
+        assert!(
+            released.load(Ordering::SeqCst),
+            "stop returned while the old sampler was alive"
+        );
+        assert!(engine.get_latest(&session).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn latest_distinguishes_no_sample_failure_history_and_recovery() {
+        let engine = MonitorEngine::new();
+        let session = SessionId::new();
+        let mut events = engine.subscribe();
+        assert!(engine.get_latest(&session).await.unwrap().is_none());
+        engine
+            .record_sample(
+                session.clone(),
+                Err(DomainError::new(ErrorCode::Network, "sample failed")),
+            )
+            .await;
+        assert_eq!(
+            engine.get_latest(&session).await.unwrap_err().code,
+            ErrorCode::Network
+        );
+        assert!(engine.history().get_latest(&session).await.is_none());
+        assert!(events.try_recv().is_err());
+
+        let mut previous = PrevSampleState::default();
+        let first =
+            parse_sample(session.clone(), 100, VALID_SAMPLE, Some(0), &mut previous).unwrap();
+        engine.record_sample(session.clone(), Ok(first)).await;
+        assert_eq!(
+            engine
+                .get_latest(&session)
+                .await
+                .unwrap()
+                .unwrap()
+                .timestamp_ms,
+            100
+        );
+        assert_eq!(events.try_recv().unwrap().timestamp_ms, 100);
+        let failure = parse_sample(session.clone(), 200, "", Some(0), &mut previous);
+        engine.record_sample(session.clone(), failure).await;
+        assert!(engine.get_latest(&session).await.is_err());
+        assert_eq!(
+            engine
+                .history()
+                .get_latest(&session)
+                .await
+                .unwrap()
+                .timestamp_ms,
+            100
+        );
+        assert_eq!(previous.timestamp_ms, 100);
+        assert!(events.try_recv().is_err());
+
+        let recovered =
+            parse_sample(session.clone(), 300, VALID_SAMPLE, Some(0), &mut previous).unwrap();
+        engine.record_sample(session.clone(), Ok(recovered)).await;
+        assert_eq!(
+            engine
+                .get_latest(&session)
+                .await
+                .unwrap()
+                .unwrap()
+                .timestamp_ms,
+            300
+        );
+        assert_eq!(events.try_recv().unwrap().timestamp_ms, 300);
+        engine.stop_monitoring(&session).await;
+        assert!(engine.get_latest(&session).await.unwrap().is_none());
+        assert_eq!(
+            engine
+                .history()
+                .get_latest(&session)
+                .await
+                .unwrap()
+                .timestamp_ms,
+            300
+        );
     }
 }

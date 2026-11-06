@@ -20,7 +20,15 @@ pub async fn connect_tcp_via_proxy(
             return Err(invalid("invalid target address"));
         }
         let Some(proxy) = proxy else {
-            return TcpStream::connect((host, port)).await.map_err(map_io_error);
+            // 直连分支同样必须开启 TCP_NODELAY：
+            // 此前这里直接 return，跳过了函数末尾统一的 set_nodelay(true)，
+            // 导致「不走代理」的连接被 Nagle 算法合并小包，交互输入出现几十毫秒延迟
+            // （FinalShell `Cf.class`/`com.DI` 在裸 socket 上也显式设置了该参数）。
+            let stream = TcpStream::connect((host, port))
+                .await
+                .map_err(map_io_error)?;
+            stream.set_nodelay(true).map_err(map_io_error)?;
+            return Ok(stream);
         };
         let mut stream = TcpStream::connect((proxy.host.as_str(), proxy.port))
             .await
@@ -178,6 +186,8 @@ mod tests {
             port,
             username: Some("user".into()),
             password: Some("pass".into()),
+            password_ref: None,
+            has_password: false,
             notes: None,
             created_at: None,
             updated_at: None,

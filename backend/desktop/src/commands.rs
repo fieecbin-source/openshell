@@ -4,20 +4,53 @@ use crate::error::IpcError;
 use openshell_app_core::{AppServices, ConnectOverrides, VaultStatus};
 use openshell_core_domain::{
     AiCatalogView, AiConfigView, AiProfile, AiProfileInput, ChannelOpener, ConnectionId,
-    Credential, CredentialId, CredentialKind, FileEntryType, Group, GroupId, GroupKind,
-    HostMetrics, PortForwardId, PortForwardRepository, PortForwardRule, PortForwardRuleInput,
-    Protocol, ProviderTestResult, SavePolicy, Session, SessionId, SessionInput, SessionPatch,
-    SessionQuery, SftpFileEntry, Snippet, SnippetId, SnippetInput, SnippetRepository, SshKey,
-    SshKeyId, TabId, TermSize, TransferTask,
+    Credential, CredentialId, CredentialKind, DomainError, ErrorCode, FileEntryType, Group,
+    GroupId, GroupKind, HostMetrics, PortForwardId, PortForwardRepository, PortForwardRule,
+    PortForwardRuleInput, PortForwardType, Protocol, ProviderTestResult, SavePolicy, Session,
+    SessionId, SessionInput, SessionPatch, SessionQuery, SftpFileEntry, Snippet, SnippetId,
+    SnippetInput, SnippetRepository, SshKey, SshKeyId, TabId, TermSize, TransferTask,
 };
 use openshell_forward::ForwardStatus;
 use openshell_importer::{
     CandidateAction, ConflictStrategy, FinalShellParser, ImportCandidate, ImportPreviewEngine,
-    ImportPreviewReport, OpenShellExportBundle, OpenSshParser,
+    ImportPreviewReport, OpenSshParser,
 };
 use openshell_store::SettingRecord;
 use serde::Serialize;
 use std::sync::Arc;
+
+struct RdpRuntimeEntry {
+    session_id: String,
+    state: &'static str,
+    error: Option<String>,
+    exit_code: Option<i32>,
+    child: Option<std::process::Child>,
+    file: std::path::PathBuf,
+    events: Option<Arc<std::sync::Mutex<crate::rdp_host::Status>>>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    recorded_login: bool,
+}
+
+static RDP_LAUNCHES: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, RdpRuntimeEntry>>,
+> = std::sync::OnceLock::new();
+
+fn rdp_launches() -> &'static std::sync::Mutex<std::collections::HashMap<String, RdpRuntimeEntry>> {
+    RDP_LAUNCHES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub(crate) fn shutdown_rdp_launches() {
+    let mut launches = rdp_launches()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for (launch_id, mut entry) in launches.drain() {
+        if let Err(error) = crate::rdp_process::close(&mut entry.child, &entry.file) {
+            tracing::error!(%launch_id,%error,"failed to close owned RDP host at application exit");
+        } else if let Some(reader) = entry.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
@@ -405,6 +438,10 @@ pub async fn connection_close(
     connection_id: String,
 ) -> Result<(), IpcError> {
     let cid = ConnectionId::from_string(&connection_id)?;
+    // 先清理 SFTP 子通道缓存，再断开 SSH 主会话：
+    // 否则缓存的 SftpClient 会指向一条已关闭的通道，下次同 ConnectionId 复用时
+    // 只能拿到「通道已死」的错误（复刻 FinalShell 关闭会话时同步释放 zD 缓存的顺序）。
+    state.remove_sftp_client(&cid).await;
     state.connection.disconnect(&cid).await.map_err(Into::into)
 }
 
@@ -588,6 +625,45 @@ pub async fn local_fs_list(path: Option<String>) -> Result<Vec<SftpFileEntry>, I
     Ok(entries)
 }
 
+/// SSH 主会话是否仍然存活（存在且未被判定关闭）。
+async fn ssh_alive(state: &AppServices, cid: &ConnectionId) -> bool {
+    match state.ssh_manager.get(cid).await {
+        Ok(conn) => !*conn.closed_channel().borrow(),
+        Err(_) => false,
+    }
+}
+
+/// SFTP 子通道断线自动重开（复刻 FinalShell `zD.I()` Auto-Heal）。
+///
+/// 行为：先用缓存/新建的 `SftpClient` 执行 `op`；若返回通道级 `Io` 错误，
+/// 但底层 SSH 会话仍然存活，则丢弃失效的 SFTP 子通道、重开一条新的子系统通道，
+/// 并透明重试 `op` 一次。SSH 主会话也已断开时不做无谓重试，直接把原始错误抛给前端
+/// （由前端的断线自动重连调度接手）。
+async fn with_sftp_heal<T, F, Fut>(
+    state: &AppServices,
+    cid: &ConnectionId,
+    op: F,
+) -> Result<T, IpcError>
+where
+    F: Fn(Arc<openshell_sftp::SftpClient>) -> Fut,
+    Fut: std::future::Future<Output = openshell_core_domain::DomainResult<T>>,
+{
+    let client = state.get_or_create_sftp(cid).await?;
+    match op(Arc::clone(&client)).await {
+        Ok(value) => Ok(value),
+        // 只有通道级 IO 失败才值得重开；NotFound / Validation 等业务错误直接透出。
+        Err(err) if err.code == ErrorCode::Io && ssh_alive(state, cid).await => {
+            tracing::warn!(
+                error = %err.message,
+                "sftp channel failed, reopening subsystem channel and retrying once"
+            );
+            let fresh = state.reconnect_sftp(cid).await?;
+            op(fresh).await.map_err(Into::into)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[tauri::command]
 pub async fn sftp_list_dir(
     state: tauri::State<'_, Arc<AppServices>>,
@@ -595,9 +671,13 @@ pub async fn sftp_list_dir(
     path: String,
 ) -> Result<Vec<SftpFileEntry>, IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    let entries = client.read_dir(&path).await?;
-    Ok(entries)
+    let path = path.as_str();
+    with_sftp_heal(
+        &state,
+        &cid,
+        |client| async move { client.read_dir(path).await },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -607,9 +687,13 @@ pub async fn sftp_stat(
     path: String,
 ) -> Result<SftpFileEntry, IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    let entry = client.stat(&path).await?;
-    Ok(entry)
+    let path = path.as_str();
+    with_sftp_heal(
+        &state,
+        &cid,
+        |client| async move { client.stat(path).await },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -619,9 +703,13 @@ pub async fn sftp_mkdir(
     path: String,
 ) -> Result<(), IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    client.mkdir(&path).await?;
-    Ok(())
+    let path = path.as_str();
+    with_sftp_heal(
+        &state,
+        &cid,
+        |client| async move { client.mkdir(path).await },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -631,9 +719,11 @@ pub async fn sftp_remove_file(
     path: String,
 ) -> Result<(), IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    client.remove_file(&path).await?;
-    Ok(())
+    let path = path.as_str();
+    with_sftp_heal(&state, &cid, |client| async move {
+        client.remove_file(path).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -643,9 +733,11 @@ pub async fn sftp_remove_dir(
     path: String,
 ) -> Result<(), IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    client.remove_dir(&path).await?;
-    Ok(())
+    let path = path.as_str();
+    with_sftp_heal(&state, &cid, |client| async move {
+        client.remove_dir(path).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -656,9 +748,12 @@ pub async fn sftp_rename(
     new_path: String,
 ) -> Result<(), IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    client.rename(&old_path, &new_path).await?;
-    Ok(())
+    let old_path = old_path.as_str();
+    let new_path = new_path.as_str();
+    with_sftp_heal(&state, &cid, |client| async move {
+        client.rename(old_path, new_path).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -669,9 +764,11 @@ pub async fn sftp_set_permissions(
     permissions: u32,
 ) -> Result<(), IpcError> {
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    client.set_permissions(&path, permissions).await?;
-    Ok(())
+    let path = path.as_str();
+    with_sftp_heal(&state, &cid, |client| async move {
+        client.set_permissions(path, permissions).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -681,12 +778,18 @@ pub async fn sftp_read_file(
     path: String,
     max_bytes: Option<usize>,
 ) -> Result<Vec<u8>, IpcError> {
+    if path.contains('\0') {
+        return Err(
+            openshell_core_domain::DomainError::validation("路径包含非法字符 (null-byte)").into(),
+        );
+    }
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    let data = client
-        .read_file_content(&path, max_bytes.unwrap_or(10 * 1024 * 1024))
-        .await?;
-    Ok(data)
+    let path = path.as_str();
+    let max = max_bytes.unwrap_or(10 * 1024 * 1024).min(50 * 1024 * 1024);
+    with_sftp_heal(&state, &cid, |client| async move {
+        client.read_file_content(path, max).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -696,10 +799,25 @@ pub async fn sftp_write_file(
     path: String,
     data: Vec<u8>,
 ) -> Result<(), IpcError> {
+    if path.contains('\0') {
+        return Err(
+            openshell_core_domain::DomainError::validation("路径包含非法字符 (null-byte)").into(),
+        );
+    }
+    if data.len() > 100 * 1024 * 1024 {
+        return Err(openshell_core_domain::DomainError::new(
+            openshell_core_domain::ErrorCode::Validation,
+            "写入单文件超出 100MB 限制，请通过传输管理器（SFTP 队列）上传大文件",
+        )
+        .into());
+    }
     let cid = ConnectionId::from_string(&conn_id)?;
-    let client = state.get_or_create_sftp(&cid).await?;
-    client.write_file_content(&path, &data).await?;
-    Ok(())
+    let path = path.as_str();
+    let data = data.as_slice();
+    with_sftp_heal(&state, &cid, |client| async move {
+        client.write_file_content(path, data).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -712,10 +830,16 @@ pub async fn sftp_start_transfer(
     remote_path: String,
     resume: Option<bool>,
 ) -> Result<String, IpcError> {
+    if local_path.contains('\0') || remote_path.contains('\0') {
+        return Err(openshell_core_domain::DomainError::validation(
+            "传输路径包含非法字符 (null-byte)",
+        )
+        .into());
+    }
     let cid = ConnectionId::from_string(&conn_id)?;
     let sid = SessionId::from_string(&session_id)?;
     let client = state.get_or_create_sftp(&cid).await?;
-    let resume = resume.unwrap_or(true);
+    let resume = resume.unwrap_or(false);
     let task_id = if direction == "download" {
         state
             .sftp_transfers
@@ -760,6 +884,24 @@ pub async fn sftp_cancel_transfer(
         .cancel(&task_id)
         .await
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn sftp_resume_transfer(
+    state: tauri::State<'_, Arc<AppServices>>,
+    task_id: String,
+) -> Result<(), IpcError> {
+    state
+        .sftp_transfers
+        .resume(&task_id)
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn terminal_encode(text: String, encoding: String) -> Result<Vec<u8>, IpcError> {
+    crate::terminal_encoding::encode(&text, &encoding)
+        .map_err(|message| openshell_core_domain::DomainError::validation(message).into())
 }
 
 #[tauri::command]
@@ -820,8 +962,7 @@ pub async fn monitor_get_latest(
     session_id: String,
 ) -> Result<Option<HostMetrics>, IpcError> {
     let sid = SessionId::from_string(&session_id)?;
-    let metrics = state.monitor.history().get_latest(&sid).await;
-    Ok(metrics)
+    state.monitor.get_latest(&sid).await.map_err(Into::into)
 }
 
 #[tauri::command]
@@ -843,6 +984,13 @@ pub async fn monitor_kill_process(
     pid: u32,
     signal: Option<u32>,
 ) -> Result<(), IpcError> {
+    if pid <= 1 {
+        return Err(openshell_core_domain::DomainError::new(
+            openshell_core_domain::ErrorCode::Permission,
+            "安全拦截：系统保护禁止向 PID 0 或 PID 1 (init/systemd) 发送结束信号",
+        )
+        .into());
+    }
     let cid = ConnectionId::from_string(&conn_id)?;
     let conn = state.ssh_manager.get(&cid).await?;
     state
@@ -888,7 +1036,7 @@ pub async fn forward_list(
         .as_deref()
         .map(SessionId::from_string)
         .transpose()?;
-    let list = state.port_forward_repo.list(sid.as_ref()).await?;
+    let list = state.network_secrets.forwards(sid.as_ref()).await?;
     Ok(list)
 }
 
@@ -897,6 +1045,7 @@ pub async fn forward_create(
     state: tauri::State<'_, Arc<AppServices>>,
     input: PortForwardRuleInput,
 ) -> Result<PortForwardRule, IpcError> {
+    let input = state.network_secrets.prepare_forward(input, None).await?;
     let rule = state.port_forward_repo.create(input).await?;
     Ok(rule)
 }
@@ -908,6 +1057,10 @@ pub async fn forward_update(
     input: PortForwardRuleInput,
 ) -> Result<PortForwardRule, IpcError> {
     let pf_id = PortForwardId::from_string(&id)?;
+    let input = state
+        .network_secrets
+        .prepare_forward(input, Some(&pf_id))
+        .await?;
     let rule = state.port_forward_repo.update(&pf_id, input).await?;
     Ok(rule)
 }
@@ -918,7 +1071,7 @@ pub async fn forward_delete(
     id: String,
 ) -> Result<(), IpcError> {
     let pf_id = PortForwardId::from_string(&id)?;
-    state.forward.stop_rule(&pf_id).await;
+    state.forward.stop_rule(&pf_id).await?;
     state.port_forward_repo.delete(&pf_id).await?;
     Ok(())
 }
@@ -931,11 +1084,18 @@ pub async fn forward_start(
 ) -> Result<(), IpcError> {
     let pf_id = PortForwardId::from_string(&id)?;
     let cid = ConnectionId::from_string(&conn_id)?;
+    state.network_secrets.forwards(None).await?;
     let rule = state.port_forward_repo.get(&pf_id).await?;
+    let socks_password = rule
+        .socks_password_ref
+        .as_deref()
+        .map(|reference| state.network_secrets.resolve(reference, "socks_password"))
+        .transpose()?
+        .map(|password| password.to_string());
     let conn = state.ssh_manager.get(&cid).await?;
     state
         .forward
-        .start_rule(rule, conn)
+        .start_rule(rule, conn, socks_password)
         .await
         .map_err(Into::into)
 }
@@ -946,7 +1106,7 @@ pub async fn forward_stop(
     id: String,
 ) -> Result<(), IpcError> {
     let pf_id = PortForwardId::from_string(&id)?;
-    state.forward.stop_rule(&pf_id).await;
+    state.forward.stop_rule(&pf_id).await?;
     Ok(())
 }
 
@@ -1049,45 +1209,135 @@ pub async fn importer_preview_finalshell(
     Ok(report)
 }
 
+/// 把 FinalShell 内嵌的 `port_forwarding_list`（`YE.class` 结构）转成独立端口转发规则落库。
+///
+/// 已存在「同名 + 同绑定端口 + 同类型」规则时更新，避免重复并保留覆盖导入的变更。
+/// 写入失败返回错误，避免把丢失隧道配置的导入报告为成功。
+async fn import_embedded_forwards(
+    state: &AppServices,
+    session: &Session,
+    protocol_options_json: Option<&serde_json::Value>,
+    auto_reconnect: Option<bool>,
+) -> Result<(), IpcError> {
+    let rules = FinalShellParser::extract_embedded_forwards(
+        &session.id,
+        protocol_options_json,
+        auto_reconnect.or(Some(session.auto_reconnect)),
+    );
+    if rules.is_empty() {
+        return Ok(());
+    }
+    let mut existing = state.port_forward_repo.list(Some(&session.id)).await?;
+    for mut rule in rules {
+        rule.reconnect_max = rule.reconnect_max.or(Some(session.reconnect_max));
+        let rule_type = rule.rule_type.unwrap_or(PortForwardType::Local);
+        let duplicated = existing.iter().find(|e| {
+            e.name == rule.name && e.bind_port == rule.bind_port && e.rule_type == rule_type
+        });
+        let result = if let Some(duplicated) = duplicated {
+            rule.auto_start = Some(duplicated.auto_start);
+            rule.socks_auth = Some(duplicated.socks_auth);
+            rule.socks_username = duplicated.socks_username.clone();
+            rule.socks_password_ref = duplicated.socks_password_ref.clone();
+            rule.expose_warning_ack = Some(duplicated.expose_warning_ack);
+            state.port_forward_repo.update(&duplicated.id, rule).await?
+        } else {
+            state.port_forward_repo.create(rule).await?
+        };
+        existing.retain(|rule| rule.id != result.id);
+        existing.push(result);
+    }
+    Ok(())
+}
+
+fn import_session_patch(input: SessionInput) -> SessionPatch {
+    SessionPatch {
+        // 未指定分组时保留已有自定义分组；未分组连接仍由首页按协议归类。
+        group_id: input.group_id.map(Some),
+        name: input.name,
+        protocol: input.protocol,
+        host: Some(input.host),
+        port: Some(
+            input
+                .port
+                .or_else(|| input.protocol.unwrap_or(Protocol::Ssh).default_port()),
+        ),
+        username: Some(input.username),
+        auth_method: input.auth_method,
+        credential_id: Some(input.credential_id),
+        ssh_key_id: Some(input.ssh_key_id),
+        host_key_policy: input.host_key_policy,
+        proxy_id: input.proxy_id,
+        proxy_jump_json: Some(input.proxy_jump_json),
+        terminal_profile_id: Some(input.terminal_profile_id),
+        startup_command: Some(input.startup_command),
+        working_dir: Some(input.working_dir),
+        encoding: input.encoding,
+        keepalive_sec: input.keepalive_sec,
+        keepalive_max_miss: input.keepalive_max_miss,
+        auto_reconnect: input.auto_reconnect,
+        reconnect_max: input.reconnect_max,
+        compression: input.compression,
+        agent_forwarding: input.agent_forwarding,
+        x11_forwarding: input.x11_forwarding,
+        tags_json: Some(input.tags_json),
+        favorite: input.favorite,
+        color: Some(input.color),
+        icon_key: Some(input.icon_key),
+        notes: Some(input.notes),
+        protocol_options_json: Some(input.protocol_options_json),
+        sort_order: input.sort_order,
+    }
+}
+
 #[tauri::command]
 pub async fn importer_commit(
     state: tauri::State<'_, Arc<AppServices>>,
     candidates: Vec<ImportCandidate>,
+    archive_token: Option<String>,
 ) -> Result<usize, IpcError> {
+    if let Some(token) = archive_token {
+        return state
+            .archive
+            .commit(&candidates, &token)
+            .map_err(Into::into);
+    }
     let mut count = 0;
     for cand in candidates {
+        if cand.action != CandidateAction::Skip
+            && cand
+                .input
+                .protocol_options_json
+                .as_ref()
+                .and_then(|v| v.get("import_blocked"))
+                .is_some()
+        {
+            return Err(openshell_core_domain::DomainError::validation("导入依赖尚未补齐").into());
+        }
         match cand.action {
             CandidateAction::Create => {
-                state.session.create_session(cand.input).await?;
+                // 会话被创建后 `input` 即被消费，转发列表需要提前取出。
+                let forwards_src = cand.input.protocol_options_json.clone();
+                let auto_reconnect = cand.input.auto_reconnect;
+                let created = state.session.create_session(cand.input).await?;
+                import_embedded_forwards(&state, &created, forwards_src.as_ref(), auto_reconnect)
+                    .await?;
                 count += 1;
             }
             CandidateAction::Update => {
                 if let Some(id_str) = cand.existing_session_id {
                     let sid = SessionId::from_string(&id_str)?;
-                    let patch = SessionPatch {
-                        name: cand.input.name,
-                        protocol: cand.input.protocol,
-                        host: Some(cand.input.host),
-                        port: Some(cand.input.port),
-                        username: Some(cand.input.username),
-                        auth_method: cand.input.auth_method,
-                        credential_id: Some(cand.input.credential_id),
-                        ssh_key_id: Some(cand.input.ssh_key_id),
-                        keepalive_sec: cand.input.keepalive_sec,
-                        proxy_id: cand.input.proxy_id,
-                        proxy_jump_json: Some(cand.input.proxy_jump_json),
-                        startup_command: Some(cand.input.startup_command),
-                        working_dir: Some(cand.input.working_dir),
-                        auto_reconnect: cand.input.auto_reconnect,
-                        reconnect_max: cand.input.reconnect_max,
-                        compression: cand.input.compression,
-                        agent_forwarding: cand.input.agent_forwarding,
-                        x11_forwarding: cand.input.x11_forwarding,
-                        notes: Some(cand.input.notes),
-                        protocol_options_json: Some(cand.input.protocol_options_json),
-                        ..Default::default()
-                    };
-                    state.session.update_session(&sid, patch, None).await?;
+                    let forwards_src = cand.input.protocol_options_json.clone();
+                    let auto_reconnect = cand.input.auto_reconnect;
+                    let patch = import_session_patch(cand.input);
+                    let updated = state.session.update_session(&sid, patch, None).await?;
+                    import_embedded_forwards(
+                        &state,
+                        &updated,
+                        forwards_src.as_ref(),
+                        auto_reconnect,
+                    )
+                    .await?;
                     count += 1;
                 }
             }
@@ -1098,21 +1348,19 @@ pub async fn importer_commit(
 }
 
 #[tauri::command]
+pub async fn importer_discard_preview(
+    state: tauri::State<'_, Arc<AppServices>>,
+    archive_token: String,
+) -> Result<(), IpcError> {
+    state.archive.discard(&archive_token);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn importer_export_bundle_json(
     state: tauri::State<'_, Arc<AppServices>>,
 ) -> Result<String, IpcError> {
-    let sessions = state
-        .session
-        .list_sessions(&SessionQuery::default())
-        .await?;
-    let groups = state.session.list_groups(GroupKind::Session).await?;
-    let snippets = state.snippet_repo.list(None).await?;
-    let port_forwards = state.port_forward_repo.list(None).await?;
-    let bundle = OpenShellExportBundle::new(sessions, groups, snippets, port_forwards);
-    let json_str = bundle
-        .to_json_string()
-        .map_err(|e| openshell_core_domain::DomainError::internal(e.to_string()))?;
-    Ok(json_str)
+    Ok(state.archive.export_json().await?)
 }
 
 #[tauri::command]
@@ -1120,16 +1368,8 @@ pub async fn importer_export_bundle_encrypted(
     state: tauri::State<'_, Arc<AppServices>>,
     password: String,
 ) -> Result<Vec<u8>, IpcError> {
-    let sessions = state
-        .session
-        .list_sessions(&SessionQuery::default())
-        .await?;
-    let groups = state.session.list_groups(GroupKind::Session).await?;
-    let snippets = state.snippet_repo.list(None).await?;
-    let port_forwards = state.port_forward_repo.list(None).await?;
-    let bundle = OpenShellExportBundle::new(sessions, groups, snippets, port_forwards);
-    let pkg = bundle.to_encrypted_package(&password)?;
-    Ok(pkg)
+    let password = zeroize::Zeroizing::new(password);
+    Ok(state.archive.export_encrypted(&password).await?)
 }
 
 #[tauri::command]
@@ -1138,51 +1378,10 @@ pub async fn importer_preview_bundle_json(
     json_str: String,
     strategy: Option<String>,
 ) -> Result<ImportPreviewReport, IpcError> {
-    let strat = parse_conflict_strategy(strategy.as_deref());
-    let bundle = OpenShellExportBundle::from_json_str(&json_str)
-        .map_err(|e| openshell_core_domain::DomainError::validation(e.to_string()))?;
-    let inputs: Vec<SessionInput> = bundle
-        .sessions
-        .into_iter()
-        .map(|s| SessionInput {
-            group_id: s.group_id,
-            name: Some(s.name),
-            protocol: Some(s.protocol),
-            host: s.host,
-            port: s.port,
-            username: s.username,
-            auth_method: Some(s.auth_method),
-            credential_id: s.credential_id,
-            ssh_key_id: s.ssh_key_id,
-            host_key_policy: Some(s.host_key_policy),
-            proxy_jump_json: s.proxy_jump_json,
-            proxy_id: s.proxy_id,
-            terminal_profile_id: s.terminal_profile_id,
-            encoding: Some(s.encoding),
-            startup_command: s.startup_command,
-            working_dir: s.working_dir,
-            keepalive_sec: Some(s.keepalive_sec),
-            keepalive_max_miss: Some(s.keepalive_max_miss),
-            auto_reconnect: Some(s.auto_reconnect),
-            reconnect_max: Some(s.reconnect_max),
-            compression: Some(s.compression),
-            agent_forwarding: Some(s.agent_forwarding),
-            x11_forwarding: Some(s.x11_forwarding),
-            tags_json: s.tags_json,
-            favorite: Some(s.favorite),
-            color: s.color,
-            icon_key: s.icon_key,
-            notes: s.notes,
-            protocol_options_json: s.protocol_options_json,
-            sort_order: Some(s.sort_order),
-        })
-        .collect();
-    let existing = state
-        .session
-        .list_sessions(&SessionQuery::default())
-        .await?;
-    let report = ImportPreviewEngine::generate_preview(inputs, &existing, strat, Vec::new());
-    Ok(report)
+    Ok(state
+        .archive
+        .preview_json(&json_str, parse_conflict_strategy(strategy.as_deref()))
+        .await?)
 }
 
 #[tauri::command]
@@ -1192,50 +1391,15 @@ pub async fn importer_preview_bundle_encrypted(
     password: String,
     strategy: Option<String>,
 ) -> Result<ImportPreviewReport, IpcError> {
-    let strat = parse_conflict_strategy(strategy.as_deref());
-    let bundle = OpenShellExportBundle::from_encrypted_package(&pkg_bytes, &password)?;
-    let inputs: Vec<SessionInput> = bundle
-        .sessions
-        .into_iter()
-        .map(|s| SessionInput {
-            group_id: s.group_id,
-            name: Some(s.name),
-            protocol: Some(s.protocol),
-            host: s.host,
-            port: s.port,
-            username: s.username,
-            auth_method: Some(s.auth_method),
-            credential_id: s.credential_id,
-            ssh_key_id: s.ssh_key_id,
-            host_key_policy: Some(s.host_key_policy),
-            proxy_jump_json: s.proxy_jump_json,
-            proxy_id: s.proxy_id,
-            terminal_profile_id: s.terminal_profile_id,
-            encoding: Some(s.encoding),
-            startup_command: s.startup_command,
-            working_dir: s.working_dir,
-            keepalive_sec: Some(s.keepalive_sec),
-            keepalive_max_miss: Some(s.keepalive_max_miss),
-            auto_reconnect: Some(s.auto_reconnect),
-            reconnect_max: Some(s.reconnect_max),
-            compression: Some(s.compression),
-            agent_forwarding: Some(s.agent_forwarding),
-            x11_forwarding: Some(s.x11_forwarding),
-            tags_json: s.tags_json,
-            favorite: Some(s.favorite),
-            color: s.color,
-            icon_key: s.icon_key,
-            notes: s.notes,
-            protocol_options_json: s.protocol_options_json,
-            sort_order: Some(s.sort_order),
-        })
-        .collect();
-    let existing = state
-        .session
-        .list_sessions(&SessionQuery::default())
-        .await?;
-    let report = ImportPreviewEngine::generate_preview(inputs, &existing, strat, Vec::new());
-    Ok(report)
+    let password = zeroize::Zeroizing::new(password);
+    Ok(state
+        .archive
+        .preview_encrypted(
+            &pkg_bytes,
+            &password,
+            parse_conflict_strategy(strategy.as_deref()),
+        )
+        .await?)
 }
 
 // ==========================================
@@ -1249,6 +1413,9 @@ pub async fn settings_get(
     scope_id: Option<String>,
     key: String,
 ) -> Result<Option<SettingRecord>, IpcError> {
+    if scope == "global" && scope_id.is_none() && key == "proxy_list" {
+        state.network_secrets.proxies()?;
+    }
     let record = state.settings_repo.get(&scope, scope_id.as_deref(), &key)?;
     Ok(record)
 }
@@ -1262,6 +1429,18 @@ pub async fn settings_set(
     value: serde_json::Value,
     syncable: Option<bool>,
 ) -> Result<SettingRecord, IpcError> {
+    if key == "proxy_list" {
+        if scope != "global" || scope_id.is_some() {
+            return Err(DomainError::validation("Invalid proxy settings scope").into());
+        }
+        let inputs = serde_json::from_value(value)
+            .map_err(|_| DomainError::validation("Invalid proxy settings"))?;
+        state.network_secrets.save_proxies(inputs)?;
+        return state
+            .settings_repo
+            .get("global", None, "proxy_list")?
+            .ok_or_else(|| DomainError::internal("Proxy settings were not saved").into());
+    }
     let record = state.settings_repo.set(
         &scope,
         scope_id.as_deref(),
@@ -1277,6 +1456,9 @@ pub async fn settings_list(
     state: tauri::State<'_, Arc<AppServices>>,
     scope: String,
 ) -> Result<Vec<SettingRecord>, IpcError> {
+    if scope == "global" {
+        state.network_secrets.proxies()?;
+    }
     let list = state.settings_repo.list(&scope)?;
     Ok(list)
 }
@@ -1284,6 +1466,23 @@ pub async fn settings_list(
 // ==========================================
 // Sync & E2EE Cloud
 // ==========================================
+
+#[tauri::command]
+pub async fn sync_list_conflicts(
+    state: tauri::State<'_, Arc<AppServices>>,
+) -> Result<Vec<openshell_app_core::sync_service::SyncConflict>, IpcError> {
+    Ok(state.sync.list_conflicts()?)
+}
+
+#[tauri::command]
+pub async fn sync_resolve_conflict(
+    state: tauri::State<'_, Arc<AppServices>>,
+    conflict_id: String,
+    choice: openshell_app_core::sync_service::SyncConflictChoice,
+) -> Result<(), IpcError> {
+    state.sync.resolve_conflict(&conflict_id, choice).await?;
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn sync_get_config(
@@ -1523,7 +1722,12 @@ pub async fn serial_open(
     config: openshell_serial::SerialProfileConfig,
     use_mock: Option<bool>,
 ) -> Result<(), IpcError> {
-    let mock = use_mock.unwrap_or(false);
+    if use_mock.unwrap_or(false) {
+        return Err(
+            openshell_core_domain::DomainError::validation("生产串口入口不允许使用 Mock").into(),
+        );
+    }
+    let mock = false;
     state
         .serial
         .open(&card_id, &config, mock)
@@ -1720,15 +1924,7 @@ pub async fn ai_set_enabled(
 fn load_proxies(
     state: &AppServices,
 ) -> Result<Vec<openshell_core_domain::ProxyServerConfig>, IpcError> {
-    state
-        .settings_repo
-        .get("global", None, "proxy_list")?
-        .map(|record| {
-            serde_json::from_value(record.value_json).map_err(|_| {
-                openshell_core_domain::DomainError::validation("代理列表格式无效").into()
-            })
-        })
-        .unwrap_or_else(|| Ok(Vec::new()))
+    state.network_secrets.proxies().map_err(Into::into)
 }
 
 #[tauri::command]
@@ -1741,45 +1937,54 @@ pub async fn proxy_list_get(
 #[tauri::command]
 pub async fn proxy_list_save(
     state: tauri::State<'_, Arc<AppServices>>,
-    proxies: Vec<openshell_core_domain::ProxyServerConfig>,
+    proxies: Vec<openshell_core_domain::ProxyServerInput>,
 ) -> Result<Vec<openshell_core_domain::ProxyServerConfig>, IpcError> {
-    let mut ids = std::collections::HashSet::new();
-    for proxy in &proxies {
-        if proxy.id.trim().is_empty()
-            || proxy.name.trim().is_empty()
-            || proxy.host.trim().is_empty()
-            || proxy.port == 0
-            || proxy.host.contains(['\r', '\n', '\0'])
-            || !ids.insert(&proxy.id)
-        {
-            return Err(openshell_core_domain::DomainError::validation(
-                "代理名称、地址、端口或 ID 无效",
-            )
-            .into());
-        }
-    }
-    let value = serde_json::to_value(&proxies)
-        .map_err(|_| openshell_core_domain::DomainError::internal("无法序列化代理列表"))?;
     state
-        .settings_repo
-        .set("global", None, "proxy_list", value, false)?;
-    Ok(proxies)
+        .network_secrets
+        .save_proxies(proxies)
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn proxy_test(
-    proxy: openshell_core_domain::ProxyServerConfig,
+    state: tauri::State<'_, Arc<AppServices>>,
+    proxy: openshell_core_domain::ProxyServerInput,
 ) -> Result<openshell_core_domain::ProxyTestResult, IpcError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let proxy = state.network_secrets.test_proxy(proxy)?;
     let start = std::time::Instant::now();
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let mut socket = tokio::net::TcpStream::connect((proxy.host.as_str(), proxy.port)).await?;
         if proxy.proxy_type == openshell_core_domain::ProxyType::Socks5 {
-            socket.write_all(&[5, 2, 0, 2]).await?;
+            let authenticated = proxy.username.as_deref().is_some_and(|u| !u.is_empty());
+            socket
+                .write_all(if authenticated {
+                    &[5, 1, 2]
+                } else {
+                    &[5, 1, 0]
+                })
+                .await?;
             let mut reply = [0; 2];
             socket.read_exact(&mut reply).await?;
-            if reply[0] != 5 || ![0, 2].contains(&reply[1]) {
-                return Err(std::io::Error::other("SOCKS5 握手失败"));
+            let method = if authenticated { 2 } else { 0 };
+            if reply != [5, method] {
+                return Err(std::io::Error::other("SOCKS5 authentication rejected"));
+            }
+            if authenticated {
+                let username = proxy.username.as_deref().unwrap_or("").as_bytes();
+                let password = proxy.password.as_deref().unwrap_or("").as_bytes();
+                if username.len() > 255 || password.is_empty() || password.len() > 255 {
+                    return Err(std::io::Error::other("SOCKS5 credentials invalid"));
+                }
+                let mut auth = vec![1, username.len() as u8];
+                auth.extend_from_slice(username);
+                auth.push(password.len() as u8);
+                auth.extend_from_slice(password);
+                socket.write_all(&auth).await?;
+                socket.read_exact(&mut reply).await?;
+                if reply != [1, 0] {
+                    return Err(std::io::Error::other("SOCKS5 authentication rejected"));
+                }
             }
         }
         Ok::<_, std::io::Error>(())
@@ -1790,7 +1995,7 @@ pub async fn proxy_test(
         ok,
         latency_ms: ok.then(|| start.elapsed().as_millis() as u64),
         message: if ok {
-            "代理端口可达"
+            "代理握手完成"
         } else if result.is_err() {
             "连接超时"
         } else {
@@ -1923,7 +2128,10 @@ pub async fn telnet_open(
     if port == 0 {
         return Err(openshell_core_domain::DomainError::validation("端口无效").into());
     }
-    let proxies = load_proxies(&state)?;
+    let proxies = load_proxies(&state)?
+        .into_iter()
+        .map(|p| state.network_secrets.runtime_proxy(p))
+        .collect::<Result<Vec<_>, _>>()?;
     let proxy = if let Some(id) = &session.proxy_id {
         Some(
             proxies
@@ -1988,11 +2196,21 @@ struct RdpOptions {
 }
 #[derive(Serialize)]
 pub struct RdpLaunchResult {
+    launch_id: String,
     session_id: String,
     rdp_file_path: String,
     pid: Option<u32>,
     host: String,
     port: u16,
+}
+
+#[derive(Serialize)]
+pub struct RdpRuntimeStatus {
+    launch_id: String,
+    session_id: String,
+    state: &'static str,
+    error: Option<String>,
+    exit_code: Option<i32>,
 }
 
 fn rdp_config(
@@ -2115,9 +2333,28 @@ pub async fn rdp_launch(
         .or_else(|| session.username.clone())
         .unwrap_or_default();
     let contents = rdp_config(&host, port, &username, &options)?;
-    let password = match overrides.password {
+    let password = match overrides.password.filter(|password| !password.is_empty()) {
         Some(password) => Some(zeroize::Zeroizing::new(password)),
-        None => saved_password(&state, &session).await,
+        None => {
+            if let Some(id) = &session.credential_id {
+                use openshell_core_domain::{PromptPolicy, SecretMaterial, SecretResolver};
+                match state
+                    .vault
+                    .resolve_credential(id, PromptPolicy::Interactive)
+                    .await?
+                {
+                    SecretMaterial::Password(password) => Some(password),
+                    _ => {
+                        return Err(openshell_core_domain::DomainError::validation(
+                            "远程桌面需要密码凭据",
+                        )
+                        .into())
+                    }
+                }
+            } else {
+                None
+            }
+        }
     };
     if !session_id
         .bytes()
@@ -2125,9 +2362,10 @@ pub async fn rdp_launch(
     {
         return Err(openshell_core_domain::DomainError::validation("会话 ID 无效").into());
     }
+    let launch_id = openshell_core_domain::new_id();
     let file = std::env::temp_dir()
         .join("openshell_rdp")
-        .join(format!("{session_id}.rdp"));
+        .join(format!("{launch_id}.rdp"));
     tokio::fs::create_dir_all(
         file.parent()
             .ok_or_else(|| openshell_core_domain::DomainError::internal("远程桌面路径无效"))?,
@@ -2139,52 +2377,53 @@ pub async fn rdp_launch(
         .collect();
     tokio::fs::write(&file, data).await?;
     #[cfg(windows)]
-    let pid = {
+    let (pid, child, events, reader) = {
+        let config = serde_json::json!({"host":host,"port":port,"username":username,"domain":options.domain,"width":if options.custom_size {options.width.unwrap_or(1920)}else{1920},"height":if options.custom_size {options.height.unwrap_or(1080)}else{1080},"fullscreen":options.fullscreen,"redirect_clipboard":options.redirect_clipboard,"redirect_printers":options.redirect_printers,"drivestoredirect":options.drivestoredirect,"redirect_audio":options.redirect_audio,"admin_session":options.admin_session});
         let launch_file = file.clone();
-        let launch_host = host.clone();
-        let launch_user = match options.domain.filter(|d| !d.is_empty()) {
-            Some(domain) => format!("{domain}\\{username}"),
-            None => username,
-        };
-        tokio::task::spawn_blocking(
-            move || -> Result<Option<u32>, openshell_core_domain::DomainError> {
-                use std::os::windows::process::CommandExt;
-                if let Some(password) = password.filter(|_| !launch_user.is_empty()) {
-                    let status = std::process::Command::new("cmdkey.exe")
-                        .creation_flags(0x08000000)
-                        .args([
-                            format!("/generic:TERMSRV/{launch_host}"),
-                            format!("/user:{launch_user}"),
-                            format!("/pass:{}", password.as_str()),
-                        ])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()?;
-                    if !status.success() {
-                        return Err(openshell_core_domain::DomainError::new(
-                            openshell_core_domain::ErrorCode::AuthFailed,
-                            "无法注册远程桌面凭据",
-                        ));
-                    }
-                }
-                Ok(Some(
-                    std::process::Command::new("mstsc.exe")
-                        .arg(launch_file)
-                        .spawn()?
-                        .id(),
-                ))
-            },
-        )
+        let (child, events, reader) = match tokio::task::spawn_blocking(move || {
+            crate::rdp_host::start(
+                &config,
+                password.as_deref().map(|password| password.as_str()),
+                &launch_file,
+            )
+        })
         .await
-        .map_err(|_| openshell_core_domain::DomainError::internal("远程桌面启动任务失败"))??
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                crate::rdp_process::cleanup(&file)?;
+                return Err(error.into());
+            }
+            Err(_) => {
+                crate::rdp_process::cleanup(&file)?;
+                return Err(
+                    openshell_core_domain::DomainError::internal("远程桌面启动任务失败").into(),
+                );
+            }
+        };
+        (Some(child.id()), Some(child), Some(events), Some(reader))
     };
     #[cfg(not(windows))]
-    let pid: Option<u32> = {
-        let _ = password;
-        None
-    };
-    state.session.touch_used(&sid, "ok").await?;
+    let (pid, child, events, reader) = (None, None, None, None);
+    rdp_launches()
+        .lock()
+        .map_err(|_| openshell_core_domain::DomainError::internal("RDP 状态不可用"))?
+        .insert(
+            launch_id.clone(),
+            RdpRuntimeEntry {
+                session_id: session_id.clone(),
+                state: "starting",
+                error: None,
+                exit_code: None,
+                child,
+                file: file.clone(),
+                events,
+                reader,
+                recorded_login: false,
+            },
+        );
     Ok(RdpLaunchResult {
+        launch_id,
         session_id,
         rdp_file_path: file.to_string_lossy().into_owned(),
         pid,
@@ -2193,9 +2432,322 @@ pub async fn rdp_launch(
     })
 }
 
+#[tauri::command]
+pub async fn rdp_get_status(
+    state: tauri::State<'_, Arc<AppServices>>,
+    launch_id: String,
+) -> Result<RdpRuntimeStatus, IpcError> {
+    let (status, record_login) = {
+        let mut launches = rdp_launches()
+            .lock()
+            .map_err(|_| openshell_core_domain::DomainError::internal("RDP 状态不可用"))?;
+        let entry = launches
+            .get_mut(&launch_id)
+            .ok_or_else(|| openshell_core_domain::DomainError::not_found("RDP launch not found"))?;
+        if entry.state != "closed" {
+            if let Some(events) = &entry.events {
+                let events = events.lock().map_err(|_| {
+                    openshell_core_domain::DomainError::internal("RDP 状态通道不可用")
+                })?;
+                entry.state = events.state;
+                entry.error = events.error.clone();
+            }
+        }
+        if let Some(child) = entry.child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    entry.exit_code = status.code();
+                    if !matches!(entry.state, "failed" | "closed" | "disconnected") {
+                        entry.state = if entry.recorded_login {
+                            "disconnected"
+                        } else {
+                            "failed"
+                        };
+                        entry.error = if entry.recorded_login {
+                            None
+                        } else {
+                            Some("远程桌面进程退出，未取得登录结果".into())
+                        };
+                    }
+                    entry.child = None;
+                    if let Some(reader) = entry.reader.take() {
+                        let _ = reader.join();
+                    }
+                    if let Some(events) = &entry.events {
+                        let events = events.lock().map_err(|_| {
+                            openshell_core_domain::DomainError::internal("RDP 状态通道不可用")
+                        })?;
+                        if matches!(events.state, "closed" | "failed" | "disconnected") {
+                            entry.state = events.state;
+                            entry.error = events.error.clone();
+                        }
+                    }
+                    if let Err(error) = crate::rdp_process::cleanup(&entry.file) {
+                        entry.state = "failed";
+                        entry.error = Some("远程桌面已退出，但临时文件清理失败".into());
+                        return Err(error.into());
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    entry.state = "failed";
+                    entry.error = Some("无法查询远程桌面进程状态".into());
+                    tracing::warn!(error = %error, launch_id, "failed to query RDP host process");
+                }
+            }
+        }
+        let record_login = !entry.recorded_login
+            && entry
+                .events
+                .as_ref()
+                .is_some_and(|events| events.lock().is_ok_and(|events| events.authenticated));
+        if record_login {
+            entry.recorded_login = true;
+        }
+        (
+            RdpRuntimeStatus {
+                launch_id,
+                session_id: entry.session_id.clone(),
+                state: entry.state,
+                error: entry.error.clone(),
+                exit_code: entry.exit_code,
+            },
+            record_login,
+        )
+    };
+    if record_login {
+        state
+            .session
+            .touch_used(&SessionId::from_string(&status.session_id)?, "success")
+            .await?;
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn rdp_close(launch_id: String) -> Result<(), IpcError> {
+    let mut launches = rdp_launches()
+        .lock()
+        .map_err(|_| openshell_core_domain::DomainError::internal("RDP 状态不可用"))?;
+    let entry = launches
+        .get_mut(&launch_id)
+        .ok_or_else(|| openshell_core_domain::DomainError::not_found("RDP launch not found"))?;
+    match crate::rdp_process::close(&mut entry.child, &entry.file) {
+        Ok(exit_code) => entry.exit_code = exit_code.or(entry.exit_code),
+        Err(error) => {
+            entry.state = "failed";
+            entry.error = Some("无法完成远程桌面清理".into());
+            return Err(error.into());
+        }
+    }
+    if let Some(reader) = entry.reader.take() {
+        let _ = reader.join();
+    }
+    entry.state = "closed";
+    entry.error = None;
+    Ok(())
+}
+
 #[cfg(test)]
 mod protocol_command_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn application_exit_closes_owned_rdp_launches_and_files() {
+        use std::os::windows::process::CommandExt;
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("owned.rdp");
+        std::fs::write(&file, b"synthetic").unwrap();
+        let child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .creation_flags(0x08000000)
+            .spawn()
+            .unwrap();
+        rdp_launches().lock().unwrap().insert(
+            "exit-test".into(),
+            RdpRuntimeEntry {
+                session_id: String::new(),
+                state: "launched",
+                error: None,
+                exit_code: None,
+                child: Some(child),
+                file: file.clone(),
+                events: None,
+                reader: None,
+                recorded_login: false,
+            },
+        );
+        shutdown_rdp_launches();
+        assert!(!file.exists());
+        assert!(rdp_launches().lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn task4_wire_values_and_runtime_metadata_match_shared_contract() {
+        use openshell_core_domain::{SnippetKind, SocksAuth, TransferState};
+        assert_eq!(
+            serde_json::to_value(TransferState::Running).unwrap(),
+            "running"
+        );
+        assert_eq!(
+            serde_json::to_value(SocksAuth::Userpass).unwrap(),
+            "userpass"
+        );
+        assert_eq!(serde_json::to_value(SnippetKind::Macro).unwrap(), "macro");
+        let input: SnippetInput = serde_json::from_value(
+            serde_json::json!({"name":"test","kind":"snippet","body":"echo test"}),
+        )
+        .unwrap();
+        assert_eq!(input.body.as_deref(), Some("echo test"));
+        let status = RdpRuntimeStatus {
+            launch_id: "launch".into(),
+            session_id: "session".into(),
+            state: "launched",
+            error: None,
+            exit_code: None,
+        };
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"launch_id":"launch","session_id":"session","state":"launched","error":null,"exit_code":null})
+        );
+    }
+
+    #[tokio::test]
+    async fn all_protocol_fields_survive_save_update_and_readback() {
+        let state = AppServices::new_in_memory().unwrap();
+        let group = state
+            .session
+            .create_group(None, "自定义".into(), GroupKind::Session)
+            .await
+            .unwrap();
+        for (protocol, options) in [
+            (
+                Protocol::Ssh,
+                serde_json::json!({"accelerate":true,"exec_channel_enable":false}),
+            ),
+            (
+                Protocol::Rdp,
+                serde_json::json!({"width":1600,"height":900,"domain":"DOMAIN","fullscreen":false}),
+            ),
+            (
+                Protocol::Serial,
+                serde_json::json!({"port_name":"COM9","baud_rate":921600,"data_bits":"eight","auto_reconnect":false}),
+            ),
+            (
+                Protocol::Telnet,
+                serde_json::json!({"auto_login":true,"login_prompt":"登录：","newline_mode":"crlf"}),
+            ),
+            (
+                Protocol::LocalShell,
+                serde_json::json!({"shell_kind":"custom","shell_path":"C:/工具/shell.exe","args":["--login"]}),
+            ),
+        ] {
+            let source = serde_json::json!({
+                "name":format!("{protocol:?} 连接"), "protocol":protocol,
+                "host":protocol.requires_host().then_some("server.test"),
+                "port":protocol.default_port(), "username":"用户",
+                "auth_method":"agent", "host_key_policy":"strict",
+                "proxy_id":"proxy-1", "proxy_jump_json":[{"host":"jump.test","port":2222}],
+                "terminal_profile_id":"profile-1", "encoding":"gb18030",
+                "startup_command":"echo 你好", "working_dir":"C:/工作目录",
+                "keepalive_sec":47, "keepalive_max_miss":9,
+                "auto_reconnect":false, "reconnect_max":13, "compression":true,
+                "agent_forwarding":true, "x11_forwarding":true,
+                "tags_json":["生产","多协议"], "favorite":true,
+                "color":"#336699", "icon_key":"device:terminal", "notes":"完整字段",
+                "protocol_options_json":options, "sort_order":4096
+            });
+            let input: SessionInput = serde_json::from_value(source.clone()).unwrap();
+            let saved = state.session.create_session(input.clone()).await.unwrap();
+            assert!(saved.group_id.is_none());
+            let serialized = serde_json::to_value(&saved).unwrap();
+            for (key, value) in source.as_object().unwrap() {
+                assert_eq!(&serialized[key], value, "create {protocol:?}: {key}");
+            }
+            let created = state
+                .session
+                .create_session(SessionInput {
+                    name: Some("before import".into()),
+                    protocol: Some(protocol),
+                    group_id: Some(group.id.clone()),
+                    host_key_policy: Some(openshell_core_domain::HostKeyPolicy::AcceptNew),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            state
+                .session
+                .update_session(&created.id, import_session_patch(input), None)
+                .await
+                .unwrap();
+            let readback = state.session.get_session(&created.id).await.unwrap();
+            assert_eq!(
+                readback.group_id.as_ref(),
+                Some(&group.id),
+                "default grouping must not move a custom group"
+            );
+            let serialized = serde_json::to_value(&readback).unwrap();
+            for (key, value) in source.as_object().unwrap() {
+                assert_eq!(&serialized[key], value, "{protocol:?}: {key}");
+            }
+            let listed = state
+                .session
+                .list_sessions(&SessionQuery::default())
+                .await
+                .unwrap();
+            let listed = listed
+                .iter()
+                .find(|session| session.id == created.id)
+                .unwrap();
+            assert_eq!(serde_json::to_value(listed).unwrap(), serialized);
+            let patch = import_session_patch(SessionInput {
+                group_id: Some(group.id.clone()),
+                protocol: Some(protocol),
+                ..Default::default()
+            });
+            assert_eq!(patch.group_id, Some(Some(group.id.clone())));
+            assert_eq!(patch.port, Some(protocol.default_port()));
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_forwards_update_destinations_without_duplicates_and_inherit_reconnect() {
+        let state = AppServices::new_in_memory().unwrap();
+        let session = state
+            .session
+            .create_session(SessionInput {
+                name: Some("SSH".into()),
+                auto_reconnect: Some(false),
+                reconnect_max: Some(11),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for dest_port in [80, 8080] {
+            let rule =
+                serde_json::json!({"name":"web","type":100,"port":8888,"dst_port":dest_port});
+            let options = serde_json::json!({"port_forwarding_list":[rule.clone(),rule]});
+            import_embedded_forwards(
+                &state,
+                &session,
+                Some(&options),
+                Some(session.auto_reconnect),
+            )
+            .await
+            .unwrap();
+            let rules = state
+                .port_forward_repo
+                .list(Some(&session.id))
+                .await
+                .unwrap();
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].dest_port, Some(dest_port));
+            assert!(!rules[0].auto_reconnect);
+            assert_eq!(rules[0].reconnect_max, 11);
+        }
+    }
+
     #[test]
     fn local_shell_options_use_ipc_camel_case() {
         let options: LocalShellOpenOptions = serde_json::from_value(

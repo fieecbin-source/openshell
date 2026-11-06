@@ -8,7 +8,7 @@ use openshell_core_domain::{
     SessionRepository,
 };
 use openshell_ssh::{ConnectOptions, SshConnectionManager};
-use openshell_store::{KnownHostRepo, SessionRepo, SettingsRepo};
+use openshell_store::{KnownHostRepo, SessionRepo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,33 +26,33 @@ pub struct ConnectOverrides {
 pub struct ConnectionService {
     session_repo: Arc<SessionRepo>,
     known_host_repo: Arc<KnownHostRepo>,
-    settings_repo: Arc<SettingsRepo>,
     secret_resolver: Arc<dyn SecretResolver>,
     ssh_manager: Arc<SshConnectionManager>,
     op_registry: Arc<OpRegistry>,
     event_bus: Arc<EventBus>,
     route_dependencies: Arc<tokio::sync::Mutex<HashMap<ConnectionId, Vec<ConnectionId>>>>,
+    network_secrets: Arc<crate::network_secrets::NetworkSecrets>,
 }
 
 impl ConnectionService {
     pub fn new(
         session_repo: Arc<SessionRepo>,
         known_host_repo: Arc<KnownHostRepo>,
-        settings_repo: Arc<SettingsRepo>,
         secret_resolver: Arc<dyn SecretResolver>,
         ssh_manager: Arc<SshConnectionManager>,
         op_registry: Arc<OpRegistry>,
         event_bus: Arc<EventBus>,
+        network_secrets: Arc<crate::network_secrets::NetworkSecrets>,
     ) -> Self {
         Self {
             session_repo,
             known_host_repo,
-            settings_repo,
             secret_resolver,
             ssh_manager,
             op_registry,
             event_bus,
             route_dependencies: Default::default(),
+            network_secrets,
         }
     }
 
@@ -191,6 +191,11 @@ impl ConnectionService {
         cancel_token: &CancellationToken,
     ) -> DomainResult<ConnectionId> {
         let session_id = &session.id;
+        let x11_forwarding = if session.x11_forwarding {
+            Some(Arc::new(openshell_ssh::x11::X11Forward::from_environment()?))
+        } else {
+            None
+        };
         let proxy = self.proxy_for_session(&session)?;
 
         let connection_id = ConnectionId::new();
@@ -298,6 +303,7 @@ impl ConnectionService {
             timeout_sec: 15,
             compression: session.compression,
             agent_forwarding: session.agent_forwarding,
+            x11_forwarding,
         };
 
         self.event_bus.emit(AppEvent::ConnectionState {
@@ -368,17 +374,12 @@ impl ConnectionService {
         let Some(id) = session.proxy_id.as_deref().filter(|id| !id.is_empty()) else {
             return Ok(None);
         };
-        let proxies: Vec<ProxyServerConfig> =
-            match self.settings_repo.get("global", None, "proxy_list")? {
-                Some(record) => serde_json::from_value(record.value_json)
-                    .map_err(|_| DomainError::validation("代理服务器配置无效"))?,
-                None => Vec::new(),
-            };
+        let proxies = self.network_secrets.proxies()?;
         proxies
             .into_iter()
             .find(|proxy| proxy.id == id)
-            .map(Some)
             .ok_or_else(|| DomainError::validation("会话绑定的代理服务器不存在"))
+            .and_then(|proxy| self.network_secrets.runtime_proxy(proxy).map(Some))
     }
 
     /// 断开连接。

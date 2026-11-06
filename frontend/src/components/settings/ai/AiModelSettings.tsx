@@ -59,6 +59,22 @@ const TEST_CODE_TEXT: Record<string, string> = {
   AI_CONFIG: "配置有误：请检查端点地址、协议与模型标识是否匹配。",
 };
 
+function formatShortAiError(result: import("../../../types/ai").ProviderTestResult): string {
+  if (result.code && TEST_CODE_TEXT[result.code]) {
+    return TEST_CODE_TEXT[result.code];
+  }
+  const msg = result.message?.trim() || "";
+  if (!msg) return "连接测试失败，请检查网络或端点配置";
+  // 避免将远端返回的原始 HTML（如 502/网关报错）或过长原始报文直接暴露
+  if (msg.startsWith("<") || msg.includes("<!DOCTYPE") || msg.includes("<html")) {
+    return "端点返回了网页内容而非模型数据，请检查端点地址";
+  }
+  if (msg.length > 120 || msg.startsWith("{") || msg.includes("Traceback")) {
+    return "端点返回了异常报文，请检查模型标识或网络设置";
+  }
+  return msg;
+}
+
 export function AiModelSettings() {
   const enabled = useAiSettingsStore((s) => s.enabled);
   const config = useAiSettingsStore((s) => s.config);
@@ -240,7 +256,6 @@ export function AiModelSettings() {
       <div className="space-y-3">
         <SectionHeader
           title="AI 模型"
-          description="AI 功能默认关闭，开启后才会向模型发送上下文"
         />
         {error && <InlineNotice tone="danger">{error}</InlineNotice>}
         {catalogError && <InlineNotice tone="warning">{catalogError}</InlineNotice>}
@@ -249,7 +264,6 @@ export function AiModelSettings() {
         ) : (
           <EmptyState
             title="暂时无法读取 AI 配置"
-            description="请检查客户端状态后重试。"
             action={
               <Button variant="primary" onClick={() => void load()} leading={<RefreshIcon className="h-3.5 w-3.5" />}>
                 重新加载
@@ -268,16 +282,13 @@ export function AiModelSettings() {
           checked={enabled}
           onChange={(next) => void toggleEnabled(next)}
           label="启用 AI 终端助手"
-          hint="AI 功能默认关闭，开启后才会向模型发送上下文"
         />
       </Panel>
 
-      {config.key_backend === "unavailable" ? (
+      {config.key_backend === "unavailable" && (
         <InlineNotice tone="warning" title="凭据存储不可用">
           {config.key_backend_message || "系统钥匙串不可用，密钥可能无法安全保存。"}
         </InlineNotice>
-      ) : (
-        <p className="text-os-xs text-ink-tertiary">{config.key_backend_message}</p>
       )}
 
       {error && <InlineNotice tone="danger">{error}</InlineNotice>}
@@ -288,11 +299,6 @@ export function AiModelSettings() {
         providers={providers}
         selectedKey={draft.provider}
         onSelect={applyProvider}
-        catalogMeta={
-          catalog
-            ? { source: catalog.source, version: catalog.version, fetched_at: catalog.fetched_at }
-            : null
-        }
         manualProvider={draft.provider}
         onManualProviderChange={(value) => setDraft((prev) => ({ ...prev, provider: value }))}
       />
@@ -300,7 +306,6 @@ export function AiModelSettings() {
       <Panel className="space-y-3">
         <SectionHeader
           title={draft.id ? "编辑模型档案" : "新建模型档案"}
-          description={AI_WIRE_LABELS[draft.wire]}
           actions={
             <>
               {draft.id && activeId === draft.id && <Badge tone="accent">当前使用</Badge>}
@@ -313,22 +318,20 @@ export function AiModelSettings() {
           }
         />
 
-        <Field label="档案名称" htmlFor="ai-profile-label">
+        <Field label="档案名称" htmlFor="ai-profile-label" required value={draft.label}>
           <Input
             id="ai-profile-label"
             value={draft.label}
             onChange={(event) => setDraft((prev) => ({ ...prev, label: event.target.value }))}
-            placeholder="例如：团队共用 GPT-4o"
           />
         </Field>
 
-        <Field label="API 端点" htmlFor="ai-profile-base-url" hint="本地端点允许 http://，其余请使用 https://">
+        <Field label="API 端点" htmlFor="ai-profile-base-url" required value={draft.base_url}>
           <Input
             id="ai-profile-base-url"
             mono
             value={draft.base_url}
             onChange={(event) => setDraft((prev) => ({ ...prev, base_url: event.target.value }))}
-            placeholder="https://api.openai.com/v1"
           />
         </Field>
 
@@ -358,7 +361,7 @@ export function AiModelSettings() {
           </Field>
         </div>
 
-        <Field label="模型" hint="可搜索预设模型，也可直接输入任意模型 ID">
+        <Field label="模型" required value={draft.model_id}>
           <ModelCombobox
             models={modelOptions}
             value={draft.model_id}
@@ -369,7 +372,6 @@ export function AiModelSettings() {
         <Field
           label="API Key"
           htmlFor="ai-profile-key"
-          hint="密钥仅在保存时提交一次，不会显示在界面上，也不会写入本地缓存。"
         >
           <div className="space-y-2">
             <Input
@@ -378,7 +380,6 @@ export function AiModelSettings() {
               autoComplete="off"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder={hasStoredKey ? "已配置（留空保持不变）" : "请输入 API Key"}
             />
             {hasStoredKey && (
               <Checkbox
@@ -424,11 +425,7 @@ export function AiModelSettings() {
           <InlineNotice tone={lastTest.ok ? "success" : "danger"}>
             {lastTest.ok
               ? `连接成功：${lastTest.model || "模型"}，耗时 ${lastTest.latency_ms} ms`
-              : `连接失败：${
-                  (lastTest.code && TEST_CODE_TEXT[lastTest.code]) ||
-                  lastTest.message ||
-                  "未知原因"
-                }`}
+              : `连接失败：${formatShortAiError(lastTest)}`}
           </InlineNotice>
         )}
       </Panel>
@@ -436,12 +433,10 @@ export function AiModelSettings() {
       <div className="space-y-2">
         <SectionHeader
           title="已保存的模型档案"
-          description={config.profiles.length === 0 ? undefined : "点击档案可编辑"}
         />
         {config.profiles.length === 0 ? (
           <EmptyState
             title="尚未添加模型档案"
-            description="选择厂商、填写 Key 后点击「保存」即可开始。"
           />
         ) : (
           <ProfileList
@@ -454,12 +449,6 @@ export function AiModelSettings() {
           />
         )}
       </div>
-
-      {catalog && (
-        <p className="text-os-2xs text-ink-tertiary">
-          目录来源 {catalog.source} · 版本 {catalog.version} · 更新于 {catalog.fetched_at}
-        </p>
-      )}
 
       <ConfirmDialog
         open={deleteTargetId !== null}
