@@ -28,7 +28,7 @@ import {
 } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { encodeTextForSession } from "../lib/terminal-actions";
-import { expireSerialSendEpoch } from "./serialStore";
+import { expireSerialSendEpoch, stopSerialSendTimer } from "./serialStore";
 
 export interface ConnectOverrides {
   host?: string;
@@ -853,9 +853,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // 串口：重连前停止旧定时发送与 RX 轮询，避免旧任务在新连接上继续发送；
     // 订阅关系保留，重连成功后由 resumeSerialRead 原地恢复。
     if (tab.protocol === "serial") {
-      const { pauseSerialRead, stopSerialSendTimer } = await import("./serialStore");
+      const { pauseSerialRead, stopSerialSendTimer: stopOwnedTimer } = await import("./serialStore");
       if (!isCurrent()) return;
-      stopSerialSendTimer();
+      stopOwnedTimer(tab.cardId || tab.tabId);
       pauseSerialRead(tab.cardId || tab.tabId);
     }
 
@@ -1061,8 +1061,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     // 串口被动断开：停止定时发送并暂停 RX 轮询；订阅保留，重连成功后恢复。
     if (tab.protocol === "serial") {
-      void import("./serialStore").then(({ pauseSerialRead, stopSerialSendTimer }) => {
-        stopSerialSendTimer();
+      void import("./serialStore").then(({ pauseSerialRead, stopSerialSendTimer: stopOwnedTimer }) => {
+        stopOwnedTimer(tab.cardId || tab.tabId);
         pauseSerialRead(tab.cardId || tab.tabId);
       });
     }
@@ -1165,8 +1165,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     // 串口必须在第一个 await 之前同步作废在途发送：closeCard 可能长时间 pending，
     // 等 teardownSerialSession 再失效会让旧编码结果写进旧句柄或重开的同 cardId 句柄。
+    // 只失效代次不够：timer 下一 tick 会领取新代次继续发送，必须同时停掉属于该 card 的 timer。
     if (tab.protocol === "serial") {
-      expireSerialSendEpoch(tab.cardId || tab.tabId);
+      const cardId = tab.cardId || tab.tabId;
+      stopSerialSendTimer(cardId);
+      expireSerialSendEpoch(cardId);
     }
 
     // 先移除标签，让仍在连接中的响应立即失效，再异步释放资源。

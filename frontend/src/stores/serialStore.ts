@@ -69,6 +69,15 @@ function assertCurrentSerialSendEpoch(cardId: string, epoch: number): void {
 }
 
 /**
+ * 定时发送的归属判定：无 cardId 表示用户显式全局停止（SerialSendBar 按钮）；
+ * 生命周期按 card 停止时，旧式未记录归属的全局 timer 仍随该 card 一起停，
+ * 只有明确属于另一个 card 的 timer 才不受影响。failSerialSend 与 stopTimer 共用。
+ */
+function timerOwnedBy(timerCardId: string | null, cardId?: string): boolean {
+  return cardId === undefined || timerCardId === null || timerCardId === cardId;
+}
+
+/**
  * 编码/写入的结果统一按代次归属：旧句柄的 resolve 已由 assert 拦下，
  * 旧句柄的 reject 也必须归一为主动取消，不能停掉重开后的新 timer、
  * 写入旧 sendError 或影响其他 card 的定时发送。当前句柄的真实失败照常上报。
@@ -84,7 +93,7 @@ function failSerialSend(cardId: string, epoch: number, error: unknown): never {
   const state = useSerialStore.getState();
   // 未记录归属（旧式/直接注入的全局 timer）仍按原有语义随本次真实失败停止；
   // 只有明确属于另一个 card 的 timer 才不受影响。
-  const ownsTimer = state.timerCardId === null || state.timerCardId === cardId;
+  const ownsTimer = timerOwnedBy(state.timerCardId, cardId);
   if (ownsTimer && state.isTimerRunning && state.timerHandle) {
     clearInterval(state.timerHandle);
   }
@@ -197,7 +206,8 @@ interface SerialState {
   fetchModemStatus: (cardId: string) => Promise<void>;
   fetchStats: (cardId: string) => Promise<void>;
   startTimer: (cardId: string, encoding?: string | null) => void;
-  stopTimer: () => void;
+  /** 无参 = 用户显式全局停止；传 cardId = 生命周期按 card 归属停止 */
+  stopTimer: (cardId?: string) => void;
   setViewMode: (mode: "ascii" | "hex") => void;
   setShowTimestamp: (show: boolean) => void;
   setSendText: (text: string) => void;
@@ -252,7 +262,7 @@ export const useSerialStore = create<SerialState>((set, get) => ({
   },
 
   sendCurrent: async (cardId, encoding) => {
-    const { sendText, sendIsHex, newlineMode, history } = get();
+    const { sendText, sendIsHex, newlineMode } = get();
     if (!sendText.trim()) return;
     const epoch = currentSerialSendEpoch(cardId);
 
@@ -275,12 +285,16 @@ export const useSerialStore = create<SerialState>((set, get) => ({
       // 非 UTF-8 编码是真实 await：期间断开/重开后旧字节不能写进新句柄
       assertCurrentSerialSendEpoch(cardId, epoch);
       await sendSerial(cardId, new Uint8Array(payloadBytes));
+      // write 也是真实 await：关闭/重开后的旧完成不得写新 history、刷新新 stats
+      assertCurrentSerialSendEpoch(cardId, epoch);
     } catch (error) {
       failSerialSend(cardId, epoch, error);
     }
 
-    const newHistory = [sendText, ...history.filter((h) => h !== sendText)].slice(0, 50);
-    set({ history: newHistory });
+    // 并发发送按完成时最新的 history 合并，不用 await 前旧快照覆盖别人新条目
+    set((s) => ({
+      history: [sendText, ...s.history.filter((h) => h !== sendText)].slice(0, 50),
+    }));
     get().fetchStats(cardId);
   },
 
@@ -298,6 +312,8 @@ export const useSerialStore = create<SerialState>((set, get) => ({
       }
       assertCurrentSerialSendEpoch(cardId, epoch);
       await sendSerial(cardId, new Uint8Array(payloadBytes));
+      // 旧写入的晚完成不得刷新新连接的 stats，也不得误报新连接失败
+      assertCurrentSerialSendEpoch(cardId, epoch);
     } catch (error) {
       failSerialSend(cardId, epoch, error);
     }
@@ -356,8 +372,11 @@ export const useSerialStore = create<SerialState>((set, get) => ({
     set({ isTimerRunning: true, timerHandle: handle, timerCardId: cardId });
   },
 
-  stopTimer: () => {
-    const { timerHandle } = get();
+  stopTimer: (cardId?: string) => {
+    const { timerHandle, timerCardId } = get();
+    // 生命周期按 card 停止时，只有该 card（或旧式未记录归属）的 timer 才停；
+    // 用户显式按钮不传参，维持全局停止原意。
+    if (!timerOwnedBy(timerCardId, cardId)) return;
     if (timerHandle) clearInterval(timerHandle);
     set({ isTimerRunning: false, timerHandle: null, timerCardId: null });
   },
@@ -405,9 +424,9 @@ export function resumeSerialRead(cardId: string): void {
   ensureSerialReadPoller(cardId);
 }
 
-/** 停止串口定时发送；关闭/重连时调用，避免旧定时任务在新连接上意外继续发送。 */
-export function stopSerialSendTimer(): void {
-  useSerialStore.getState().stopTimer();
+/** 停止串口定时发送；关闭/重连时按 card 归属调用，无参为用户显式全局停止。 */
+export function stopSerialSendTimer(cardId?: string): void {
+  useSerialStore.getState().stopTimer(cardId);
 }
 
 /**
@@ -417,7 +436,7 @@ export function stopSerialSendTimer(): void {
 export function teardownSerialSession(cardId: string): void {
   // 主动关闭标签：在途发送不得落到随后重开的同 cardId 句柄
   bumpSerialSendEpoch(cardId);
-  stopSerialSendTimer();
+  stopSerialSendTimer(cardId);
   stopSerialReadPoller(cardId);
   serialReadSubscribers.delete(cardId);
   useSerialStore.setState((state) => ({

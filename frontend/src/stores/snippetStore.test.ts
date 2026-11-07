@@ -187,4 +187,44 @@ describe("snippetStore and Snippet logic", () => {
     expect(useSnippetStore.getState().snippets).toEqual(existing);
     expect(useSnippetStore.getState().loading).toBe(false);
   });
+
+  it("loadSnippets: slow read A resolving late after read B succeeds must not overwrite B's data (generation check)", async () => {
+    function deferred<T>() {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const defA = deferred<any[]>();
+    const defB = deferred<any[]>();
+
+    vi.mocked(ipcModule.snippetList)
+      .mockReturnValueOnce(defA.promise)
+      .mockReturnValueOnce(defB.promise);
+
+    // Call A (slow)
+    const promiseA = useSnippetStore.getState().loadSnippets();
+
+    // Call B (faster)
+    const promiseB = useSnippetStore.getState().loadSnippets();
+
+    // B resolves with new snippets
+    const snipB = [{ id: "snip_B", name: "Snippet B", kind: "snippet" as const, body: "cmd B", shortcut: null, send_mode: "execute" as const, sort_order: 0, created_at: 2, updated_at: 2, deleted_at: null }];
+    defB.resolve(snipB);
+    await promiseB;
+
+    expect(useSnippetStore.getState().snippets).toEqual(snipB);
+
+    // A resolves late with old snippets
+    const snipA = [{ id: "snip_A", name: "Snippet A", kind: "snippet" as const, body: "cmd A", shortcut: null, send_mode: "execute" as const, sort_order: 0, created_at: 1, updated_at: 1, deleted_at: null }];
+    defA.resolve(snipA);
+    await promiseA;
+
+    // A must NOT overwrite B's data!
+    expect(useSnippetStore.getState().snippets).toEqual(snipB);
+  });
 });

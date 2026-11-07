@@ -2,11 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   pauseSerialRead,
   resumeSerialRead,
+  stopSerialSendTimer,
   subscribeSerial,
   teardownSerialSession,
   useSerialStore,
 } from "./serialStore";
-import { readSerial, sendSerial, terminalEncode } from "../lib/ipc";
+import { getSerialStats, readSerial, sendSerial, terminalEncode } from "../lib/ipc";
 
 vi.mock("../lib/ipc", () => ({
   listSerialPorts: vi.fn(),
@@ -266,4 +267,129 @@ it("R06: a genuine failure on the current card still reports the error and stops
   expect(useSerialStore.getState().isTimerRunning).toBe(false);
   expect(useSerialStore.getState().timerHandle).toBeNull();
   expect(useSerialStore.getState().timerCardId).toBeNull();
+});
+
+// ── Task8 红测：旧写入晚完成、并发历史合并、按 card 停 timer ──
+const T8_STATS = { rx_bytes: 20, tx_bytes: 20, rx_bps: 2, tx_bps: 2 };
+
+it("T8-2: a write that resolves after the card is reopened cannot overwrite new history or refresh stats", async () => {
+  useSerialStore.setState({
+    sendText: "OLD", sendIsHex: false, newlineMode: "none",
+    history: [], stats: {}, sendError: null,
+    isTimerRunning: false, timerHandle: null, timerCardId: null,
+  });
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+  let finishWrite!: (value: number) => void;
+  write.mockImplementationOnce(
+    () => new Promise<number>((resolve) => { finishWrite = resolve; })
+  );
+
+  const stale = useSerialStore.getState().sendCurrent("t8-late", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+
+  // 同 card 重开：代次失效，新连接已有自己的历史与统计
+  pauseSerialRead("t8-late");
+  useSerialStore.setState({ sendText: "NEW", history: ["NEW"], stats: { "t8-late": T8_STATS } });
+
+  finishWrite(3);
+  const outcome = await stale.then(() => "resolved", () => "rejected");
+
+  expect(outcome).toBe("rejected");
+  expect(useSerialStore.getState().history).toEqual(["NEW"]);
+  expect(useSerialStore.getState().stats["t8-late"]).toEqual(T8_STATS);
+  expect(vi.mocked(getSerialStats)).not.toHaveBeenCalled();
+  expect(useSerialStore.getState().sendError).toBeNull();
+});
+
+it("T8-3: a snippet write that resolves after a pause cannot refresh stats or report a stale failure", async () => {
+  useSerialStore.setState({
+    sendText: "AT", sendIsHex: false, newlineMode: "none",
+    history: [], stats: {}, sendError: null,
+  });
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+  let finishWrite!: (value: number) => void;
+  write.mockImplementationOnce(
+    () => new Promise<number>((resolve) => { finishWrite = resolve; })
+  );
+  const snippet = { id: "t8", name: "probe", payload: "AT", isHex: false };
+
+  const stale = useSerialStore.getState().sendSnippet("t8-snippet", snippet, "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+  pauseSerialRead("t8-snippet");
+  useSerialStore.setState({ stats: { "t8-snippet": T8_STATS } });
+
+  finishWrite(2);
+  const outcome = await stale.then(() => "resolved", () => "rejected");
+
+  expect(outcome).toBe("rejected");
+  expect(useSerialStore.getState().stats["t8-snippet"]).toEqual(T8_STATS);
+  expect(vi.mocked(getSerialStats)).not.toHaveBeenCalled();
+  expect(useSerialStore.getState().sendError).toBeNull();
+});
+
+it("T8-4: concurrent sends merge into the latest history instead of overwriting each other", async () => {
+  useSerialStore.setState({
+    sendIsHex: false, newlineMode: "none", history: [], stats: {}, sendError: null,
+  });
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+  const resolvers: Array<(value: number) => void> = [];
+  write
+    .mockImplementationOnce(() => new Promise<number>((resolve) => { resolvers.push(resolve); }))
+    .mockImplementationOnce(() => new Promise<number>((resolve) => { resolvers.push(resolve); }));
+
+  useSerialStore.setState({ sendText: "A" });
+  const a = useSerialStore.getState().sendCurrent("t8-merge", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+  useSerialStore.setState({ sendText: "B" });
+  const b = useSerialStore.getState().sendCurrent("t8-merge", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+
+  resolvers[1](1); // B 先完成
+  expect(await b.then(() => "resolved", () => "rejected")).toBe("resolved");
+  expect(useSerialStore.getState().history).toEqual(["B"]);
+
+  resolvers[0](1); // A 后完成，必须合并而不是覆盖
+  expect(await a.then(() => "resolved", () => "rejected")).toBe("resolved");
+  expect(useSerialStore.getState().history).toEqual(["A", "B"]);
+});
+
+it("T8-5: tearing down card A leaves card B's owned timer running", () => {
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 501 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "t8-card-B",
+    sendError: null,
+  });
+
+  teardownSerialSession("t8-card-A");
+
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerCardId).toBe("t8-card-B");
+});
+
+it("T8-12: a card-scoped stop keeps another card's timer, an unscoped stop is still global", () => {
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 502 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "t8-card-B",
+    sendError: null,
+  });
+
+  stopSerialSendTimer("t8-card-A");
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerCardId).toBe("t8-card-B");
+
+  // 生命周期只停自己的 timer
+  stopSerialSendTimer("t8-card-B");
+  expect(useSerialStore.getState().isTimerRunning).toBe(false);
+  expect(useSerialStore.getState().timerCardId).toBeNull();
+
+  // 用户显式按钮不传 cardId，维持全局停止原意
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 503 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "t8-card-C",
+  });
+  useSerialStore.getState().stopTimer();
+  expect(useSerialStore.getState().isTimerRunning).toBe(false);
 });

@@ -342,4 +342,71 @@ describe("useSyncStore", () => {
     await expect(useSyncStore.getState().retryRefreshViews()).rejects.toThrow();
     expect(useSyncStore.getState().refreshError).toBeTruthy();
   });
+
+  it("syncNow keeps syncing=true during view refresh and prevents re-entrant sync", async () => {
+    function deferred<T>() {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const refreshDef = deferred<any[]>();
+
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_now") return { pushed_count: 1, pulled_count: 1, conflict_count: 0, head_seq: 1 };
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") return refreshDef.promise; // delayed view refresh
+      return undefined;
+    });
+
+    // Start syncNow
+    const syncPromise = useSyncStore.getState().syncNow();
+
+    // Give time for sync_now invoke to resolve
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // WHILE view refresh is pending, syncing MUST STILL BE TRUE!
+    expect(useSyncStore.getState().syncing).toBe(true);
+
+    // Re-entrant syncNow while refresh is pending should be guarded
+    const reentrantPromise = useSyncStore.getState().syncNow();
+    // Finish refresh
+    refreshDef.resolve([]);
+    await syncPromise;
+    await reentrantPromise;
+
+    // After finish, syncing becomes false
+    expect(useSyncStore.getState().syncing).toBe(false);
+    // sync_now should only be called once, not twice
+    const syncCalls = vi.mocked(invoke).mock.calls.filter((call) => call[0] === "sync_now");
+    expect(syncCalls.length).toBe(1);
+  });
+
+  it("loadConfig awaits loadConflicts when conflict_count > 0, propagating failure to refreshError", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_now") return { pushed_count: 1, pulled_count: 1, conflict_count: 1, head_seq: 1 };
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 1 };
+      if (cmd === "sync_list_conflicts") throw new Error("Conflict DB read error");
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") return [];
+      return undefined;
+    });
+
+    const res = await useSyncStore.getState().syncNow();
+    expect(res.pushed_count).toBe(1);
+    // Because conflict reading failed, it must NOT be swallowed silently!
+    // refreshError must capture the failure
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+    expect(useSyncStore.getState().syncing).toBe(false);
+  });
 });

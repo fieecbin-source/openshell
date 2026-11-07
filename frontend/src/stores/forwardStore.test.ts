@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { forwardCreate, forwardList, forwardListStatuses } from "../lib/ipc";
 import { useForwardStore } from "./forwardStore";
-import type { ForwardRuleView } from "../types/ipc";
+import type { ForwardRuleView, ForwardStatus } from "../types/ipc";
 
 vi.mock("../lib/ipc", () => ({
   forwardList: vi.fn(),
@@ -99,4 +99,109 @@ describe("forwardStore credential recovery", () => {
     vi.mocked(forwardListStatuses).mockRejectedValue(new Error("status failed"));
     await expect(state().loadStatuses()).rejects.toThrow("status failed");
   });
+
+  it("delayed refreshAfterMutation A resolving late after refresh B fails must not clear B's refreshError", async () => {
+    function deferred<T>() {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const defA = deferred<any[]>();
+    vi.mocked(forwardCreate).mockResolvedValue(healthy);
+
+    // Refresh A will be delayed on forwardList
+    vi.mocked(forwardList)
+      .mockReturnValueOnce(defA.promise)
+      .mockRejectedValueOnce(new Error("Refresh B network timeout"));
+
+    // Mutation A starts, triggers Refresh A (delayed)
+    const pA = state().createRule({ name: "Rule A", bind_port: 1080 });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Mutation B starts, triggers Refresh B (which fails)
+    const pB = state().createRule({ name: "Rule B", bind_port: 1081 });
+    await pB;
+
+    // Refresh B set refreshError
+    expect(state().refreshError).toContain("Refresh B network timeout");
+
+    // Now Refresh A resolves late with success
+    defA.resolve([healthy]);
+    await pA;
+
+    // Refresh A must NOT have cleared Refresh B's error!
+    expect(state().refreshError).toContain("Refresh B network timeout");
+  });
+
+  it("delayed loadStatuses A resolving late after loadStatuses B must not overwrite newer statuses", async () => {
+    function deferred<T>() {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const defA = deferred<Record<string, any>>();
+    const defB = deferred<Record<string, any>>();
+
+    vi.mocked(forwardListStatuses)
+      .mockReturnValueOnce(defA.promise)
+      .mockReturnValueOnce(defB.promise);
+
+    const pA = state().loadStatuses();
+    const pB = state().loadStatuses();
+
+    // B resolves with Listening
+    defB.resolve({ rule_1: { state: "Listening" as any } });
+    await pB;
+    expect(state().statuses).toEqual({ rule_1: { state: "Listening" } });
+
+    // A resolves late with Stopped
+    defA.resolve({ rule_1: { state: "Stopped" as any } });
+    await pA;
+
+    // A must NOT overwrite B's Listening status!
+    expect(state().statuses).toEqual({ rule_1: { state: "Listening" } });
+  });
+
+  it.each(["rules", "statuses"] as const)(
+    "keeps the latest statuses when an older %s read completes across both read paths",
+    async (olderReader) => {
+      let resolveOlder!: (statuses: Record<string, ForwardStatus>) => void;
+      const olderStatuses = new Promise<Record<string, ForwardStatus>>((resolve) => {
+        resolveOlder = resolve;
+      });
+      const latestStatuses: Record<string, ForwardStatus> = {
+        rule_a: { state: "Stopped" },
+      };
+      vi.mocked(forwardList).mockResolvedValue([healthy]);
+      vi.mocked(forwardListStatuses)
+        .mockReturnValueOnce(olderStatuses)
+        .mockResolvedValueOnce(latestStatuses);
+
+      const olderRead = olderReader === "rules"
+        ? state().loadRules("sess_1")
+        : state().loadStatuses();
+      await (olderReader === "rules"
+        ? state().loadStatuses()
+        : state().loadRules("sess_1"));
+      resolveOlder({ rule_a: { state: "Listening", details: { bound_addr: "127.0.0.1:1080" } } });
+      await olderRead;
+
+      expect(state().statuses).toEqual(latestStatuses);
+      expect(state().rules).toEqual([healthy]);
+      expect(state().loading).toBe(false);
+      expect(state().activeSessionId).toBe("sess_1");
+    },
+  );
 });

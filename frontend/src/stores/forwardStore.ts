@@ -12,6 +12,8 @@ import {
 
 /** 单调递增，确保过期的读结果不会覆盖新的连接/界面状态 */
 let loadGeneration = 0;
+let refreshGeneration = 0;
+let statusGeneration = 0;
 
 function readErrorMessage(error: unknown): string {
   if (typeof error === "string") return error;
@@ -48,11 +50,16 @@ interface ForwardState {
 export const useForwardStore = create<ForwardState>((set, get) => {
   /** mutation 成功后只做重读；刷新失败可见但不把已成功的提交误报为失败 */
   const refreshAfterMutation = async () => {
+    const gen = ++refreshGeneration;
     try {
       await get().loadRules(get().activeSessionId ?? undefined);
-      set({ refreshError: null });
+      if (gen === refreshGeneration) {
+        set({ refreshError: null });
+      }
     } catch (e) {
-      set({ refreshError: readErrorMessage(e) });
+      if (gen === refreshGeneration) {
+        set({ refreshError: readErrorMessage(e) });
+      }
     }
   };
 
@@ -67,6 +74,7 @@ export const useForwardStore = create<ForwardState>((set, get) => {
     loadRules: async (sessionId?: string) => {
       const filterId = sessionId;
       const generation = ++loadGeneration;
+      const statusGen = ++statusGeneration;
       set({ loading: true, activeSessionId: filterId ?? null });
       try {
         const [rules, statuses] = await Promise.all([
@@ -74,7 +82,10 @@ export const useForwardStore = create<ForwardState>((set, get) => {
           forwardListStatuses(),
         ]);
         if (generation !== loadGeneration) return;
-        set({ rules, statuses, loading: false, loadError: null });
+        set({ rules, loading: false, loadError: null });
+        if (statusGen === statusGeneration) {
+          set({ statuses });
+        }
       } catch (e) {
         if (generation !== loadGeneration) return;
         set({ loading: false, loadError: readErrorMessage(e) });
@@ -83,17 +94,25 @@ export const useForwardStore = create<ForwardState>((set, get) => {
     },
 
     loadStatuses: async () => {
+      const gen = ++statusGeneration;
       const statuses = await forwardListStatuses();
-      set({ statuses });
+      if (gen === statusGeneration) {
+        set({ statuses });
+      }
     },
 
     retryRefresh: async () => {
       // 只重新读，绝不重复提交/启动/停止。
+      const gen = ++refreshGeneration;
       try {
         await get().loadRules(get().activeSessionId ?? undefined);
-        set({ refreshError: null });
+        if (gen === refreshGeneration) {
+          set({ refreshError: null });
+        }
       } catch (e) {
-        set({ refreshError: readErrorMessage(e) });
+        if (gen === refreshGeneration) {
+          set({ refreshError: readErrorMessage(e) });
+        }
       }
     },
 
@@ -123,10 +142,16 @@ export const useForwardStore = create<ForwardState>((set, get) => {
         if (!connId) throw new Error("需要已连接的 SSH 会话才能启动端口转发");
         await forwardStart(rule.id, connId);
       }
+      const gen = ++refreshGeneration;
       try {
         await get().loadStatuses();
+        if (gen === refreshGeneration) {
+          set({ refreshError: null });
+        }
       } catch (e) {
-        set({ refreshError: readErrorMessage(e) });
+        if (gen === refreshGeneration) {
+          set({ refreshError: readErrorMessage(e) });
+        }
       }
     },
   };

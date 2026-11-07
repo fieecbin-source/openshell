@@ -5,7 +5,7 @@ import { SnippetBar } from "./SnippetBar";
 import { useSnippetStore } from "../stores/snippetStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useTerminalStore, type TerminalTab } from "../stores/terminalStore";
-import { sendSerial, terminalEncode, writeTerminal } from "../lib/ipc";
+import { sendSerial, terminalEncode, writeTerminal, snippetCreate, snippetDelete, snippetList } from "../lib/ipc";
 import type { Session, Snippet } from "../types/ipc";
 
 vi.mock("../lib/ipc", () => ({
@@ -18,6 +18,9 @@ vi.mock("../lib/ipc", () => ({
     }
     return Array.from(new TextEncoder().encode(text));
   }),
+  snippetCreate: vi.fn(),
+  snippetDelete: vi.fn(),
+  snippetList: vi.fn(),
 }));
 
 vi.mock("./ui/GlassMaterial", () => ({ GlassMaterial: () => null }));
@@ -248,12 +251,20 @@ describe("SnippetBar (R05, R09)", () => {
     expect(button).toBeTruthy();
   });
 
-  it("handles snippet creation safely when createSnippet fails", async () => {
-    const failingCreate = vi.fn().mockRejectedValue(new Error("Create IPC failed"));
+  it("handles snippet creation safely when real store and IPC fail", async () => {
+    vi.mocked(snippetList).mockResolvedValue([]);
+    vi.mocked(snippetCreate).mockRejectedValueOnce(new Error("Real IPC snippetCreate failed"));
+
+    // Reset snippet store to real implementation without mock action substitutes
+    const storeDefaults = useSnippetStore.getInitialState();
     useSnippetStore.setState({
       snippets: [],
-      loadSnippets: vi.fn().mockResolvedValue(undefined),
-      createSnippet: failingCreate,
+      loading: false,
+      activeGroupId: null,
+      searchQuery: "",
+      createSnippet: storeDefaults.createSnippet,
+      deleteSnippet: storeDefaults.deleteSnippet,
+      loadSnippets: storeDefaults.loadSnippets,
     });
 
     await act(async () => {
@@ -288,21 +299,33 @@ describe("SnippetBar (R05, R09)", () => {
       saveBtn!.click();
     });
 
-    expect(failingCreate).toHaveBeenCalled();
+    // Real IPC snippetCreate was called
+    expect(snippetCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "New Command", body: "ls -la" })
+    );
+    // UI remains open with input intact for user retry
+    expect(document.body.querySelector("input[aria-label='命令名称']")).toBeTruthy();
   });
 
-  it("handles snippet deletion safely when deleteSnippet fails", async () => {
+  it("handles snippet deletion safely when real store and IPC fail", async () => {
     const existingSnippet = makeSnippet({
-      id: "snip_delete_test",
-      name: "To Delete",
+      id: "snip_delete_real",
+      name: "To Delete Real",
       body: "echo delete",
     });
 
-    const failingDelete = vi.fn().mockRejectedValue(new Error("Delete IPC failed"));
+    vi.mocked(snippetList).mockResolvedValue([existingSnippet]);
+    vi.mocked(snippetDelete).mockRejectedValueOnce(new Error("Real IPC snippetDelete failed"));
+
+    const storeDefaults = useSnippetStore.getInitialState();
     useSnippetStore.setState({
       snippets: [existingSnippet],
-      loadSnippets: vi.fn().mockResolvedValue(undefined),
-      deleteSnippet: failingDelete,
+      loading: false,
+      activeGroupId: null,
+      searchQuery: "",
+      createSnippet: storeDefaults.createSnippet,
+      deleteSnippet: storeDefaults.deleteSnippet,
+      loadSnippets: storeDefaults.loadSnippets,
     });
 
     await act(async () => {
@@ -316,6 +339,9 @@ describe("SnippetBar (R05, R09)", () => {
       deleteBtn.click();
     });
 
-    expect(failingDelete).toHaveBeenCalledWith("snip_delete_test");
+    // Real IPC snippetDelete was called with real ID
+    expect(snippetDelete).toHaveBeenCalledWith("snip_delete_real");
+    // Existing snippet is not lost from store
+    expect(useSnippetStore.getState().snippets).toHaveLength(1);
   });
 });

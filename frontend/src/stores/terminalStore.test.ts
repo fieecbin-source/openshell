@@ -923,3 +923,101 @@ it("R08: a closeTab rdpClose failure keeps the launch_id for an explicit retry",
   expect(rdpClose).toHaveBeenCalledTimes(2);
   expect(useTerminalStore.getState().rdpCleanupFailures).toHaveLength(0);
 });
+
+// ── Task8 红测：关闭首个 await 前停 owned timer；生命周期入口按 card 停 timer ──
+it("T8-1: closeTab stops the owned serial timer before the first await, so a pending closeCard cannot send", async () => {
+  useTerminalStore.setState({ tabs: [serialRaceTab("t8-timer", "t8-timer-card")], activeTabId: "t8-timer" });
+  useSerialStore.setState({
+    sendText: "AT", sendIsHex: false, newlineMode: "none", timerIntervalMs: 10,
+    isTimerRunning: false, timerHandle: null, timerCardId: null,
+    sendError: null, history: [], stats: {},
+  });
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode)
+    .mockImplementationOnce(() => new Promise<number[]>((resolve) => { finishEncode = resolve; }))
+    .mockImplementation(async () => [0x41]);
+  vi.mocked(sendSerial).mockImplementation(async (_cardId, bytes) => bytes.length);
+
+  useSerialStore.getState().startTimer("t8-timer-card", "gb18030");
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerCardId).toBe("t8-timer-card");
+  await vi.advanceTimersByTimeAsync(10); // 第一次 tick 已进入编码 await
+
+  let finishCloseCard!: () => void;
+  vi.mocked(closeCard).mockImplementationOnce(
+    () => new Promise<void>((resolve) => { finishCloseCard = resolve; })
+  );
+  const closing = useTerminalStore.getState().closeTab("t8-timer");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(useTerminalStore.getState().tabs).toHaveLength(0);
+
+  // closeCard 仍 pending：推进多个 tick 并让旧编码 resolve，均不得写入
+  finishEncode([0x41]);
+  await vi.advanceTimersByTimeAsync(45);
+
+  expect(sendSerial).not.toHaveBeenCalled();
+  expect(useSerialStore.getState().isTimerRunning).toBe(false);
+  expect(useSerialStore.getState().timerCardId).toBeNull();
+
+  finishCloseCard();
+  await closing;
+});
+
+it("T8-6: markDisconnected(A) leaves B's owned timer running", async () => {
+  useSessionStore.setState({ sessions: [] });
+  useTerminalStore.setState({
+    tabs: [serialRaceTab("t8-md-a", "t8-card-A"), serialRaceTab("t8-md-b", "t8-card-B")],
+    activeTabId: "t8-md-a",
+  });
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 601 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "t8-card-B",
+    sendError: null,
+  });
+
+  useTerminalStore.getState().markDisconnected("t8-md-a", "write failed");
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerCardId).toBe("t8-card-B");
+});
+
+it("T8-7: closeTab(A) leaves B's owned timer running", async () => {
+  useTerminalStore.setState({
+    tabs: [serialRaceTab("t8-ct-a", "t8-card-A"), serialRaceTab("t8-ct-b", "t8-card-B")],
+    activeTabId: "t8-ct-a",
+  });
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 602 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "t8-card-B",
+    sendError: null,
+  });
+
+  await useTerminalStore.getState().closeTab("t8-ct-a");
+
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerCardId).toBe("t8-card-B");
+});
+
+it("T8-8: reconnectTab(A) leaves B's owned timer running", async () => {
+  useTerminalStore.setState({
+    tabs: [
+      { ...serialRaceTab("t8-rc-a", "t8-card-A"), status: "disconnected" } as TerminalTab,
+      serialRaceTab("t8-rc-b", "t8-card-B"),
+    ],
+    activeTabId: "t8-rc-a",
+  });
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 603 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "t8-card-B",
+    sendError: null,
+  });
+
+  await useTerminalStore.getState().reconnectTab("t8-rc-a");
+
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerCardId).toBe("t8-card-B");
+});
