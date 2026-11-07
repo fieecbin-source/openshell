@@ -2576,9 +2576,12 @@ pub async fn rdp_close(launch_id: String) -> Result<(), IpcError> {
 mod protocol_command_tests {
     use super::*;
 
+    static RDP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[cfg(windows)]
     #[test]
     fn application_exit_closes_owned_rdp_launches_and_files() {
+        let _guard = RDP_TEST_LOCK.lock().unwrap();
         use std::os::windows::process::CommandExt;
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("owned.rdp");
@@ -2605,6 +2608,53 @@ mod protocol_command_tests {
         shutdown_rdp_launches();
         assert!(!file.exists());
         assert!(rdp_launches().lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rdp_close_failure_retains_launch_entry_for_retry() {
+        let _guard = RDP_TEST_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let blocked = directory.path().join("blocked-directory");
+        std::fs::create_dir(&blocked).unwrap();
+        let launch_id = format!("retry-{}", openshell_core_domain::new_id());
+        rdp_launches().lock().unwrap().insert(
+            launch_id.clone(),
+            RdpRuntimeEntry {
+                session_id: String::new(),
+                state: "launched",
+                error: None,
+                exit_code: None,
+                child: None,
+                file: blocked.clone(),
+                events: None,
+                reader: None,
+                recorded_login: false,
+            },
+        );
+        assert!(runtime.block_on(rdp_close(launch_id.clone())).is_err());
+        {
+            let launches = rdp_launches().lock().unwrap();
+            let entry = launches
+                .get(&launch_id)
+                .expect("failed close must retain ownership");
+            assert_eq!(entry.state, "failed");
+            assert!(entry.error.is_some());
+        }
+        std::fs::remove_dir(&blocked).unwrap();
+        runtime.block_on(rdp_close(launch_id.clone())).unwrap();
+        {
+            let launches = rdp_launches().lock().unwrap();
+            let entry = launches
+                .get(&launch_id)
+                .expect("retry must use the same launch");
+            assert_eq!(entry.state, "closed");
+            assert!(entry.error.is_none());
+        }
+        rdp_launches().lock().unwrap().remove(&launch_id);
     }
 
     #[test]

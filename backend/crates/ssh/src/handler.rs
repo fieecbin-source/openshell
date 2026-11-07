@@ -209,3 +209,28 @@ impl russh::client::Handler for OpenShellClientHandler {
         }
     }
 }
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_is_retained_without_existing_relay_subscribers() {
+        let routes = RemoteRoutes::default();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        drop(receiver);
+        routes.lock().await.insert(
+            ("localhost".into(), 1080),
+            RemoteRoute {
+                dest: ("localhost".into(), 80),
+                cancel: cancel.clone(),
+            },
+        );
+        cancel_all_remote_routes(&routes).await;
+        assert!(routes.lock().await.is_empty());
+        assert!(
+            *cancel.subscribe().borrow(),
+            "late relays must observe cancellation"
+        );
+    }
+}
