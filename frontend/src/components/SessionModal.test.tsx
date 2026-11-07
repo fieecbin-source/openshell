@@ -47,15 +47,35 @@ function setInputValue(input: HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
-async function render(keys: SshKey[] = [], initialValues: Partial<SessionInput> = { auth_method: "publickey" }, editingSession?: Session) {
+async function render(keys: SshKey[] = [], initialValues: Partial<SessionInput> = { auth_method: "publickey" }, editingSession?: Session, onClose = () => { }) {
   vi.mocked(listSshKeys).mockResolvedValue(keys);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   cleanup = () => { act(() => root.unmount()); container.remove(); };
-  await act(async () => root.render(<SessionModal isOpen onClose={() => { }} initialValues={initialValues} editingSession={editingSession} />));
+  await act(async () => root.render(<SessionModal isOpen onClose={onClose} initialValues={initialValues} editingSession={editingSession} />));
   return container;
 }
+
+it("exposes the connection dialog and closes it on Escape", async () => {
+  const onClose = vi.fn();
+  await render([], undefined, undefined, onClose);
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('[role="dialog"][aria-label="新建 SSH 连接"][aria-modal="true"]')).toBeTruthy();
+});
+
+it("closes only the nested proxy dialog before its connection dialog", async () => {
+  const onClose = vi.fn();
+  await render([], undefined, undefined, onClose);
+  await act(async () => click("管理代理..."));
+  expect(document.querySelector('[role="dialog"][aria-label="代理服务器管理"]')).toBeTruthy();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(document.querySelector('[role="dialog"][aria-label="代理服务器管理"]')).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
 
 it("chooses historical aliases and opens an import dialog before entering a password", async () => {
   const keys = [{ id: "first", name: "生产主机" }, { id: "second", name: "测试主机" }] as SshKey[];

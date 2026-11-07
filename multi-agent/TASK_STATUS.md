@@ -19,3 +19,5 @@
 本次代码修改以 Task9 明确场景为边界。CEO 另补 sessionStore 嵌套读取等待，并修集中 CI 检查复现的更新文案集中性和测试闭包 Clippy 问题。详见 [Task9 反馈](task9/Task%209%20Feedback.md) 与 [集中验证](../audit/remediation-task9/verification.md)。
 
 交付保留在本地 `codex/task9-closeout`，不合并 dev/main 或发布安装包。真实 RDP/NLA 登录、实体串口、外部 X11/Agent、CredUI、其他操作系统、安装升级、真实用户缓存/数据库和远端服务仍需对应环境验收；代理整表 API 无跨窗口 CAS，冲突或无法确认的旧缓存保守保留。测试数量不能替代这些环境检查，也不据此声明整个 Task8 保全分支可上线。
+
+用户随后要求运行本地 Web 模拟检查：真实 Chromium 复现并修复连接/代理弹窗 Esc 行为和 xterm StrictMode 首开延迟回调异常及初始输出丢失；18 条操作检查通过，完整前端回归更新为 442/442。此后续结果和模拟边界见 [Web 检查记录](../audit/remediation-task9/web-smoke.md)，不改写前文原始 Task9 门禁的历史时点。

@@ -38,6 +38,13 @@ beforeEach(async () => {
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); });
 
+it("closes the proxy dialog on Escape", async () => {
+  const onClose = vi.fn();
+  await act(async () => root.render(<ProxyManagerModal open onClose={onClose} />));
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
 it("removes explanatory copy, placeholders and optional suffixes", () => {
   expect(container.querySelector("[placeholder]")).toBeNull();
   expect(container.textContent).not.toMatch(/配置全局|请在右侧|可选|选填/);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import type {
   AuthMethod,
   HostKeyPolicy,
@@ -31,6 +31,7 @@ import {
 } from "../lib/ipc";
 import * as ipcModule from "../lib/ipc";
 import { formatFriendlyError, parseIpcError } from "../lib/errors";
+import { useDialogBehavior } from "../lib/useDialogBehavior";
 import { SshKeyImportModal } from "./SshKeyImportModal";
 import { ProxyManagerModal } from "./ProxyManagerModal";
 import { Button, IconButton } from "./ui/Button";
@@ -198,6 +199,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   initialValues,
   onConnectSession,
 }) => {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogBehavior(isOpen, onClose, panelRef);
   const { sessions, groups, createSession, updateSession } = useSessionStore();
   const { ports, loadPorts, loadingPorts } = useSerialStore();
   const {
@@ -1102,7 +1105,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/65 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl rounded-2xl border border-line/10 bg-surface p-6 shadow-2xl flex flex-col max-h-[92vh] text-ink transition-all">
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={editingSession ? PROTOCOL_TITLES[protocol].edit : PROTOCOL_TITLES[protocol].create} tabIndex={-1} className="w-full max-w-2xl rounded-2xl border border-line/10 bg-surface p-6 shadow-2xl flex flex-col max-h-[92vh] text-ink transition-all">
         {/* 顶部标题与专属连接类型 */}
         <div className="mb-4 flex items-center justify-between border-b border-line/15 pb-3.5 shrink-0">
           <div className="flex items-center gap-2.5">

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { ProxyServerConfig, ProxyServerInput, ProxyTestResult, ProxyType } from "../types/ipc";
 import * as ipcModule from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
+import { useDialogBehavior } from "../lib/useDialogBehavior";
 import { RequiredMark } from "./ui/Field";
 
 function getIpcFn<K extends keyof typeof ipcModule>(key: K): (typeof ipcModule)[K] | undefined {
@@ -115,6 +116,8 @@ export function ProxyManagerModal({
   onClose,
   onChanged,
 }: ProxyManagerModalProps): JSX.Element | null {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogBehavior(open, onClose, panelRef);
   const [proxies, setProxies] = useState<ProxyServerConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -459,6 +462,8 @@ export function ProxyManagerModal({
     >
       <div
         role="dialog"
+        ref={panelRef}
+        tabIndex={-1}
         aria-modal="true"
         aria-label="代理服务器管理"
         className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-line/15 bg-surface text-ink shadow-2xl"

@@ -204,35 +204,17 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       })
     );
 
-    term.open(containerRef.current);
-
-    if (useWebgl) {
-      try {
-        const webgl = new WebglAddon();
-        // 上下文丢失（驱动重置 / GPU 进程崩溃）时自动回落到 DOM 渲染器
-        webgl.onContextLoss(() => {
-          console.warn("webgl context lost, falling back to DOM renderer");
-          webgl.dispose();
-          webglAddonRef.current = null;
-        });
-        term.loadAddon(webgl);
-        webglAddonRef.current = webgl;
-      } catch (e) {
-        console.warn("webgl renderer unavailable, falling back to DOM renderer", e);
-        webglAddonRef.current = null;
-      }
-    }
-
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
+    let terminalOpened = false;
 
     // 统一的「适应容器尺寸 + 同步 PTY 尺寸」入口
     syncSizeRef.current = () => {
       const el = containerRef.current;
       const current = terminalRef.current;
       const fit = fitAddonRef.current;
-      if (!el || !current || !fit) return;
+      if (!terminalOpened || !el || !current || !fit) return;
       // 隐藏标签或被 display:none 的容器尺寸为 0，此时 fit 会算出错误的极小值
       if (!visibleRef.current || el.clientWidth === 0 || el.clientHeight === 0) return;
       try {
@@ -250,7 +232,31 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       resizeTerminal(tab.tabId, cols, rows).catch(() => {});
     };
 
-    syncSizeRef.current();
+    // xterm 5 queues a viewport timer in open() that outlives synchronous dispose().
+    // Defer opening so StrictMode's discarded setup never creates that viewport.
+    const openFrame = requestAnimationFrame(() => {
+      const container = containerRef.current;
+      if (!container || terminalRef.current !== term) return;
+      term.open(container);
+      terminalOpened = true;
+      if (useWebgl) {
+        try {
+          const webgl = new WebglAddon();
+          webgl.onContextLoss(() => {
+            console.warn("webgl context lost, falling back to DOM renderer");
+            webgl.dispose();
+            webglAddonRef.current = null;
+          });
+          term.loadAddon(webgl);
+          webglAddonRef.current = webgl;
+        } catch (e) {
+          console.warn("webgl renderer unavailable, falling back to DOM renderer", e);
+          webglAddonRef.current = null;
+        }
+      }
+      syncSizeRef.current();
+      if (visibleRef.current) term.focus();
+    });
 
     // 复制 / 粘贴：终端默认把按键当作输入发送，这里显式拦截常见快捷键
     const copySelection = async () => {
@@ -385,6 +391,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      cancelAnimationFrame(openFrame);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       onDataDispose.dispose();
       resizeObserver.disconnect();
@@ -397,6 +404,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       clipboardRef.current = null;
       openedConnectionRef.current = null;
       lastSizeRef.current = null;
+      lastLoggedStateRef.current = "";
       dropSessionLog(tab.tabId);
     };
   }, [tab.tabId, tab.protocol, tab.cardId]);
