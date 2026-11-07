@@ -99,6 +99,7 @@ fn options(port: u16) -> ConnectOptions {
         timeout_sec: 5,
         compression: true,
         agent_forwarding: false,
+        x11_forwarding: None,
     }
 }
 
@@ -144,6 +145,11 @@ async fn jump_stream_remote_forward_roundtrip_and_cancel() {
             socket.read_exact(&mut data).await.unwrap();
             assert_eq!(&data, b"ping");
             socket.write_all(b"pong").await.unwrap();
+            assert_eq!(
+                socket.read(&mut data).await.unwrap(),
+                0,
+                "destination must receive EOF on stop"
+            );
         });
         let remote = target
             .start_remote_forward("127.0.0.1", 0, "127.0.0.1".into(), dest_port)
@@ -156,11 +162,16 @@ async fn jump_stream_remote_forward_roundtrip_and_cancel() {
         let mut response = [0; 4];
         socket.read_exact(&mut response).await.unwrap();
         assert_eq!(&response, b"pong");
-        echo.await.unwrap();
         target
             .stop_remote_forward("127.0.0.1", remote as u16)
             .await
             .unwrap();
+        assert_eq!(
+            socket.read(&mut response).await.unwrap(),
+            0,
+            "client must receive EOF on stop"
+        );
+        echo.await.unwrap();
         assert!(TcpStream::connect(("127.0.0.1", remote as u16))
             .await
             .is_err());

@@ -191,6 +191,11 @@ impl ConnectionService {
         cancel_token: &CancellationToken,
     ) -> DomainResult<ConnectionId> {
         let session_id = &session.id;
+        let x11_forwarding = if session.x11_forwarding {
+            Some(Arc::new(openshell_ssh::x11::X11Forward::from_environment()?))
+        } else {
+            None
+        };
         let proxy = self.proxy_for_session(&session)?;
 
         let connection_id = ConnectionId::new();
@@ -298,6 +303,7 @@ impl ConnectionService {
             timeout_sec: 15,
             compression: session.compression,
             agent_forwarding: session.agent_forwarding,
+            x11_forwarding,
         };
 
         self.event_bus.emit(AppEvent::ConnectionState {

@@ -9,12 +9,34 @@ use std::sync::{Arc, Mutex};
 /// 由 `SshConnection::connect` 在握手失败后取回并原样返回给前端。
 pub type HostKeyErrorSlot = Arc<Mutex<Option<DomainError>>>;
 
+/// 一条远端转发的运行期路由。
+///
+/// `cancel` 是该路由所有 relay 的取消信号：`stop_remote_forward` 撤销服务端监听的同时
+/// 广播取消，已建立的 relay 立即结束（两端 EOF），避免“点了停止但隧道还在转发”。
+#[derive(Clone)]
+pub struct RemoteRoute {
+    pub dest: (String, u16),
+    pub cancel: tokio::sync::watch::Sender<bool>,
+}
+
 pub type RemoteRoutes =
-    Arc<tokio::sync::Mutex<std::collections::HashMap<(String, u32), (String, u16)>>>;
+    Arc<tokio::sync::Mutex<std::collections::HashMap<(String, u32), RemoteRoute>>>;
+
+/// 取消并清空全部远端转发路由（连接关闭/失联时调用）。
+///
+/// 先广播取消再丢弃路由：仅清表不会停止已建立的 relay。
+pub async fn cancel_all_remote_routes(routes: &RemoteRoutes) {
+    let mut guard = routes.lock().await;
+    for (_, route) in guard.drain() {
+        route.cancel.send_replace(true);
+    }
+}
 
 pub struct OpenShellClientHandler {
     pub remote_routes: RemoteRoutes,
     pub agent_forwarding: bool,
+    pub x11_forwarding: Option<Arc<crate::x11::X11Forward>>,
+    pub(crate) closed_tx: Option<Arc<tokio::sync::watch::Sender<bool>>>,
     verifier: Arc<HostKeyVerifier>,
     host_key_error: HostKeyErrorSlot,
 }
@@ -25,6 +47,8 @@ impl OpenShellClientHandler {
             verifier,
             remote_routes: Default::default(),
             agent_forwarding: false,
+            x11_forwarding: None,
+            closed_tx: None,
             host_key_error: Arc::new(Mutex::new(None)),
         }
     }
@@ -36,6 +60,21 @@ impl OpenShellClientHandler {
 
 impl russh::client::Handler for OpenShellClientHandler {
     type Error = russh::Error;
+
+    async fn disconnected(
+        &mut self,
+        reason: russh::client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        cancel_all_remote_routes(&self.remote_routes).await;
+        self.x11_forwarding = None;
+        if let Some(closed) = &self.closed_tx {
+            closed.send_replace(true);
+        }
+        match reason {
+            russh::client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),
+            russh::client::DisconnectReason::Error(error) => Err(error),
+        }
+    }
 
     async fn server_channel_open_agent_forward(
         &mut self,
@@ -67,6 +106,33 @@ impl russh::client::Handler for OpenShellClientHandler {
         Ok(())
     }
 
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _address: &str,
+        _port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let (Some(x11), Some(closed)) = (self.x11_forwarding.clone(), self.closed_tx.as_ref())
+        else {
+            return Ok(());
+        };
+        let mut closed = closed.subscribe();
+        if *closed.borrow() {
+            return Ok(());
+        }
+        tokio::spawn(async move {
+            reply.accept().await;
+            let mut stream = channel.into_stream();
+            tokio::select! {
+                result=x11.forward(&mut stream) => {if result.is_err() {tracing::warn!("X11 channel failed authentication or local display forwarding");}},
+                _=closed.changed() => {},
+            }
+        });
+        Ok(())
+    }
+
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: russh::Channel<russh::client::Msg>,
@@ -78,14 +144,14 @@ impl russh::client::Handler for OpenShellClientHandler {
         _session: &mut russh::client::Session,
     ) -> Result<(), Self::Error> {
         let routes = self.remote_routes.lock().await;
-        let dest = routes
+        let route = routes
             .get(&(connected_address.to_string(), connected_port))
             .cloned()
             .or_else(|| {
                 let mut matching = routes
                     .iter()
                     .filter(|((_, port), _)| *port == connected_port);
-                let first = matching.next().map(|(_, dest)| dest.clone());
+                let first = matching.next().map(|(_, route)| route.clone());
                 if matching.next().is_none() {
                     first
                 } else {
@@ -94,8 +160,13 @@ impl russh::client::Handler for OpenShellClientHandler {
             });
         drop(routes);
         // Unknown routes are rejected by dropping the reply handle.
-        if let Some((host, port)) = dest {
+        if let Some(route) = route {
+            let mut cancel = route.cancel.subscribe();
+            let (host, port) = route.dest;
             tokio::spawn(async move {
+                if *cancel.borrow() {
+                    return;
+                }
                 if let Ok(Ok(mut socket)) = tokio::time::timeout(
                     std::time::Duration::from_secs(10),
                     tokio::net::TcpStream::connect((host.as_str(), port)),
@@ -103,8 +174,14 @@ impl russh::client::Handler for OpenShellClientHandler {
                 .await
                 {
                     reply.accept().await;
-                    let _ = tokio::io::copy_bidirectional(&mut channel.into_stream(), &mut socket)
-                        .await;
+                    let mut stream = channel.into_stream();
+                    // Stop 之后不得继续转发：取消即丢弃两端句柄，双方收到 EOF。
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut stream, &mut socket) => {}
+                        _ = cancel.changed() => {
+                            tracing::debug!("remote forward relay cancelled by stop");
+                        }
+                    }
                 }
             });
         }
@@ -130,5 +207,30 @@ impl russh::client::Handler for OpenShellClientHandler {
                 Ok(false)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_is_retained_without_existing_relay_subscribers() {
+        let routes = RemoteRoutes::default();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        drop(receiver);
+        routes.lock().await.insert(
+            ("localhost".into(), 1080),
+            RemoteRoute {
+                dest: ("localhost".into(), 80),
+                cancel: cancel.clone(),
+            },
+        );
+        cancel_all_remote_routes(&routes).await;
+        assert!(routes.lock().await.is_empty());
+        assert!(
+            *cancel.subscribe().borrow(),
+            "late relays must observe cancellation"
+        );
     }
 }
