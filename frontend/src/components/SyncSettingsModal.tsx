@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useSyncStore } from "../stores/syncStore";
 import { formatFriendlyError } from "../lib/errors";
 import { Panel } from "./ui/Surface";
@@ -30,6 +30,7 @@ const normalizeServerUrl = (raw: string): string => {
 export const SyncSettingsModal: React.FC = () => {
   const {
     config,
+    configError,
     conflicts,
     resolvingConflictId,
     syncing,
@@ -58,6 +59,45 @@ export const SyncSettingsModal: React.FC = () => {
   const [inviteCode, setInviteCode] = useState("");
   const [autoSync, setAutoSync] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const [configRetrying, setConfigRetrying] = useState(false);
+  const feedbackGeneration = useRef(0);
+  const configRetryGeneration = useRef(0);
+  const passwordGeneration = useRef(0);
+  const clearFeedbackGeneration = useRef<number | null>(null);
+  const busy = syncing || resolvingConflictId !== null || refreshingViews;
+  const ownsFeedback = (generation: number) => generation === feedbackGeneration.current && useSyncStore.getState().modalOpen;
+
+  useEffect(() => {
+    const feedbackOwner = feedbackGeneration;
+    const configRetryOwner = configRetryGeneration;
+    const passwordOwner = passwordGeneration;
+    const unsubscribe = useSyncStore.subscribe((state, previous) => {
+      const modalChanged = state.modalOpen !== previous.modalOpen;
+      const lifecycleChanged = modalChanged ||
+        (previous.config?.is_logged_in && state.config?.is_logged_in === false);
+      if (lifecycleChanged) {
+        // A current clear operation owns its own logout transition, but never a new dialog.
+        if (modalChanged || clearFeedbackGeneration.current !== feedbackGeneration.current) feedbackGeneration.current++;
+        setSyncFeedback(null);
+      }
+      if (lifecycleChanged || (!previous.config?.is_logged_in && state.config?.is_logged_in)) {
+        passwordGeneration.current++;
+        setPassword("");
+      }
+      if (lifecycleChanged || (state.syncing && !previous.syncing) ||
+        (state.resolvingConflictId !== null && previous.resolvingConflictId === null) ||
+        (state.refreshingViews && !previous.refreshingViews)) {
+        configRetryGeneration.current++;
+        setConfigRetrying(false);
+      }
+    });
+    return () => {
+      feedbackOwner.current++;
+      configRetryOwner.current++;
+      passwordOwner.current++;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (modalOpen) {
@@ -85,6 +125,9 @@ export const SyncSettingsModal: React.FC = () => {
 
   const handleSubmitAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
+    const generation = ++feedbackGeneration.current;
+    const passwordGen = passwordGeneration.current;
     setSyncFeedback(null);
     const target = normalizeServerUrl(serverUrl);
     if (!/^https?:\/\/[^\s/]+/i.test(target)) {
@@ -96,6 +139,7 @@ export const SyncSettingsModal: React.FC = () => {
     try {
       if (mode === "register") {
         await register(target, email, password, inviteCode || undefined);
+        if (!ownsFeedback(generation)) return;
         const storeRefreshErr = useSyncStore.getState().refreshError;
         if (storeRefreshErr) {
           setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
@@ -104,7 +148,7 @@ export const SyncSettingsModal: React.FC = () => {
         }
       } else {
         await login(target, email, password);
-        setPassword("");
+        if (!ownsFeedback(generation)) return;
         const storeRefreshErr = useSyncStore.getState().refreshError;
         if (storeRefreshErr) {
           setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
@@ -115,14 +159,20 @@ export const SyncSettingsModal: React.FC = () => {
     } catch {
       // handled by store error
     } finally {
-      setPassword("");
+      if (passwordGen === passwordGeneration.current) {
+        passwordGeneration.current++;
+        setPassword("");
+      }
     }
   };
 
   const handleManualSync = async () => {
+    if (busy) return;
+    const generation = ++feedbackGeneration.current;
     setSyncFeedback(null);
     try {
       const res = await syncNow();
+      if (!ownsFeedback(generation)) return;
       const storeRefreshErr = useSyncStore.getState().refreshError;
       if (storeRefreshErr) {
         setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
@@ -132,7 +182,7 @@ export const SyncSettingsModal: React.FC = () => {
         );
       }
     } catch (err: any) {
-      setSyncFeedback(`同步失败: ${formatFriendlyError(err)}`);
+      if (ownsFeedback(generation)) setSyncFeedback(`同步失败: ${formatFriendlyError(err)}`);
     }
   };
 
@@ -144,7 +194,9 @@ export const SyncSettingsModal: React.FC = () => {
   };
 
   const handleCheckUpdate = async () => {
+    const generation = ++feedbackGeneration.current;
     const info = await checkUpdates();
+    if (!ownsFeedback(generation)) return;
     if (info) {
       setSyncFeedback(`发现新版本 v${info.version} (${info.channel})`);
     } else {
@@ -168,8 +220,24 @@ export const SyncSettingsModal: React.FC = () => {
       widthClassName="w-full max-w-[520px]"
     >
       <div className="space-y-3.5">
-
-
+        {configError && (
+          <InlineNotice tone="danger" action={
+            <Button variant="secondary" size="sm" loading={configRetrying} disabled={busy}
+              onClick={async () => {
+                const generation = ++configRetryGeneration.current;
+                setConfigRetrying(true);
+                try {
+                  await loadConfig({ throwOnError: true });
+                } catch (err) {
+                  console.warn("Retry config failed:", err);
+                } finally {
+                  if (generation === configRetryGeneration.current) setConfigRetrying(false);
+                }
+              }}>
+              重试配置
+            </Button>
+          }>{configError}</InlineNotice>
+        )}
         {error && (
           <InlineNotice
             tone="danger"
@@ -178,6 +246,7 @@ export const SyncSettingsModal: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 loading={refreshingViews}
+                disabled={busy}
                 onClick={async () => {
                   try {
                     await retryRefreshViews();
@@ -209,12 +278,14 @@ export const SyncSettingsModal: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 loading={refreshingViews}
+                disabled={busy}
                 onClick={async () => {
+                  const generation = ++feedbackGeneration.current;
                   try {
                     await retryRefreshViews();
-                    setSyncFeedback("刷新成功");
+                    if (ownsFeedback(generation)) setSyncFeedback("刷新成功");
                   } catch (e: any) {
-                    setSyncFeedback(`刷新失败: ${formatFriendlyError(e)}`);
+                    if (ownsFeedback(generation)) setSyncFeedback(`刷新失败: ${formatFriendlyError(e)}`);
                   }
                 }}
               >
@@ -290,11 +361,13 @@ export const SyncSettingsModal: React.FC = () => {
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={resolvingConflictId !== null}
+                          disabled={busy}
                           loading={resolvingConflictId === c.id}
                           onClick={async () => {
+                            const generation = ++feedbackGeneration.current;
                             try {
                               await resolveConflict(c.id, "local");
+                              if (!ownsFeedback(generation)) return;
                               const storeRefreshErr = useSyncStore.getState().refreshError;
                               if (storeRefreshErr) {
                                 setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
@@ -302,7 +375,7 @@ export const SyncSettingsModal: React.FC = () => {
                                 setSyncFeedback("已选择保留本地副本");
                               }
                             } catch (e: any) {
-                              setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
+                              if (ownsFeedback(generation)) setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
                             }
                           }}
                         >
@@ -311,11 +384,13 @@ export const SyncSettingsModal: React.FC = () => {
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={resolvingConflictId !== null}
+                          disabled={busy}
                           loading={resolvingConflictId === c.id}
                           onClick={async () => {
+                            const generation = ++feedbackGeneration.current;
                             try {
                               await resolveConflict(c.id, "remote");
+                              if (!ownsFeedback(generation)) return;
                               const storeRefreshErr = useSyncStore.getState().refreshError;
                               if (storeRefreshErr) {
                                 setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
@@ -323,7 +398,7 @@ export const SyncSettingsModal: React.FC = () => {
                                 setSyncFeedback("已选择使用远端数据");
                               }
                             } catch (e: any) {
-                              setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
+                              if (ownsFeedback(generation)) setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
                             }
                           }}
                         >
@@ -348,6 +423,7 @@ export const SyncSettingsModal: React.FC = () => {
               <Button
                 variant="primary"
                 loading={syncing}
+                disabled={busy}
                 leading={<RefreshIcon className="h-3.5 w-3.5" />}
                 onClick={handleManualSync}
               >
@@ -369,8 +445,18 @@ export const SyncSettingsModal: React.FC = () => {
                 className="text-ink-tertiary hover:text-ink text-xs"
                 onClick={async () => {
                   if (window.confirm("确定要清除本地同步状态与缓存吗？本地保存的会话和配置不会受到影响。")) {
-                    await clearLocalSyncData();
-                    setSyncFeedback("本地同步数据已清除");
+                    const generation = ++feedbackGeneration.current;
+                    clearFeedbackGeneration.current = generation;
+                    passwordGeneration.current++;
+                    setPassword("");
+                    try {
+                      await clearLocalSyncData();
+                      if (ownsFeedback(generation)) setSyncFeedback("本地同步数据已清除");
+                    } catch (err) {
+                      console.warn("Clear local sync data failed:", err);
+                    } finally {
+                      if (clearFeedbackGeneration.current === generation) clearFeedbackGeneration.current = null;
+                    }
                   }
                 }}
               >
@@ -380,7 +466,12 @@ export const SyncSettingsModal: React.FC = () => {
                 variant="ghost"
                 size="sm"
                 className="text-state-danger hover:bg-state-danger/10 hover:text-state-danger text-xs"
-                onClick={() => logout()}
+                onClick={async () => {
+                  feedbackGeneration.current++;
+                  passwordGeneration.current++;
+                  setPassword("");
+                  try { await logout(); } catch (err) { console.warn("Logout failed:", err); }
+                }}
               >
                 退出当前账号
               </Button>
@@ -429,7 +520,7 @@ export const SyncSettingsModal: React.FC = () => {
                 autoComplete="new-password"
                 required
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => { passwordGeneration.current++; setPassword(e.target.value); }}
                 aria-label="同步密码"
               />
             </Field>
@@ -450,6 +541,7 @@ export const SyncSettingsModal: React.FC = () => {
               type="submit"
               variant="primary"
               loading={syncing}
+              disabled={busy}
               className="mt-1 w-full"
               leading={!syncing ? <CloudIcon className="h-3.5 w-3.5" /> : undefined}
             >

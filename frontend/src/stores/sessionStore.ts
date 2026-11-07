@@ -47,11 +47,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const generation = ++loadGeneration;
     set({ isLoading: true, error: null });
     try {
-      const [sessions, groups] = await Promise.all([
-        listSessions({ query: get().searchQuery || undefined }),
-        listGroups(),
+      const failures: unknown[] = [];
+      const recordFailure = (reason: unknown): never => { failures.push(reason); throw reason; };
+      const [sessions, groups] = await Promise.allSettled([
+        listSessions({ query: get().searchQuery || undefined }).catch(recordFailure),
+        listGroups().catch(recordFailure),
       ]);
-      if (generation === loadGeneration) set({ sessions, groups, isLoading: false, error: null });
+      if (sessions.status === "rejected" || groups.status === "rejected") throw failures[0];
+      if (generation === loadGeneration) set({ sessions: sessions.value, groups: groups.value, isLoading: false, error: null });
     } catch (err: any) {
       const friendly = formatFriendlyError(err);
       if (generation === loadGeneration) set({ error: friendly, isLoading: false });

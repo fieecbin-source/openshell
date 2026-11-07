@@ -2,8 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useSessionStore } from "./sessionStore";
 import * as ipcModule from "../lib/ipc";
 import type { Session, Group } from "../types/ipc";
+import { invoke } from "@tauri-apps/api/core";
 
-vi.mock("../lib/ipc", () => ({
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: vi.fn() }));
+vi.mock("../lib/ipc", async () => ({
+  ...await vi.importActual<typeof import("../lib/ipc")>("../lib/ipc"),
   listSessions: vi.fn(),
   listGroups: vi.fn(),
   createSession: vi.fn(),
@@ -14,6 +17,16 @@ vi.mock("../lib/ipc", () => ({
   renameGroup: vi.fn(),
   deleteGroup: vi.fn(),
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+const flushReads = async () => {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+};
 
 const mockSession: Session = {
   id: "sess_1",
@@ -72,7 +85,7 @@ const mockGroup: Group = {
 
 describe("sessionStore", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     useSessionStore.setState({
       sessions: [],
       groups: [],
@@ -177,5 +190,99 @@ describe("sessionStore", () => {
 
     expect(useSessionStore.getState().selectedSessionId).toBeNull();
     expect(useSessionStore.getState().error).toContain("Reload failure");
+  });
+
+  it.each([
+    { failedCommand: "session_list", throwOnError: false },
+    { failedCommand: "session_list", throwOnError: true },
+    { failedCommand: "group_list", throwOnError: false },
+    { failedCommand: "group_list", throwOnError: true },
+  ])("waits for the other real IPC read after $failedCommand rejects (throwOnError=$throwOnError)", async ({ failedCommand, throwOnError }) => {
+    const real = await vi.importActual<typeof import("../lib/ipc")>("../lib/ipc");
+    vi.mocked(ipcModule.listSessions).mockImplementation(real.listSessions);
+    vi.mocked(ipcModule.listGroups).mockImplementation(real.listGroups);
+    const sessions = deferred<Session[]>();
+    const groups = deferred<Group[]>();
+    vi.mocked(invoke).mockImplementation((command) => command === "session_list" ? sessions.promise : groups.promise);
+    useSessionStore.setState({ sessions: [mockSession], groups: [mockGroup] });
+    let settled = false;
+    let failure: unknown;
+    const pending = useSessionStore.getState().loadAll({ throwOnError }).then(
+      () => { settled = true; },
+      (err) => { settled = true; failure = err; },
+    );
+    const error = new Error(`${failedCommand} unavailable`);
+    if (failedCommand === "session_list") sessions.reject(error);
+    else groups.reject(error);
+    await flushReads();
+    expect(settled).toBe(false);
+    expect(useSessionStore.getState().isLoading).toBe(true);
+    expect(useSessionStore.getState().error).toBeNull();
+    expect(useSessionStore.getState().sessions).toEqual([mockSession]);
+    expect(useSessionStore.getState().groups).toEqual([mockGroup]);
+    expect(invoke).toHaveBeenCalledWith("session_list", { groupId: null, query: null, favoriteOnly: false });
+    expect(invoke).toHaveBeenCalledWith("group_list", { kind: "session" });
+    if (failedCommand === "session_list") groups.resolve([]);
+    else sessions.resolve([]);
+    await pending;
+    expect(settled).toBe(true);
+    expect(failure).toBe(throwOnError ? error : undefined);
+    expect(useSessionStore.getState().isLoading).toBe(false);
+    expect(useSessionStore.getState().error).toContain(`${failedCommand} unavailable`);
+    expect(useSessionStore.getState().sessions).toEqual([mockSession]);
+    expect(useSessionStore.getState().groups).toEqual([mockGroup]);
+  });
+
+  it.each(["resolve", "reject"])("does not let an older combined load's final %s replace a newer read", async (outcome) => {
+    const real = await vi.importActual<typeof import("../lib/ipc")>("../lib/ipc");
+    vi.mocked(ipcModule.listSessions).mockImplementation(real.listSessions);
+    vi.mocked(ipcModule.listGroups).mockImplementation(real.listGroups);
+    const oldSessions = deferred<Session[]>();
+    const oldGroups = deferred<Group[]>();
+    vi.mocked(invoke).mockImplementationOnce(() => oldSessions.promise)
+      .mockImplementationOnce(() => oldGroups.promise)
+      .mockResolvedValueOnce([{ ...mockSession, name: "fresh sessions" }])
+      .mockResolvedValueOnce([{ ...mockGroup, name: "fresh groups" }]);
+    let settled = false;
+    const oldError = new Error("obsolete sessions read");
+    const pending = useSessionStore.getState().loadAll({ throwOnError: true }).catch((err) => {
+      expect(err).toBe(oldError);
+      settled = true;
+    });
+    oldSessions.reject(oldError);
+    await flushReads();
+    expect(settled).toBe(false);
+    await useSessionStore.getState().loadAll({ throwOnError: true });
+    if (outcome === "resolve") oldGroups.resolve([mockGroup]);
+    else oldGroups.reject(new Error("obsolete groups read"));
+    await pending;
+    expect(settled).toBe(true);
+    expect(useSessionStore.getState().sessions[0].name).toBe("fresh sessions");
+    expect(useSessionStore.getState().groups[0].name).toBe("fresh groups");
+    expect(useSessionStore.getState().isLoading).toBe(false);
+    expect(useSessionStore.getState().error).toBeNull();
+  });
+
+  it.each(["session_list", "group_list"])("reports the original first rejection when %s fails before the other read also fails", async (firstCommand) => {
+    const real = await vi.importActual<typeof import("../lib/ipc")>("../lib/ipc");
+    vi.mocked(ipcModule.listSessions).mockImplementation(real.listSessions);
+    vi.mocked(ipcModule.listGroups).mockImplementation(real.listGroups);
+    const sessions = deferred<Session[]>();
+    const groups = deferred<Group[]>();
+    vi.mocked(invoke).mockImplementation((command) => command === "session_list" ? sessions.promise : groups.promise);
+    const first = new Error(`${firstCommand} first failure`);
+    const later = new Error("later failure");
+    let failure: unknown;
+    const pending = useSessionStore.getState().loadAll({ throwOnError: true }).catch((err) => { failure = err; });
+    if (firstCommand === "session_list") sessions.reject(first);
+    else groups.reject(first);
+    await flushReads();
+    expect(useSessionStore.getState().isLoading).toBe(true);
+    if (firstCommand === "session_list") groups.reject(later);
+    else sessions.reject(later);
+    await pending;
+    expect(failure).toBe(first);
+    expect(useSessionStore.getState().error).toContain(`${firstCommand} first failure`);
+    expect(useSessionStore.getState().isLoading).toBe(false);
   });
 });

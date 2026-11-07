@@ -10,13 +10,26 @@ let configGeneration = 0;
 let conflictsGeneration = 0;
 let syncFlowGeneration = 0;
 let refreshFlowGeneration = 0;
+let syncBusyGeneration = 0;
+let resolveBusyGeneration = 0;
+let lifecycleGeneration = 0;
+let conflictReadError: string | null = null;
+
+// All refresh entry points share their visible error; each busy flag owns its release.
+const startSyncFlow = () => {
+  configGeneration++;
+  conflictsGeneration++;
+  return ++syncFlowGeneration;
+};
 
 const refreshSyncedViews = async () => {
-  await Promise.all([
+  const results = await Promise.allSettled([
     useSessionStore.getState().loadAll({ throwOnError: true }),
     useVaultStore.getState().checkStatus({ throwOnError: true }),
     useSnippetStore.getState().loadSnippets({ throwOnError: true }),
   ]);
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 };
 
 export interface SyncConfig {
@@ -98,14 +111,9 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
 
   loadConfig: async (options?: { throwOnError?: boolean }) => {
     const gen = ++configGeneration;
+    let cfg: SyncConfig;
     try {
-      const cfg = await invoke<SyncConfig>("sync_get_config");
-      if (gen === configGeneration) {
-        set({ config: cfg, configError: null });
-      }
-      if (cfg && cfg.conflict_count > 0) {
-        await get().loadConflicts({ throwOnError: options?.throwOnError });
-      }
+      cfg = await invoke<SyncConfig>("sync_get_config");
     } catch (err: any) {
       console.error("Failed to load sync config:", err);
       const friendly = formatFriendlyError(err);
@@ -115,22 +123,34 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       if (options?.throwOnError) {
         throw err;
       }
+      return;
+    }
+    if (gen !== configGeneration) return;
+    set({ config: cfg, configError: null });
+    if (cfg && cfg.conflict_count > 0) {
+      // Conflict failures belong to the conflict notice, not configError.
+      await get().loadConflicts({ throwOnError: options?.throwOnError === true });
     }
   },
 
   loadConflicts: async (options?: { throwOnError?: boolean }) => {
     const gen = ++conflictsGeneration;
+    const configGen = configGeneration;
     try {
       const list = await syncListConflicts();
-      if (gen === conflictsGeneration) {
-        set({ conflicts: list || [], error: null });
+      if (gen === conflictsGeneration && configGen === configGeneration) {
+        set({ conflicts: list || [], ...(conflictReadError !== null && get().error === conflictReadError ? { error: null } : {}) });
+        conflictReadError = null;
       }
       return list || [];
     } catch (err: any) {
       console.warn("Failed to load sync conflicts:", err);
       const friendly = formatFriendlyError(err);
-      if (gen === conflictsGeneration) {
-        set({ error: friendly });
+      if (gen === conflictsGeneration && configGen === configGeneration) {
+        if (get().error === null || get().error === conflictReadError) {
+          conflictReadError = friendly;
+          set({ error: friendly });
+        }
       }
       if (options?.throwOnError !== false) {
         throw err;
@@ -140,44 +160,52 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   },
 
   resolveConflict: async (conflictId: string, choice: "local" | "remote") => {
-    const { resolvingConflictId } = get();
-    if (resolvingConflictId) return; // 执行中防重复
+    const { resolvingConflictId, syncing } = get();
+    if (resolvingConflictId || syncing) return;
+    const busyGen = ++resolveBusyGeneration;
+    const flowGen = startSyncFlow();
+    const lifecycle = lifecycleGeneration;
+    conflictReadError = null;
     set({ resolvingConflictId: conflictId, error: null, refreshError: null });
     try {
-      await syncResolveConflict(conflictId, choice);
-    } catch (err: any) {
-      set({ error: formatFriendlyError(err) });
-      throw err;
-    } finally {
-      set({ resolvingConflictId: null });
-    }
-
-    const flowGen = ++syncFlowGeneration;
-    try {
-      await get().loadConflicts({ throwOnError: true });
-      await get().loadConfig({ throwOnError: true });
-      await refreshSyncedViews();
-    } catch (refreshErr: any) {
-      console.warn("Sync conflict resolved but view refresh failed:", refreshErr);
-      if (flowGen === syncFlowGeneration) {
-        set({ refreshError: formatFriendlyError(refreshErr) });
+      try {
+        await syncResolveConflict(conflictId, choice);
+      } catch (err: any) {
+        if (lifecycle === lifecycleGeneration && busyGen === resolveBusyGeneration) {
+          set({ error: formatFriendlyError(err) });
+        }
+        throw err;
       }
+      try {
+        if (flowGen === syncFlowGeneration) await get().loadConflicts({ throwOnError: true });
+        if (flowGen === syncFlowGeneration) await get().loadConfig({ throwOnError: true });
+        await refreshSyncedViews();
+      } catch (refreshErr: any) {
+        console.warn("Sync conflict resolved but view refresh failed:", refreshErr);
+        if (flowGen === syncFlowGeneration) set({ refreshError: formatFriendlyError(refreshErr) });
+      }
+    } finally {
+      if (busyGen === resolveBusyGeneration) set({ resolvingConflictId: null });
     }
   },
 
   retryRefreshViews: async () => {
+    if (get().refreshingViews) return;
     const retryGen = ++refreshFlowGeneration;
+    const flowGen = startSyncFlow();
     set({ refreshingViews: true });
     try {
       await get().loadConflicts({ throwOnError: true });
+      if (flowGen !== syncFlowGeneration) return;
       await get().loadConfig({ throwOnError: true });
+      if (flowGen !== syncFlowGeneration) return;
       await refreshSyncedViews();
-      if (retryGen === refreshFlowGeneration) {
+      if (flowGen === syncFlowGeneration) {
         set({ refreshError: null });
       }
     } catch (refreshErr: any) {
       console.warn("Retry view refresh failed:", refreshErr);
-      if (retryGen === refreshFlowGeneration) {
+      if (flowGen === syncFlowGeneration) {
         set({ refreshError: formatFriendlyError(refreshErr) });
       }
       throw refreshErr;
@@ -199,7 +227,11 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   },
 
   register: async (serverUrl, email, password, inviteCode) => {
-    const flowGen = ++syncFlowGeneration;
+    if (get().syncing || get().resolvingConflictId) return;
+    const flowGen = startSyncFlow();
+    const busyGen = ++syncBusyGeneration;
+    const lifecycle = lifecycleGeneration;
+    conflictReadError = null;
     set({ syncing: true, error: null, refreshError: null });
     try {
       try {
@@ -210,14 +242,14 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
           inviteCode: inviteCode || null,
         });
       } catch (err: any) {
-        if (flowGen === syncFlowGeneration) {
+        if (lifecycle === lifecycleGeneration && busyGen === syncBusyGeneration) {
           set({ error: formatFriendlyError(err) });
         }
         throw err;
       }
 
       try {
-        await get().loadConfig({ throwOnError: true });
+        if (flowGen === syncFlowGeneration) await get().loadConfig({ throwOnError: true });
         await refreshSyncedViews();
       } catch (refreshErr: any) {
         console.warn("Register succeeded but view refresh failed:", refreshErr);
@@ -226,27 +258,31 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
         }
       }
     } finally {
-      if (flowGen === syncFlowGeneration) {
+      if (busyGen === syncBusyGeneration) {
         set({ syncing: false });
       }
     }
   },
 
   login: async (serverUrl, email, password) => {
-    const flowGen = ++syncFlowGeneration;
+    if (get().syncing || get().resolvingConflictId) return;
+    const flowGen = startSyncFlow();
+    const busyGen = ++syncBusyGeneration;
+    const lifecycle = lifecycleGeneration;
+    conflictReadError = null;
     set({ syncing: true, error: null, refreshError: null });
     try {
       try {
         await invoke("sync_login", { serverUrl, email, password });
       } catch (err: any) {
-        if (flowGen === syncFlowGeneration) {
+        if (lifecycle === lifecycleGeneration && busyGen === syncBusyGeneration) {
           set({ error: formatFriendlyError(err) });
         }
         throw err;
       }
 
       try {
-        await get().loadConfig({ throwOnError: true });
+        if (flowGen === syncFlowGeneration) await get().loadConfig({ throwOnError: true });
         await refreshSyncedViews();
       } catch (refreshErr: any) {
         console.warn("Login succeeded but view refresh failed:", refreshErr);
@@ -255,55 +291,64 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
         }
       }
     } finally {
-      if (flowGen === syncFlowGeneration) {
+      if (busyGen === syncBusyGeneration) {
         set({ syncing: false });
       }
     }
   },
 
   logout: async () => {
+    const lifecycle = ++lifecycleGeneration;
+    startSyncFlow();
+    const busyGen = ++syncBusyGeneration;
+    resolveBusyGeneration++;
+    refreshFlowGeneration++;
+    set({ syncing: true, resolvingConflictId: null, refreshingViews: false });
     try {
       await invoke("sync_logout");
+      if (lifecycle !== lifecycleGeneration) return;
+      startSyncFlow();
+      conflictReadError = null;
+      set({ config: get().config ? { ...get().config!, is_logged_in: false, account_id: null, conflict_count: 0 } : null,
+        conflicts: [], lastResult: null, error: null, configError: null, refreshError: null });
       await get().loadConfig();
     } catch (err: any) {
-      set({ error: formatFriendlyError(err) });
+      if (lifecycle === lifecycleGeneration) set({ error: formatFriendlyError(err) });
       throw err;
+    } finally {
+      if (busyGen === syncBusyGeneration) set({ syncing: false });
     }
   },
 
   clearLocalSyncData: async () => {
-    try {
-      await invoke("sync_logout");
-      set({ lastResult: null, error: null });
-      await get().loadConfig();
-    } catch (err: any) {
-      set({ error: formatFriendlyError(err) });
-      throw err;
-    }
+    await get().logout();
   },
 
   syncNow: async () => {
-    if (get().syncing) {
+    if (get().syncing || get().resolvingConflictId) {
       return get().lastResult!;
     }
-    const flowGen = ++syncFlowGeneration;
+    const flowGen = startSyncFlow();
+    const busyGen = ++syncBusyGeneration;
+    const lifecycle = lifecycleGeneration;
+    conflictReadError = null;
     set({ syncing: true, error: null, refreshError: null });
     let result: SyncResult;
     try {
       try {
         result = await invoke<SyncResult>("sync_now");
-        if (flowGen === syncFlowGeneration) {
+        if (lifecycle === lifecycleGeneration && busyGen === syncBusyGeneration) {
           set({ lastResult: result });
         }
       } catch (err: any) {
-        if (flowGen === syncFlowGeneration) {
+        if (lifecycle === lifecycleGeneration && busyGen === syncBusyGeneration) {
           set({ error: formatFriendlyError(err) });
         }
         throw err;
       }
 
       try {
-        await get().loadConfig({ throwOnError: true });
+        if (flowGen === syncFlowGeneration) await get().loadConfig({ throwOnError: true });
         await refreshSyncedViews();
       } catch (refreshErr: any) {
         console.warn("Sync succeeded but view refresh failed:", refreshErr);
@@ -313,7 +358,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       }
       return result;
     } finally {
-      if (flowGen === syncFlowGeneration) {
+      if (busyGen === syncBusyGeneration) {
         set({ syncing: false });
       }
     }
