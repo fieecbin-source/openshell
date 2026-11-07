@@ -1020,3 +1020,147 @@ async fn first_sync_preserves_an_existing_vault_with_a_different_local_password(
     );
     task.abort();
 }
+
+/// Task8：真实 HTTP 同步 fixture —— 服务器确实提供有效加密 secret/history，
+/// 客户端确实缺该 secret，同步后拉回并让规则口令可 resolve，cursor 与服务器 head 一致。
+/// 不只证明「无关坏行不阻断空同步」，也不跳过历史认证与图事务断言。
+#[tokio::test]
+async fn sync_pulls_back_missing_secret_and_makes_rule_password_resolvable() {
+    use openshell_core_domain::{
+        PortForwardRepository, PortForwardRuleInput, PortForwardType, SocksAuth,
+    };
+
+    let (url, server_db, _server_dir, task) = server().await;
+    let a = AppServices::new_in_memory().unwrap();
+    a.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+
+    let prepared = a
+        .network_secrets
+        .prepare_forward(
+            PortForwardRuleInput {
+                name: "synced-socks".into(),
+                bind_port: 1080,
+                rule_type: Some(PortForwardType::Dynamic),
+                socks_auth: Some(SocksAuth::Userpass),
+                socks_username: Some("synthetic-user".into()),
+                socks_password: Some("synthetic-synced-socks-password".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let rule = a.port_forward_repo.create(prepared).await.unwrap();
+    let secret_id = rule.socks_password_ref.clone().unwrap();
+    let first = a.sync.sync_now().await.unwrap();
+    assert!(
+        first.pushed_count >= 2,
+        "服务器必须收到 secret 与规则两条记录: {first:?}"
+    );
+
+    // 服务器确实留有该 secret 的加密 history 版本，而不是空同步。
+    let (history_count, encrypted_history_count): (i64, i64) = server_db
+        .with_conn(|conn| {
+            Ok::<_, rusqlite::Error>((
+                conn.query_row(
+                    "SELECT COUNT(*) FROM record_history WHERE record_id=?1",
+                    [&secret_id],
+                    |row| row.get(0),
+                )?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM record_history WHERE record_id=?1 AND length(ciphertext)>0",
+                    [&secret_id],
+                    |row| row.get(0),
+                )?,
+            ))
+        })
+        .unwrap();
+    assert!(history_count >= 1, "服务器必须提供该 secret 的历史版本");
+    assert_eq!(
+        history_count, encrypted_history_count,
+        "每个历史版本都必须是非空加密密文"
+    );
+
+    // 另一台设备经真实 HTTP 拉回完整图，确认该口令可解析。
+    let b = AppServices::new_in_memory().unwrap();
+    b.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    assert_eq!(
+        b.network_secrets
+            .resolve(&secret_id, "socks_password")
+            .unwrap()
+            .as_str(),
+        "synthetic-synced-socks-password"
+    );
+
+    // 模拟客户端确实缺该 secret（连同其同步元数据），但规则引用仍在。
+    b.store
+        .with_conn(|conn| {
+            conn.execute("DELETE FROM secret WHERE id=?1", [&secret_id])
+                .unwrap();
+            conn.execute("DELETE FROM sync_record WHERE record_id=?1", [&secret_id])
+                .unwrap();
+            conn.execute("UPDATE sync_meta SET last_cursor=0", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(b
+        .network_secrets
+        .resolve(&secret_id, "socks_password")
+        .is_err());
+    assert!(
+        b.network_secrets.forwards_strict(None).await.is_err(),
+        "缺 secret 时严格读取必须拒绝该规则"
+    );
+
+    let result = b
+        .sync
+        .sync_now()
+        .await
+        .expect("真实 HTTP 同步必须从历史中拉回缺失 secret");
+    assert!(
+        result.pulled_count >= 1,
+        "必须从服务器拉回至少一条记录: {result:?}"
+    );
+    assert_eq!(
+        b.network_secrets
+            .resolve(&secret_id, "socks_password")
+            .unwrap()
+            .as_str(),
+        "synthetic-synced-socks-password",
+        "拉回的 secret 必须能让规则口令正确 resolve"
+    );
+
+    let cursor: u64 = b
+        .store
+        .with_conn(|conn| {
+            Ok(conn
+                .query_row("SELECT last_cursor FROM sync_meta", [], |row| row.get(0))
+                .unwrap())
+        })
+        .unwrap();
+    let server_head: i64 = server_db
+        .with_conn(|conn| {
+            Ok::<_, rusqlite::Error>(conn.query_row(
+                "SELECT MAX(head_seq) FROM vault",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor, server_head as u64,
+        "同步后 cursor 必须推进到服务器 head"
+    );
+    assert_eq!(result.head_seq, server_head as u64);
+
+    // 图事务：规则引用与拉回的 secret 一致，且没有留下冲突或半提交状态。
+    let restored = b.port_forward_repo.get(&rule.id).await.unwrap();
+    assert_eq!(
+        restored.socks_password_ref.as_deref(),
+        Some(secret_id.as_str())
+    );
+    assert_eq!(result.conflict_count, 0);
+    assert!(b.sync.list_conflicts().unwrap().is_empty());
+    task.abort();
+}
