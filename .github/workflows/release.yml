@@ -188,6 +188,14 @@ jobs:
           pnpm test
           node scripts/check-package.mjs frontend/dist
 
+      - name: Remap Linux compiler host paths
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          echo "RUSTFLAGS=--remap-path-prefix=$HOME=/build" >> "$GITHUB_ENV"
+          echo "CFLAGS=-ffile-prefix-map=$HOME=/build" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-ffile-prefix-map=$HOME=/build" >> "$GITHUB_ENV"
+
       - name: Build desktop bundles
         run: pnpm tauri build ${{ matrix.args }} --bundles ${{ matrix.bundles }}
 
@@ -244,6 +252,46 @@ jobs:
         run: |
           node scripts/check-package.mjs artifacts
           python scripts/check-release-archives.py artifacts
+
+      - name: Inspect residual Linux compiler paths
+        if: failure() && matrix.platform == 'linux'
+        shell: bash
+        env:
+          APP_EXECUTABLE: target/${{ matrix.target }}/release/OpenShell
+        run: |
+          python - <<'PY'
+          import os, struct, subprocess, tempfile
+          from pathlib import Path
+          marker = b'/home/runner'
+          executable = Path(os.environ['APP_EXECUTABLE'])
+          if executable.exists():
+              print('Application ELF runner-path count:', executable.read_bytes().count(marker))
+          for image in Path('artifacts').glob('*.AppImage'):
+              data = image.read_bytes()
+              offset = None
+              candidate = data.find(b'hsqs')
+              while candidate >= 0:
+                  if candidate + 96 <= len(data) and struct.unpack_from('<H', data, candidate + 28)[0] == 4:
+                      size = struct.unpack_from('<Q', data, candidate + 40)[0]
+                      if 96 <= size <= len(data) - candidate:
+                          offset = candidate
+                          break
+                  candidate = data.find(b'hsqs', candidate + 4)
+              position = data.find(marker)
+              while position >= 0:
+                  region = 'unknown' if offset is None else ('runtime' if position < offset else 'payload')
+                  print(image.name, 'generic runner path at byte', position, 'region:', region)
+                  position = data.find(marker, position + len(marker))
+              del data
+              with tempfile.TemporaryDirectory(prefix='openshell-build-paths-') as directory:
+                  result = subprocess.run([str(image.resolve()), '--appimage-extract'], cwd=directory, capture_output=True, timeout=120)
+                  print('Diagnostic extraction exit:', result.returncode)
+                  for file in Path(directory).rglob('*'):
+                      if file.is_file():
+                          count = file.read_bytes().count(marker)
+                          if count:
+                              print('Bundled runner paths:', file.relative_to(directory), 'count:', count)
+          PY
 
       - name: Inspect unpacked installers and their actual application version
         shell: bash
