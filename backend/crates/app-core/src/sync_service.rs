@@ -484,7 +484,7 @@ impl SyncService {
             .map(|v| v.unwrap_or(0))
             .map_err(|e| DomainError::internal(e.to_string()))
         })?;
-        let mut incoming = Vec::new();
+        let mut incoming: HashMap<String, LocalSyncRecord> = HashMap::new();
         let mut envelopes = HashMap::new();
         let mut head;
         loop {
@@ -492,6 +492,9 @@ impl SyncService {
                 .get_changes_v2(cursor, Some(500))
                 .await
                 .map_err(network)?;
+            if page.schema_version != sync_codec::SYNC_SCHEMA_VERSION {
+                return Err(DomainError::validation("Unsupported sync page version"));
+            }
             head = page.head_seq;
             for change in page.changes {
                 if change.schema_version != sync_codec::SYNC_SCHEMA_VERSION
@@ -508,19 +511,47 @@ impl SyncService {
                     &change.checksum,
                 )
                 .map_err(|e| DomainError::validation(e.to_string()))?;
-                if record.record_id != change.record_id
+                let updated_at = time::OffsetDateTime::parse(
+                    &change.updated_at,
+                    &time::format_description::well_known::Rfc3339,
+                )
+                .map_err(|_| DomainError::validation("Invalid sync record timestamp"))?;
+                if let Some(deleted_at) = &change.deleted_at {
+                    time::OffsetDateTime::parse(
+                        deleted_at,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .map_err(|_| DomainError::validation("Invalid sync deletion timestamp"))?;
+                }
+                if record.record_id.trim().is_empty()
+                    || record.record_id != change.record_id
                     || record.record_type.as_str() != change.record_type
                     || record.revision != change.revision
+                    || record.revision == 0
+                    || record.revision > i64::MAX as u64
                     || record.schema_version != change.schema_version
                     || record.deleted != change.deleted
                     || record.device_id.as_deref() != Some(&change.device_id)
+                    || record.updated_at as i128 * 1_000_000 != updated_at.unix_timestamp_nanos()
+                    || change.deleted != change.deleted_at.is_some()
+                    || change.size != change.ciphertext_b64.len()
+                    || change.checksum.is_empty()
+                    || change.seq <= cursor
+                    || change.seq > page.next_cursor
+                    || change.seq > page.head_seq
                 {
                     return Err(DomainError::validation(
                         "Encrypted sync record metadata mismatch",
                     ));
                 }
-                envelopes.insert(record.record_id.clone(), change);
-                incoming.push(record);
+                // Authenticate every historical version, then apply only each entity's latest state.
+                if incoming
+                    .get(&record.record_id)
+                    .is_none_or(|latest| latest.revision < record.revision)
+                {
+                    envelopes.insert(record.record_id.clone(), change);
+                    incoming.insert(record.record_id.clone(), record);
+                }
             }
             if page.has_more && page.next_cursor <= cursor {
                 return Err(DomainError::validation("Sync cursor did not advance"));
@@ -530,6 +561,7 @@ impl SyncService {
                 break;
             }
         }
+        let incoming: Vec<_> = incoming.into_values().collect();
         let dirty = sync_codec::collect_dirty_records(&self.store)?;
         let dirty_by_id: HashMap<_, _> = dirty.iter().map(|r| (r.record_id.clone(), r)).collect();
         let mut conflicts = Vec::new();
@@ -606,9 +638,12 @@ impl SyncService {
                 }
             }
         }
-        let summary =
-            sync_codec::apply_remote_records_with_conflicts(&self.store, &incoming, conflicts)?;
-        self.save_cursor(&remote_id, &url, cursor)?;
+        let summary = sync_codec::apply_remote_batch(
+            &self.store,
+            &incoming,
+            conflicts,
+            Some((&remote_id, &url, cursor)),
+        )?;
         let pending = sync_codec::collect_dirty_records(&self.store)?;
         let mut pushed_count = 0;
         for chunk in pending.chunks(100) {
@@ -744,14 +779,6 @@ impl SyncService {
             .optional()
             .map(|v| v.unwrap_or(0))
             .map_err(|e| DomainError::internal(e.to_string()))
-        })
-    }
-
-    fn save_cursor(&self, vault: &str, url: &str, cursor: u64) -> DomainResult<()> {
-        self.store.with_conn(|conn| {
-            conn.execute("INSERT INTO sync_meta(vault_id,server_url,last_cursor,last_pull_at,sync_state) VALUES (?1,?2,?3,?4,'idle') ON CONFLICT(vault_id) DO UPDATE SET last_cursor=excluded.last_cursor,last_pull_at=excluded.last_pull_at",
-                rusqlite::params![vault,url,cursor,openshell_core_domain::now_ms()]).map_err(|e| DomainError::internal(e.to_string()))?;
-            Ok(())
         })
     }
 

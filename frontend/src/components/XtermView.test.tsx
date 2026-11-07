@@ -5,19 +5,20 @@ import { XtermView } from "./XtermView";
 import type { TerminalTab } from "../stores/terminalStore";
 import { useToastStore } from "../stores/toastStore";
 import { useTerminalStore } from "../stores/terminalStore";
-import { openTerminal } from "../lib/ipc";
+import { openTerminal, writeTerminal } from "../lib/ipc";
 import { useSettingsStore } from "../stores/settingsStore";
 import { appendSessionLog } from "../lib/terminal-log";
 
-const { term, keys } = vi.hoisted(() => {
+const { term, keys, data } = vi.hoisted(() => {
   const keys: { handler?: (event: KeyboardEvent) => boolean } = {};
-  return { keys, term: {
+  const data: { handler?: (value: string) => void } = {};
+  return { keys, data, term: {
     options: {}, unicode: {}, cols: 80, rows: 24, selection: "",
     loadAddon: vi.fn(), open: vi.fn(), dispose: vi.fn(), focus: vi.fn(),
     writeln: vi.fn(), write: vi.fn(), paste: vi.fn(), clear: vi.fn(),
     selectAll: vi.fn(), scrollToBottom: vi.fn(),
     getSelection: vi.fn(() => ""), hasSelection: vi.fn(() => false),
-    onData: vi.fn(() => ({ dispose: vi.fn() })),
+    onData: vi.fn((handler) => { data.handler = handler; return { dispose: vi.fn() }; }),
     attachCustomKeyEventHandler: vi.fn((handler) => { keys.handler = handler; }),
     buffer: { active: { length: 0, getLine: vi.fn() } },
   } };
@@ -145,4 +146,32 @@ it("ignores channel data delivered after the terminal view was disposed", () => 
   term.write.mockClear();
   incoming([1, 0, 0, 0, 0, 65]);
   expect(term.write).not.toHaveBeenCalled();
+});
+
+it("routes keyboard input through sendTextToTab without marking a changed connection disconnected", async () => {
+  const original = useTerminalStore.getState().sendTextToTab;
+  let rejectSend!: (error: Error) => void;
+  const send = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject; }));
+  try {
+    useTerminalStore.setState({ sendTextToTab: send });
+
+    act(() => { data.handler!("A"); });
+    expect(send).toHaveBeenCalledWith("tab", "A");
+
+    // 发送等待期间同 tab 换了连接：store 以 StaleTargetError 取消本次发送，
+    // XtermView 不能把新连接误标成 disconnected，也不能自行写 PTY。
+    act(() => useTerminalStore.setState({ tabs: [{ ...tab, connectionId: "new-connection" }] }));
+    const stale = new Error("目标标签连接已变更，本次发送已取消");
+    stale.name = "StaleTargetError";
+    rejectSend(stale);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(useTerminalStore.getState().tabs[0]).toMatchObject({
+      status: "connected",
+      connectionId: "new-connection",
+    });
+  } finally {
+    useTerminalStore.setState({ sendTextToTab: original });
+  }
 });

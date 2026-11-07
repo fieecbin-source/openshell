@@ -39,6 +39,35 @@ const serialReadSubscribers = new Map<string, Set<SerialReadHandlers>>();
 const serialReadTimers = new Map<string, ReturnType<typeof setInterval>>();
 const serialReadInFlight = new Set<string>();
 
+/**
+ * 串口发送代次：同一 cardId 重开时 cardId / connectionId 都不变，只有代次能
+ * 区分旧句柄。断开/重连（pauseSerialRead）与主动关闭（teardownSerialSession）
+ * 时递增，编码 await 之后复核，旧字节绝不写进新句柄。放在模块级，不进 store state。
+ */
+const serialSendEpochs = new Map<string, number>();
+
+function currentSerialSendEpoch(cardId: string): number {
+  return serialSendEpochs.get(cardId) ?? 0;
+}
+
+function bumpSerialSendEpoch(cardId: string): void {
+  serialSendEpochs.set(cardId, currentSerialSendEpoch(cardId) + 1);
+}
+
+/** 编码/等待期间串口连接已变化：主动取消，不是写入失败 */
+class StaleSerialSendError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleSerialSendError";
+  }
+}
+
+function assertCurrentSerialSendEpoch(cardId: string, epoch: number): void {
+  if (currentSerialSendEpoch(cardId) !== epoch) {
+    throw new StaleSerialSendError("串口连接已变更，本次发送已取消");
+  }
+}
+
 function stopSerialReadPoller(cardId: string): void {
   const timer = serialReadTimers.get(cardId);
   if (timer !== undefined) clearInterval(timer);
@@ -193,6 +222,7 @@ export const useSerialStore = create<SerialState>((set, get) => ({
   sendCurrent: async (cardId, encoding) => {
     const { sendText, sendIsHex, newlineMode, history } = get();
     if (!sendText.trim()) return;
+    const epoch = currentSerialSendEpoch(cardId);
 
     let payloadBytes: number[] = [];
     try {
@@ -210,8 +240,12 @@ export const useSerialStore = create<SerialState>((set, get) => ({
         payloadBytes = Array.from(await encodeTextForSession(textToSend, encoding));
       }
 
+      // 非 UTF-8 编码是真实 await：期间断开/重开后旧字节不能写进新句柄
+      assertCurrentSerialSendEpoch(cardId, epoch);
       await sendSerial(cardId, new Uint8Array(payloadBytes));
     } catch (error) {
+      // 主动取消不是写入失败：不停定时器、不写 sendError
+      if (error instanceof StaleSerialSendError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       const { timerHandle, isTimerRunning } = get();
       if (isTimerRunning && timerHandle) clearInterval(timerHandle);
@@ -229,6 +263,7 @@ export const useSerialStore = create<SerialState>((set, get) => ({
   },
 
   sendSnippet: async (cardId, snippet, encoding) => {
+    const epoch = currentSerialSendEpoch(cardId);
     let payloadBytes: number[] = [];
     try {
       if (snippet.isHex) {
@@ -239,8 +274,10 @@ export const useSerialStore = create<SerialState>((set, get) => ({
       } else {
         payloadBytes = Array.from(await encodeTextForSession(snippet.payload, encoding));
       }
+      assertCurrentSerialSendEpoch(cardId, epoch);
       await sendSerial(cardId, new Uint8Array(payloadBytes));
     } catch (error) {
+      if (error instanceof StaleSerialSendError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       const { timerHandle, isTimerRunning } = get();
       if (isTimerRunning && timerHandle) clearInterval(timerHandle);
@@ -343,6 +380,8 @@ export const useSerialStore = create<SerialState>((set, get) => ({
 
 /** 暂停 RX 轮询但保留订阅者：故障/断开期间不清空 HEX/ASCII 的订阅关系，重连后可原地恢复。 */
 export function pauseSerialRead(cardId: string): void {
+  // 断开/重连意味着底层句柄更换：在途的编码结果必须作废
+  bumpSerialSendEpoch(cardId);
   stopSerialReadPoller(cardId);
 }
 
@@ -363,6 +402,8 @@ export function stopSerialSendTimer(): void {
  * 用于用户主动关闭标签；不负责 closeSerial，由调用者按原有顺序释放句柄。
  */
 export function teardownSerialSession(cardId: string): void {
+  // 主动关闭标签：在途发送不得落到随后重开的同 cardId 句柄
+  bumpSerialSendEpoch(cardId);
   stopSerialSendTimer();
   stopSerialReadPoller(cardId);
   serialReadSubscribers.delete(cardId);

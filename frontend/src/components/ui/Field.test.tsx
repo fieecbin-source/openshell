@@ -31,3 +31,21 @@ it("keeps optional fields unmarked and validation errors visible", () => {
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("输入内容过长");
   expect(container.querySelector("[placeholder]")).toBeNull();
 });
+
+it("preserves explicit control ids and derives empty state from existing controls", () => {
+  for (const value of ["", "saved", ""]) {
+    act(() => root.render(<Field label="名称" required>
+      <Input id="existing-control" value={value} readOnly />
+    </Field>));
+    expect(container.querySelector("label")!.htmlFor).toBe("existing-control");
+    expect(container.querySelector('[title="必填"]') !== null).toBe(!value);
+  }
+});
+
+it("retains the existing hint contract and gives errors priority", () => {
+  act(() => root.render(<Field label="名称" hint="legacy hint"><Input readOnly /></Field>));
+  expect(container.textContent).toContain("legacy hint");
+  act(() => root.render(<Field label="名称" hint="legacy hint" error="invalid"><Input readOnly /></Field>));
+  expect(container.textContent).not.toContain("legacy hint");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("invalid");
+});

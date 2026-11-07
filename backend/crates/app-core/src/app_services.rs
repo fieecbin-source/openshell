@@ -37,60 +37,6 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 设置表中「自动备份保留份数」的键（scope = `user`）。
 pub const SETTING_BACKUP_KEEP: &str = "update.backup_keep";
 
-#[cfg(test)]
-mod backup_retention_tests {
-    use super::*;
-
-    #[test]
-    fn canonical_backup_retention_takes_precedence() {
-        let app = AppServices::new_in_memory().unwrap();
-        app.settings_repo
-            .set(
-                "user",
-                None,
-                "update.backupKeep",
-                serde_json::json!(7),
-                false,
-            )
-            .unwrap();
-        assert_eq!(app.backup_keep(), 7);
-        app.settings_repo
-            .set(
-                "user",
-                None,
-                "update.backup_keep",
-                serde_json::json!(20),
-                false,
-            )
-            .unwrap();
-        assert_eq!(app.backup_keep(), 20);
-    }
-
-    #[test]
-    fn twenty_backups_survive_creation_and_upgrade() {
-        let directory = tempfile::tempdir().unwrap();
-        let app = AppServices::new(directory.path().to_path_buf()).unwrap();
-        app.settings_repo
-            .set(
-                "user",
-                None,
-                "update.backup_keep",
-                serde_json::json!(20),
-                false,
-            )
-            .unwrap();
-        for _ in 0..22 {
-            app.backup_now(BackupReason::PreInstall).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        assert_eq!(app.list_backups().unwrap().len(), 20);
-        meta::set(&app.store, meta::KEY_LAST_APP_VERSION, "old-version").unwrap();
-        drop(app);
-        let reopened = AppServices::new(directory.path().to_path_buf()).unwrap();
-        assert_eq!(reopened.list_backups().unwrap().len(), 20);
-    }
-}
-
 pub struct AppServices {
     pub paths: AppPaths,
     pub store: Store,
@@ -228,9 +174,7 @@ impl AppServices {
             store.clone(),
             vault_manager.clone(),
         ));
-        // 记录凭据存储来源：只有库内已无旧明文（明文代理口令 / 缺 secret 行的 SOCKS 引用）
-        // 才写入标记。旧库因此不会被误标成「引用式存储」，缺失引用仍按旧口令迁移。
-        // 该检查只读 SQLite、不需要保险库解锁；失败只影响判定精度，不阻断启动。
+        // 仅记录凭据已验证状态；缺标记不证明旧值是明文，记录失败不阻断启动。
         if let Err(error) = network_secrets.record_reference_store_if_clean() {
             tracing::warn!(%error, "failed to probe credential store provenance");
         }
@@ -410,5 +354,59 @@ impl AppServices {
     pub async fn remove_sftp_client(&self, conn_id: &ConnectionId) {
         let mut lock = self.sftp_clients.lock().await;
         lock.remove(conn_id);
+    }
+}
+
+#[cfg(test)]
+mod backup_retention_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_backup_retention_takes_precedence() {
+        let app = AppServices::new_in_memory().unwrap();
+        app.settings_repo
+            .set(
+                "user",
+                None,
+                "update.backupKeep",
+                serde_json::json!(7),
+                false,
+            )
+            .unwrap();
+        assert_eq!(app.backup_keep(), 7);
+        app.settings_repo
+            .set(
+                "user",
+                None,
+                "update.backup_keep",
+                serde_json::json!(20),
+                false,
+            )
+            .unwrap();
+        assert_eq!(app.backup_keep(), 20);
+    }
+
+    #[test]
+    fn twenty_backups_survive_creation_and_upgrade() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = AppServices::new(directory.path().to_path_buf()).unwrap();
+        app.settings_repo
+            .set(
+                "user",
+                None,
+                "update.backup_keep",
+                serde_json::json!(20),
+                false,
+            )
+            .unwrap();
+        for _ in 0..22 {
+            app.backup_now(BackupReason::PreInstall).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(app.list_backups().unwrap().len(), 20);
+        meta::set(&app.store, meta::KEY_LAST_APP_VERSION, "old-version").unwrap();
+        drop(app);
+        let reopened = AppServices::new(directory.path().to_path_buf()).unwrap();
+        assert_eq!(reopened.list_backups().unwrap().len(), 20);
     }
 }

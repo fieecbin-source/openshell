@@ -429,17 +429,20 @@ async fn server_disconnect_releases_all_rule_types_and_pending_handshakes() {
             )
             .await
             .unwrap();
-        let released = tokio::time::timeout(Duration::from_secs(4), async {
+        let mut closed = conn.closed_channel();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while !*closed.borrow_and_update() {
+                closed.changed().await.unwrap();
+            }
             loop {
-                // Windows refusal can take two seconds per port; inspect all three concurrently.
-                let (local, dynamic, remote) = tokio::join!(
-                    TcpStream::connect(&rules[0].1),
-                    TcpStream::connect(&rules[1].1),
-                    TcpStream::connect(&rules[2].1),
-                );
-                let mut released = local.is_err() && dynamic.is_err() && remote.is_err();
-                for (id, _) in &rules {
-                    released &= !matches!(manager.get_status(id).await, ForwardStatus::Listening { .. });
+                // Rebinding observes release immediately; Windows connect refusal can take two seconds.
+                let mut released = true;
+                for (id, address) in &rules {
+                    released &= !matches!(
+                        manager.get_status(id).await,
+                        ForwardStatus::Listening { .. }
+                    );
+                    released &= TcpListener::bind(address).await.is_ok();
                 }
                 if released {
                     break;
@@ -447,14 +450,14 @@ async fn server_disconnect_releases_all_rule_types_and_pending_handshakes() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await;
-        if released.is_err() {
-            let mut details = Vec::new();
-            for (id, address) in &rules {
-                details.push((manager.get_status(id).await, TcpStream::connect(address).await.is_ok()));
-            }
-            panic!("peer disconnect retained listener/status; closed={}, states/connectable={details:?}", *conn.closed_channel().borrow());
-        }
+        .await
+        .expect("peer disconnect retained listener/status");
+        let (local, dynamic, remote) = tokio::join!(
+            TcpStream::connect(&rules[0].1),
+            TcpStream::connect(&rules[1].1),
+            TcpStream::connect(&rules[2].1),
+        );
+        assert!(local.is_err() && dynamic.is_err() && remote.is_err());
         let mut byte = [0];
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(1), pending.read(&mut byte))
@@ -462,7 +465,9 @@ async fn server_disconnect_releases_all_rule_types_and_pending_handshakes() {
                 .unwrap(),
             Ok(0) | Err(_)
         ));
-        for (id, _) in &rules { manager.stop_rule(id).await.unwrap(); }
+        for (id, _) in &rules {
+            manager.stop_rule(id).await.unwrap();
+        }
         manager.stop_all().await;
         server.abort();
     })

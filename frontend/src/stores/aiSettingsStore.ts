@@ -161,11 +161,11 @@ export const useAiSettingsStore = create<AiSettingsState>((set, get) => ({
       set({
         config: current
           ? {
-              ...current,
-              profiles: current.profiles.filter((p) => p.id !== profileId),
-              active_profile_id:
-                current.active_profile_id === profileId ? null : current.active_profile_id,
-            }
+            ...current,
+            profiles: current.profiles.filter((p) => p.id !== profileId),
+            active_profile_id:
+              current.active_profile_id === profileId ? null : current.active_profile_id,
+          }
           : current,
         lastSavedProfileId:
           get().lastSavedProfileId === profileId ? null : get().lastSavedProfileId,
@@ -200,13 +200,13 @@ export const useAiSettingsStore = create<AiSettingsState>((set, get) => ({
         lastTest: result,
         config: current
           ? {
-              ...current,
-              profiles: current.profiles.map((p) =>
-                p.id === profileId && result && result.ok
-                  ? { ...p, verified_at: Date.now() }
-                  : p
-              ),
-            }
+            ...current,
+            profiles: current.profiles.map((p) =>
+              p.id === profileId && result && result.ok
+                ? { ...p, verified_at: Date.now() }
+                : p
+            ),
+          }
           : current,
       });
       return result;

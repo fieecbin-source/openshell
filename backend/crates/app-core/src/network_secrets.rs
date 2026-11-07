@@ -13,12 +13,8 @@ use zeroize::Zeroizing;
 /// 而 `SecretId` 只校验「26 个 ASCII 字母数字」，因此**不能**用字符串形态区分明文口令与真实引用：
 /// `abcdefghijklmnopqrstuvwxyz` 这类口令和合法 ULID 形状的口令都会被误判成缺失引用。
 ///
-/// 这里改用已持久化的迁移来源作为证据：
-/// - 有标记：库内凭据已全部引用化，缺失就是真实缺失 → 报错让人重填口令；
-/// - 无标记：仍是旧库，缺 `secret` 行的引用一律按旧明文口令加密迁移。
-///
-/// 标记只在「已证明库内无旧明文」时写入（见 [`NetworkSecrets::record_reference_store_if_clean`]
-/// 与 [`NetworkSecrets::migrate_legacy`]），所以旧库不会被提前误标。
+/// 标记仅记录已验证状态；缺标记也可能是引入标记前的引用库。
+/// 缺失引用无法证明旧值是明文，必须保留原值并由用户通过密码输入补录。
 const REFERENCE_STORE_MARKER: &str = "network_secrets.store";
 const REFERENCE_STORE_VALUE: &str = "reference-v1";
 
@@ -35,7 +31,7 @@ fn app_meta_available(conn: &rusqlite::Connection) -> DomainResult<bool> {
     table_exists(conn, "app_meta")
 }
 
-/// 读取迁移来源标记；schema v1 还没有 `app_meta` 表，按「旧库」处理。
+/// schema v1 没有 `app_meta` 表；缺少标记不证明任何凭据来源。
 fn marked_reference_store(conn: &rusqlite::Connection) -> DomainResult<bool> {
     if !app_meta_available(conn)? {
         return Ok(false);
@@ -65,10 +61,8 @@ fn mark_reference_store(conn: &rusqlite::Connection) -> DomainResult<()> {
     Ok(())
 }
 
-/// 库内是否仍存在旧明文证据：明文代理口令，或缺失 `secret` 行的 SOCKS 引用。
-///
-/// 语义与备份前的安全检查一致，避免「备份拒绝却允许标记为现代库」的错位。
-fn has_legacy_plaintext(conn: &rusqlite::Connection) -> DomainResult<bool> {
+/// 明确的代理明文或无法解析的 SOCKS 引用，均不能记为已验证。
+fn has_unresolved_credentials(conn: &rusqlite::Connection) -> DomainResult<bool> {
     if table_exists(conn, "setting")? {
         let mut statement = conn
             .prepare("SELECT value_json FROM setting WHERE key='proxy_list'")
@@ -97,7 +91,7 @@ fn has_legacy_plaintext(conn: &rusqlite::Connection) -> DomainResult<bool> {
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM port_forward p WHERE p.socks_password_ref IS NOT NULL \
                  AND NOT EXISTS(SELECT 1 FROM secret s WHERE s.id=p.socks_password_ref \
-                 AND s.record_type='socks_password'))",
+                 AND s.record_type='socks_password' AND (s.deleted_at IS NULL OR s.deleted_at=0)))",
                 [],
                 |row| row.get(0),
             )
@@ -174,34 +168,19 @@ impl NetworkSecrets {
         serde_json::from_value(value).map_err(|_| DomainError::validation("代理列表格式无效"))
     }
 
-    fn migrate_socks_rule(
+    fn validate_socks_reference(
         &self,
         tx: &Transaction<'_>,
-        id: &str,
         reference: &str,
     ) -> DomainResult<String> {
         let existing: Option<String> = tx.query_row("SELECT record_type FROM secret WHERE id=?1 AND (deleted_at IS NULL OR deleted_at=0)", [reference], |row| row.get(0)).optional().map_err(|_| DomainError::internal("无法读取 SOCKS 密码"))?;
         match existing {
-            Some(kind) if kind == "socks_password" => return Ok(reference.to_owned()),
-            Some(_) => return Err(DomainError::validation("SOCKS 密码引用类型无效")),
-            None => {}
+            Some(kind) if kind == "socks_password" => Ok(reference.to_owned()),
+            Some(_) => Err(DomainError::validation("SOCKS 密码引用类型无效")),
+            None => Err(DomainError::validation(
+                "SOCKS 密码引用不存在或旧值来源不明，请重新保存密码或恢复秘密备份",
+            )),
         }
-        if marked_reference_store(tx)? {
-            // 已引用化的库：引用缺失是真实缺失（例如秘密行被删除），
-            // 绝不能把引用文本当成口令加密，否则会静默存下错误口令。
-            return Err(DomainError::validation(
-                "SOCKS 密码引用不存在，请重新保存密码",
-            ));
-        }
-        // 旧库：此列存的是明文口令。此处不看字符串形态，26 位字母数字
-        // （含 `abcdefghijklmnopqrstuvwxyz`、合法 ULID 形状）一律按口令迁移。
-        let migrated = self.encrypt_in_transaction(tx, reference, "socks_password")?;
-        let changed = tx.execute("UPDATE port_forward SET socks_password_ref=?1,dirty=1,updated_at=?2 WHERE id=?3 AND socks_password_ref=?4", rusqlite::params![migrated, now_ms(), id, reference]).map_err(|_| DomainError::internal("无法迁移 SOCKS 密码"))?;
-        if changed != 1 {
-            return Err(DomainError::conflict("转发规则已改变，请重试"));
-        }
-        bump_sync(tx, id, "port_forward", None)?;
-        Ok(migrated)
     }
 
     /// Runs on schema 1–4 before a migration snapshot, including soft-deleted legacy rows.
@@ -210,9 +189,9 @@ impl NetworkSecrets {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|_| DomainError::internal("无法开始凭据迁移"))?;
             let proxies = tx.prepare("SELECT id,value_json FROM setting WHERE key='proxy_list'").map_err(|_| DomainError::internal("无法读取代理列表"))?.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))).map_err(|_| DomainError::internal("无法读取代理列表"))?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_| DomainError::internal("无法读取代理列表"))?;
             for (id, value) in proxies { self.migrate_proxy_row(&tx, &id, &value)?; }
-            let rules = tx.prepare("SELECT id,socks_password_ref FROM port_forward WHERE socks_password_ref IS NOT NULL").map_err(|_| DomainError::internal("无法读取转发规则"))?.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))).map_err(|_| DomainError::internal("无法读取转发规则"))?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_| DomainError::internal("无法读取转发规则"))?;
-            for (id, reference) in rules { self.migrate_socks_rule(&tx, &id, &reference)?; }
-            // 迁移与来源标记同事务提交：失败整体回滚，下次重试仍是「旧库」语义。
+            let rules = tx.prepare("SELECT socks_password_ref FROM port_forward WHERE socks_password_ref IS NOT NULL").map_err(|_| DomainError::internal("无法读取转发规则"))?.query_map([], |row| row.get::<_,String>(0)).map_err(|_| DomainError::internal("无法读取转发规则"))?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_| DomainError::internal("无法读取转发规则"))?;
+            for reference in rules { self.validate_socks_reference(&tx, &reference)?; }
+            // 代理迁移与来源标记同事务提交；不确定的 SOCKS 旧值使整个事务回滚。
             mark_reference_store(&tx)?;
             tx.commit().map_err(|_| DomainError::internal("无法提交凭据迁移"))
         })
@@ -220,12 +199,11 @@ impl NetworkSecrets {
 
     /// 启动时记录「本库凭据已全部引用化」的来源标记。
     ///
-    /// 只有证明不存在旧明文（明文代理口令，或缺失 `secret` 行的 SOCKS 引用）时才写入，
-    /// 所以仍有旧明文的库不会拿到标记，后续缺失引用仍按旧口令迁移。
+    /// 仅在无代理明文且所有 SOCKS 引用有效时记录；不能用缺少标记推断旧值是密码。
     /// 返回是否写入；`app_meta` 尚未建立（schema v1）时视为不需要。
     pub fn record_reference_store_if_clean(&self) -> DomainResult<bool> {
         self.store.with_conn(|conn| {
-            if has_legacy_plaintext(conn)? || marked_reference_store(conn)? {
+            if has_unresolved_credentials(conn)? || marked_reference_store(conn)? {
                 return Ok(false);
             }
             let tx = conn
@@ -346,7 +324,7 @@ impl NetworkSecrets {
                     let tx = conn
                         .transaction_with_behavior(TransactionBehavior::Immediate)
                         .map_err(|_| DomainError::internal("无法开始 SOCKS 迁移"))?;
-                    let migrated = self.migrate_socks_rule(&tx, rule.id.as_str(), reference)?;
+                    let migrated = self.validate_socks_reference(&tx, reference)?;
                     tx.commit()
                         .map_err(|_| DomainError::internal("无法提交 SOCKS 迁移"))?;
                     Ok(migrated)
@@ -355,7 +333,7 @@ impl NetworkSecrets {
             rule.has_socks_password = rule.socks_password_ref.is_some();
         }
         if !reference_store {
-            // 旧库的所有规则迁移成功后才补写来源标记（本函数可能只列了部分规则，
+            // 所有规则引用均有效时才补写标记（本函数可能只列了部分规则，
             // 所以用整库证据再确认一次）；写入失败只影响下次判定，不影响本次结果。
             if let Err(error) = self.record_reference_store_if_clean() {
                 tracing::warn!(%error, "failed to record credential store provenance");
@@ -660,7 +638,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_plaintext_passwords_of_any_shape_migrate_then_store_is_marked() {
+    async fn ambiguous_old_values_require_explicit_password_input_of_any_shape() {
         let (store, _, service) = setup();
         let passwords = [
             "abcdefghijklmnopqrstuvwxyz",
@@ -670,8 +648,31 @@ mod tests {
         for password in passwords {
             insert_legacy_rule(&store, password);
         }
-        // 旧库（存在缺 secret 行的引用）此时还不能被标记。
+        // 缺 secret 的旧值不能证明是明文，自动迁移必须保留原值并拒绝。
         assert!(!service.record_reference_store_if_clean().unwrap());
+        assert!(service.forwards(None).await.is_err());
+        assert!(service.migrate_legacy().is_err());
+        let repo = PortForwardRepo::new(store.clone());
+        let rules = repo.list(None).await.unwrap();
+        assert_eq!(rules.len(), passwords.len());
+        for rule in rules {
+            let password = rule.socks_password_ref.as_deref().unwrap();
+            assert!(passwords.contains(&password));
+            // 模拟用户明确重新输入密码；不从字符串形状推断来源。
+            let input = service
+                .prepare_forward(
+                    PortForwardRuleInput {
+                        name: rule.name,
+                        bind_port: rule.bind_port,
+                        socks_password: Some(password.to_owned()),
+                        ..Default::default()
+                    },
+                    Some(&rule.id),
+                )
+                .await
+                .unwrap();
+            repo.update(&rule.id, input).await.unwrap();
+        }
 
         let mut migrated = service.forwards(None).await.unwrap();
         let mut resolved: Vec<String> = Vec::new();
@@ -693,7 +694,7 @@ mod tests {
         expected.sort();
         assert_eq!(resolved, expected, "every legacy password must survive");
 
-        // 全量迁移成功后库被标记；此后真实缺失的引用必须报错而不是再次加密。
+        // 显式补录后引用均可解析，缺失的新引用仍必须报错。
         insert_legacy_rule(&store, &SecretId::new().to_string());
         assert!(service.forwards(None).await.is_err());
     }

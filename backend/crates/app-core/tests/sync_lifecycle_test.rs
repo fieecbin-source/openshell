@@ -589,6 +589,348 @@ async fn sync_downloads_all_pages_before_applying_foreign_keys() {
 }
 
 #[tokio::test]
+async fn history_catch_up_keeps_latest_forward_and_matching_conflict_envelope() {
+    use openshell_app_core::sync_service::SyncConflictChoice;
+    use openshell_core_domain::{
+        PortForwardRepository, PortForwardRuleInput, PortForwardType, SecretId, SocksAuth,
+    };
+
+    let (url, db, _server_dir, task) = server().await;
+    let a = AppServices::new_in_memory().unwrap();
+    a.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    let input = |name: &str, password: Option<&str>| PortForwardRuleInput {
+        name: name.into(),
+        bind_port: 1080,
+        rule_type: Some(PortForwardType::Dynamic),
+        socks_auth: Some(SocksAuth::Userpass),
+        socks_username: Some("synthetic-user".into()),
+        socks_password: password.map(str::to_owned),
+        ..Default::default()
+    };
+    let prepared = a
+        .network_secrets
+        .prepare_forward(input("initial", Some("synthetic-first")), None)
+        .await
+        .unwrap();
+    let initial = a.port_forward_repo.create(prepared).await.unwrap();
+    a.store
+        .with_conn(|conn| {
+            conn.execute(
+                "UPDATE port_forward SET updated_at=1 WHERE id=?1",
+                [initial.id.as_str()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    a.sync.sync_now().await.unwrap();
+    let b = AppServices::new_in_memory().unwrap();
+    b.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+    let local = b
+        .network_secrets
+        .prepare_forward(input("offline-local", None), Some(&initial.id))
+        .await
+        .unwrap();
+    b.port_forward_repo
+        .update(&initial.id, local)
+        .await
+        .unwrap();
+
+    // Keep successive forward versions on opposite sides of the 500-change page boundary.
+    a.store.with_conn(|conn| {
+        let tx = conn.transaction().unwrap();
+        for i in 0..501 {
+            tx.execute("INSERT INTO session(id,name,protocol,host,created_at,updated_at,dirty) VALUES(?1,?2,'ssh','history.invalid',1,1,1)",
+                rusqlite::params![ulid::Ulid::new().to_string(), format!("history-{i}")]).unwrap();
+        }
+        tx.commit().unwrap();
+        Ok(())
+    }).unwrap();
+    let mut previous = initial.socks_password_ref.clone().unwrap();
+    let mut removed = Vec::new();
+    for (name, password, timestamp) in [
+        ("second", "synthetic-second", 20_i64),
+        ("latest", "synthetic-third", 10_i64),
+    ] {
+        let prepared = a
+            .network_secrets
+            .prepare_forward(input(name, Some(password)), Some(&initial.id))
+            .await
+            .unwrap();
+        let saved = a
+            .port_forward_repo
+            .update(&initial.id, prepared)
+            .await
+            .unwrap();
+        a.store
+            .with_conn(|conn| {
+                conn.execute(
+                    "UPDATE port_forward SET updated_at=?1 WHERE id=?2",
+                    rusqlite::params![timestamp, initial.id.as_str()],
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        a.sync.sync_now().await.unwrap();
+        let old = SecretId::from_string(&previous).unwrap();
+        SecretRepo::new(a.store.clone()).delete(&old).unwrap();
+        a.sync.sync_now().await.unwrap();
+        removed.push(previous);
+        previous = saved.socks_password_ref.unwrap();
+    }
+    let (count, versions): (i64, i64) = db
+        .with_conn(|conn| {
+            Ok::<_, rusqlite::Error>((
+                conn.query_row("SELECT COUNT(*) FROM record_history", [], |row| row.get(0))?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM record_history WHERE record_id=?1",
+                    [initial.id.as_str()],
+                    |row| row.get(0),
+                )?,
+            ))
+        })
+        .unwrap();
+    assert!(count > 500);
+    assert_eq!(
+        versions, 3,
+        "fixture must retain all actual server history versions"
+    );
+
+    // A new device must recover the current graph without replaying obsolete dependencies.
+    let c = AppServices::new_in_memory().unwrap();
+    c.sync
+        .login(&url, ACCOUNT, PASSWORD)
+        .await
+        .expect("history catch-up must restore the newest forward");
+    let restored = c.port_forward_repo.get(&initial.id).await.unwrap();
+    assert_eq!(restored.name, "latest");
+    assert_eq!(
+        restored.socks_password_ref.as_deref(),
+        Some(previous.as_str())
+    );
+    assert_eq!(restored.updated_at, 10);
+    assert_eq!(
+        c.network_secrets
+            .resolve(&previous, "socks_password")
+            .unwrap()
+            .as_str(),
+        "synthetic-third"
+    );
+    assert_eq!(
+        c.session
+            .list_sessions(&SessionQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        501
+    );
+    for id in &removed {
+        c.store
+            .with_conn(|conn| {
+                let tombstone: (u64, bool) = conn
+                    .query_row(
+                        "SELECT revision,deleted FROM sync_record WHERE record_id=?1",
+                        [id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(tombstone, (2, true));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    let cursor: u64 = b
+        .store
+        .with_conn(|conn| {
+            Ok(conn
+                .query_row("SELECT last_cursor FROM sync_meta", [], |row| row.get(0))
+                .unwrap())
+        })
+        .unwrap();
+    // Cursor persistence is part of the graph/conflict transaction, including an UPSERT update.
+    for operation in ["INSERT", "UPDATE OF last_cursor"] {
+        b.store
+            .with_conn(|conn| {
+                conn.execute_batch(&format!("CREATE TRIGGER reject_history_cursor BEFORE {operation} ON sync_meta BEGIN SELECT RAISE(ABORT,'synthetic cursor failure'); END")).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let error = b.sync.sync_now().await.unwrap_err();
+        assert!(
+            error.message.contains("synthetic cursor failure"),
+            "{}",
+            error.message
+        );
+        let unchanged = b.port_forward_repo.get(&initial.id).await.unwrap();
+        assert_eq!(unchanged.name, "offline-local");
+        assert_eq!(unchanged.socks_password_ref, initial.socks_password_ref);
+        assert!(b.sync.list_conflicts().unwrap().is_empty());
+        assert!(b
+            .session
+            .list_sessions(&SessionQuery::default())
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(SecretRepo::new(b.store.clone())
+            .get(&SecretId::from_string(removed[0].clone()).unwrap())
+            .unwrap()
+            .is_some());
+        assert!(SecretRepo::new(b.store.clone())
+            .get(&SecretId::from_string(previous.clone()).unwrap())
+            .unwrap()
+            .is_none());
+        b.store.with_conn(|conn| {
+            let state: (u64, bool) = conn.query_row("SELECT revision,(SELECT dirty FROM port_forward WHERE id=?1) FROM sync_record WHERE record_id=?1", [initial.id.as_str()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(state, (1, true));
+            assert_eq!(conn.query_row("SELECT last_cursor FROM sync_meta", [], |row| row.get::<_, u64>(0)).unwrap(), cursor);
+            conn.execute_batch("DROP TRIGGER reject_history_cursor").unwrap();
+            Ok(())
+        }).unwrap();
+    }
+
+    // Failure to retain a dirty local copy must roll back the graph, revision and cursor together.
+    b.store.with_conn(|conn| {
+        conn.execute_batch("CREATE TRIGGER reject_history_conflict BEFORE INSERT ON sync_conflict BEGIN SELECT RAISE(ABORT,'synthetic history conflict failure'); END").unwrap();
+        Ok(())
+    }).unwrap();
+    assert!(b.sync.sync_now().await.is_err());
+    assert_eq!(
+        b.port_forward_repo.get(&initial.id).await.unwrap().name,
+        "offline-local"
+    );
+    assert!(b.sync.list_conflicts().unwrap().is_empty());
+    b.store.with_conn(|conn| {
+        let state: (u64, bool) = conn.query_row("SELECT revision,(SELECT dirty FROM port_forward WHERE id=?1) FROM sync_record WHERE record_id=?1", [initial.id.as_str()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(state, (1, true));
+        assert_eq!(conn.query_row("SELECT last_cursor FROM sync_meta", [], |row| row.get::<_, u64>(0)).unwrap(), cursor);
+        conn.execute_batch("DROP TRIGGER reject_history_conflict").unwrap();
+        Ok(())
+    }).unwrap();
+    assert_eq!(b.sync.sync_now().await.unwrap().conflict_count, 1);
+    assert_eq!(
+        b.port_forward_repo.get(&initial.id).await.unwrap().name,
+        "latest"
+    );
+    let conflicts = b.sync.list_conflicts().unwrap();
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "only the latest remote version needs a conflict backup"
+    );
+    b.store.with_conn(|conn| {
+        let conflict: (u64, i64, String) = conn.query_row("SELECT remote_revision,remote_updated_at,local_snapshot_json FROM sync_conflict WHERE id=?1", [&conflicts[0].id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+        assert_eq!((conflict.0, conflict.1), (3, 10));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&conflict.2).unwrap()["payload"]["name"], "offline-local");
+        Ok(())
+    }).unwrap();
+    b.sync
+        .resolve_conflict(&conflicts[0].id, SyncConflictChoice::Remote)
+        .await
+        .unwrap();
+    assert_eq!(
+        b.port_forward_repo.get(&initial.id).await.unwrap().name,
+        "latest"
+    );
+    assert!(b.sync.list_conflicts().unwrap().is_empty());
+    assert_eq!(b.sync.sync_now().await.unwrap().pushed_count, 0);
+
+    // Obsolete history is still authenticated and checked before selecting the latest revision.
+    let history_row: i64 = db
+        .with_conn(|conn| {
+            conn.query_row(
+                "SELECT rowid FROM record_history WHERE record_id=?1 AND revision=1",
+                [initial.id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    for (column, corrupt, expected) in [
+        ("ciphertext", "tampered-history-ciphertext", "checksum"),
+        ("checksum", "", "metadata mismatch"),
+        (
+            "client_updated_at",
+            "1970-01-01T00:00:00.099Z",
+            "metadata mismatch",
+        ),
+        ("device_id", "tampered-device", "metadata mismatch"),
+        ("record_id", "tampered-id", "vault error"),
+        ("record_type", "secret", "vault error"),
+        ("revision", "99", "metadata mismatch"),
+        ("deleted", "1", "metadata mismatch"),
+        ("schema_version", "3", "unsupported"),
+        ("key_version", "2", "unsupported"),
+        ("size", "1", "metadata mismatch"),
+    ] {
+        let original: String = db
+            .with_conn(|conn| {
+                conn.query_row(
+                    &format!("SELECT CAST({column} AS TEXT) FROM record_history WHERE rowid=?1"),
+                    [history_row],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        let corrupt = if column == "ciphertext" {
+            format!(
+                "{}{}",
+                if original.starts_with('A') { 'B' } else { 'A' },
+                &original[1..]
+            )
+        } else {
+            corrupt.to_owned()
+        };
+        db.with_conn(|conn| {
+            conn.execute(
+                &format!("UPDATE record_history SET {column}=?1 WHERE rowid=?2"),
+                rusqlite::params![corrupt, history_row],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .unwrap();
+        c.store
+            .with_conn(|conn| {
+                conn.execute("UPDATE sync_meta SET last_cursor=0", [])
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let error = c.sync.sync_now().await.unwrap_err();
+        assert!(
+            error.message.to_lowercase().contains(expected),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            c.port_forward_repo.get(&initial.id).await.unwrap().name,
+            "latest"
+        );
+        c.store
+            .with_conn(|conn| {
+                assert_eq!(
+                    conn.query_row("SELECT last_cursor FROM sync_meta", [], |row| row
+                        .get::<_, u64>(0))
+                        .unwrap(),
+                    0
+                );
+                Ok(())
+            })
+            .unwrap();
+        db.with_conn(|conn| {
+            conn.execute(
+                &format!("UPDATE record_history SET {column}=?1 WHERE rowid=?2"),
+                rusqlite::params![original, history_row],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .unwrap();
+    }
+    c.sync.sync_now().await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
 async fn personal_server_rejects_an_old_second_account() {
     let (url, db, _dir, task) = server().await;
     let hash = openshell_server::auth::hash_password(PASSWORD).unwrap();

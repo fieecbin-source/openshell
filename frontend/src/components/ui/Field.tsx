@@ -19,6 +19,7 @@ const CONTROL_BAD =
 
 export interface FieldProps {
   label?: ReactNode;
+  hint?: ReactNode;
   error?: string | null;
   required?: boolean;
   value?: string | number | null;
@@ -27,20 +28,23 @@ export interface FieldProps {
   children: ReactNode;
 }
 
-export function RequiredMark({ value }: { value?: string | number | null }) {
+export function RequiredMark({ value }: { value?: string | number | readonly string[] | null }) {
   if (String(value ?? "").trim()) return null;
   return <span aria-hidden="true" title="必填" className="ml-1 text-state-danger">★</span>;
 }
 
-export function Field({ label, error, required, value, htmlFor, className, children }: FieldProps) {
+export function Field({ label, hint, error, required, value, htmlFor, className, children }: FieldProps) {
   const generatedId = useId();
-  const fieldId = htmlFor ?? generatedId;
+  const control = Children.toArray(children).find((child) =>
+    isValidElement<InputProps>(child) && (child.type === Input || child.type === Select || child.type === Textarea));
+  const fieldId = htmlFor ?? (isValidElement<InputProps>(control) ? control.props.id : undefined) ?? generatedId;
+  const fieldValue = value ?? (isValidElement<InputProps>(control) ? control.props.value : undefined);
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       {label !== undefined && (
         <label htmlFor={fieldId} className="text-os-xs font-medium text-ink-secondary">
           {label}
-          {required && <RequiredMark value={value} />}
+          {required && <RequiredMark value={fieldValue} />}
         </label>
       )}
       {Children.map(children, (child) =>
@@ -48,10 +52,12 @@ export function Field({ label, error, required, value, htmlFor, className, child
           ? cloneElement(child, { id: child.props.id ?? fieldId, "aria-required": required || child.props["aria-required"] })
           : child,
       )}
-      {error && (
+      {error ? (
         <p role="alert" className="text-os-xs text-state-danger">
           {error}
         </p>
+      ) : (
+        hint !== undefined && <p className="text-os-xs text-ink-tertiary">{hint}</p>
       )}
     </div>
   );

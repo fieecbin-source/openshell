@@ -33,7 +33,9 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
   const [newSendMode, setNewSendMode] = useState<SendMode>("execute");
 
   useEffect(() => {
-    loadSnippets();
+    void Promise.resolve(loadSnippets()).catch((err) => {
+      console.warn("Failed to load snippets in SnippetBar:", err);
+    });
   }, [loadSnippets]);
 
   useEffect(() => {
@@ -103,15 +105,20 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
 
   const handleCreateSnippet = async () => {
     if (!newName.trim() || !newCmd.trim()) return;
-    await createSnippet({
-      name: newName.trim(),
-      kind: "snippet",
-      body: newCmd.trim(),
-      send_mode: newSendMode,
-    });
-    setNewName("");
-    setNewCmd("");
-    setCreateModal(false);
+    try {
+      await createSnippet({
+        name: newName.trim(),
+        kind: "snippet",
+        body: newCmd.trim(),
+        send_mode: newSendMode,
+      });
+      setNewName("");
+      setNewCmd("");
+      setCreateModal(false);
+    } catch (e) {
+      console.warn("Failed to create snippet:", e);
+      toast.error("创建片段失败");
+    }
   };
 
   return (
@@ -144,9 +151,14 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
                 label="删除片段"
                 size="sm"
                 className="!h-4 !w-4 shrink-0 !rounded-full text-ink-tertiary opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-state-danger"
-                onClick={(e) => {
+                onClick={async (e) => {
                   e.stopPropagation();
-                  deleteSnippet(snip.id);
+                  try {
+                    await deleteSnippet(snip.id);
+                  } catch (err) {
+                    console.warn("Failed to delete snippet:", err);
+                    toast.error("删除片段失败");
+                  }
                 }}
               >
                 <XIcon className="h-3 w-3" />

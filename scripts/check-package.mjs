@@ -18,9 +18,11 @@ import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { createRequire } from "node:module";
 import { privateMarkers } from "./private-markers.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ts = createRequire(join(root, "frontend/package.json"))("typescript");
 
 const DEFAULT_DIRS = ["frontend/dist", "artifacts"];
 const FORBIDDEN_PATH = [
@@ -43,14 +45,34 @@ const FORBIDDEN_CONTENT = [
 ];
 
 function hasSecretLiteral(text) {
-  // Consume complete strings before looking inside them, so a UI label cannot become a key.
-  const tokens = /(?<secret>(?:\b(?:api[_-]?key|secret|password)\b|"(?:api[_-]?key|secret|password)"|'(?:api[_-]?key|secret|password)')\s*[:=]\s*(?:"(?:\\.|[^"\\\r\n]){16,}"|'(?:\\.|[^'\\\r\n]){16,}'|`(?:\\.|[^`\\\r\n]){16,}`))|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gi;
-  for (const match of text.matchAll(tokens)) {
-    if (match.groups.secret) return true;
-    const literal = match[0].slice(1, -1).replace(/\\(["'`\\])/g, "$1");
-    if (hasSecretLiteral(literal)) return true;
+  // Reuse the build parser: regex quotes must not become string boundaries on recursive scans.
+  const source = ts.createSourceFile("package.js", text.trimStart().startsWith("{") ? `(${text}\n)` : text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
+  const valueStarts = new Set();
+  const commentStarts = new Set();
+  function visit(node) {
+    for (const range of [...(ts.getLeadingCommentRanges(source.text, node.pos) ?? []), ...(ts.getTrailingCommentRanges(source.text, node.end) ?? [])]) {
+      if (commentStarts.has(range.pos)) continue;
+      commentStarts.add(range.pos);
+      const comment = source.text.slice(range.pos + 2, range.end).replace(/\*\/$/, "");
+      if (hasSecretLiteral(comment)) return true;
+    }
+    const key = ts.isBinaryExpression(node) ? node.getText(source) : node.text;
+    if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node) || ts.isBinaryExpression(node)) && /^(api[_-]?key|secret|password)$/i.test(key)) {
+      const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, source.text, undefined, node.end);
+      const delimiter = scanner.scan();
+      if (delimiter === ts.SyntaxKind.ColonToken || delimiter === ts.SyntaxKind.EqualsToken) {
+        scanner.scan();
+        valueStarts.add(scanner.getTokenPos());
+      }
+    }
+    if ((ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) &&
+        valueStarts.has(node.getStart(source)) && node.getText(source).length - 2 >= 16) {
+      return true;
+    }
+    if (ts.isStringLiteralLike(node) && /["'`:=]/.test(node.text) && hasSecretLiteral(node.text)) return true;
+    return ts.forEachChild(node, visit);
   }
-  return false;
+  return Boolean(visit(source));
 }
 
 /** 这些文件天然是二进制，跳过文本正则扫描（仍会检查路径，并额外抽字符串查指纹）。 */

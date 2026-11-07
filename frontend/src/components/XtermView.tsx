@@ -26,7 +26,6 @@ import { toast, useToastStore } from "../stores/toastStore";
 import {
   SAVE_SNIPPET_EVENT,
   createStreamingDecoder,
-  encodeTextForSession,
 } from "../lib/terminal-actions";
 import { subscribeSerial } from "../stores/serialStore";
 import { useSessionStore } from "../stores/sessionStore";
@@ -37,7 +36,6 @@ import {
   openTelnet,
   resizeTerminal,
   writeTerminal,
-  sendSerial,
 } from "../lib/ipc";
 
 interface XtermViewProps {
@@ -85,8 +83,6 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   const encoding = useSessionStore((s) =>
     s.sessions.find((item) => item.id === tab.sessionId)?.encoding
   );
-  const encodingRef = useRef(encoding);
-  encodingRef.current = encoding;
 
   // 记录最近一次打印的连接状态，避免重复输出
   const lastLoggedStateRef = useRef<string>("");
@@ -355,19 +351,17 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       return true;
     });
 
-    // 键盘输入监听
+    // 键盘输入监听：统一走 store 的发送入口，编码 await 之后由 store 复核连接代次，
+    // 关闭/重连期间的旧按键不会写进新连接。
     const onDataDispose = term.onData((data) => {
       const live = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
       if (live?.status !== "connected") return;
       void (async () => {
         try {
-          const bytes = await encodeTextForSession(data, encodingRef.current);
-          if (tab.protocol === "serial") {
-            await sendSerial(tab.cardId || tab.tabId, Array.from(bytes));
-          } else {
-            await writeTerminal(tab.tabId, bytes);
-          }
+          await useTerminalStore.getState().sendTextToTab(tab.tabId, data);
         } catch (err) {
+          // 目标连接已变化时的主动取消（store 的 StaleTargetError）不能把新连接标记成断开
+          if (err instanceof Error && err.name === "StaleTargetError") return;
           // 编码失败或写入失败都必须进入断开状态，不能只停留在 console.warn
           const current = useTerminalStore.getState().tabs.find((item) => item.tabId === tab.tabId);
           if (current?.status === "connected") {

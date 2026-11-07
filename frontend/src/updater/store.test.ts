@@ -55,7 +55,7 @@ it("retries the downloaded installer after a launch failure", async () => {
     checked_at_ms: 1,
   };
   const error = { code: "UPDATE_INSTALL_FAILED", message: "cancelled", retryable: true };
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => { });
   vi.mocked(api.installUpdate)
     .mockRejectedValueOnce(error)
     .mockResolvedValueOnce({

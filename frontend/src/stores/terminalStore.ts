@@ -133,6 +133,37 @@ function generateId(): string {
  */
 const pendingTeardown = new Map<string, Promise<void>>();
 
+/**
+ * 连接代次：按标签记录当前连接身份。关闭、重连开始、断开都会递增，
+ * 异步操作在写入前必须复核自己捕获的代次，避免迟到结果/旧发送落到新连接。
+ * 放在模块级 Map（与 pendingTeardown、rdpPollers 同层），不进 store state、
+ * 不进共享 DTO；未经任何 action 的静态测试 fixture 缺省按 0 处理，无需复位点。
+ * 串口与 RDP 的 connectionId 恒为 null，同 cardId 重开只能靠这里区分。
+ */
+const connectionEpochs = new Map<string, number>();
+
+function currentConnectionEpoch(tabId: string): number {
+  return connectionEpochs.get(tabId) ?? 0;
+}
+
+function bumpConnectionEpoch(tabId: string): number {
+  const next = currentConnectionEpoch(tabId) + 1;
+  connectionEpochs.set(tabId, next);
+  return next;
+}
+
+function isCurrentConnectionEpoch(tabId: string, epoch: number): boolean {
+  return currentConnectionEpoch(tabId) === epoch;
+}
+
+/** 编码/异步等待期间目标连接已变化：本次发送主动取消，不写入新连接 */
+class StaleTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleTargetError";
+  }
+}
+
 /** 断线自动重连定时器：按标签 ID 记录，手动重连/关闭标签/连接成功时统一清理 */
 const autoReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -570,16 +601,36 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       throw new Error(`目标标签当前不可发送：${tab.sessionName}`);
     }
 
+    // 入口捕获连接代次与身份；串口用 cardId，其余用 connectionId。
+    const epoch = currentConnectionEpoch(tabId);
+    const capturedProtocol = tab.protocol;
+    const capturedConnectionId = tab.connectionId;
+    const capturedCardId = tab.cardId || tab.tabId;
+
     const { useSessionStore } = await import("./sessionStore");
     const encoding = useSessionStore
       .getState()
       .sessions.find((item) => item.id === tab.sessionId)?.encoding;
     // 编码失败/发送失败都向上抛出，由调用者决定如何提示；这里不吞错。
     const bytes = await encodeTextForSession(text, encoding);
-    if (tab.protocol === "serial") {
-      await sendSerial(tab.cardId || tab.tabId, Array.from(bytes));
+
+    // 动态 import 与非 UTF-8 编码都是真实 await：期间标签可能已关闭、重连，
+    // 或串口同 cardId 重开。写入前重新读取 live tab 并复核归属，旧操作直接拒绝。
+    const live = get().tabs.find((item) => item.tabId === tabId);
+    if (
+      !live ||
+      live.status !== "connected" ||
+      live.protocol !== capturedProtocol ||
+      !isCurrentConnectionEpoch(tabId, epoch) ||
+      (capturedProtocol !== "serial" && live.connectionId !== capturedConnectionId) ||
+      (capturedProtocol === "serial" && (live.cardId || live.tabId) !== capturedCardId)
+    ) {
+      throw new StaleTargetError("目标标签连接已变更，本次发送已取消");
+    }
+    if (live.protocol === "serial") {
+      await sendSerial(live.cardId || live.tabId, Array.from(bytes));
     } else {
-      await writeTerminal(tab.tabId, bytes);
+      await writeTerminal(live.tabId, bytes);
     }
   },
 
@@ -600,11 +651,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         );
 
     for (const tab of targets) {
+      const epoch = currentConnectionEpoch(tab.tabId);
       try {
         // 统一走按会话编码的单目标发送入口，不再各调用点直接 UTF-8 写 PTY
         await get().sendTextToTab(tab.tabId, payload);
       } catch (e) {
         console.warn(`sendCommandToTabs: 写入 ${tab.tabId} 失败`, e);
+        // 目标在发送期间已关闭/重连：旧失败不能打到新连接上
+        if (!isCurrentConnectionEpoch(tab.tabId, epoch)) continue;
         const message = formatFriendlyError(e);
         set((current) => ({
           tabs: current.tabs.map((t) => (t.tabId === tab.tabId ? { ...t, error: message } : t)),
@@ -655,6 +709,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (!rdpRestartable && tab.status === "connecting") return;
     if (!isRdp && tab.status === "connected") return;
 
+    // 第一个 await 之前同步领取代次：在途的旧发送与上一轮重连结果立即失效，
+    // 后续每个 await 都要复核「代次仍是本轮且标签仍存在」。
+    const generation = bumpConnectionEpoch(tabId);
+    const isCurrent = () =>
+      isCurrentConnectionEpoch(tabId, generation) &&
+      get().tabs.some((item) => item.tabId === tabId);
+
     // 手动/自动重连启动时取消尚未触发的下一次退避定时器
     clearAutoReconnectTimer(tabId);
 
@@ -662,11 +723,47 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // 只关闭 tab.rdpInfo 记录的 launch_id，不能按 session 误杀其他标签的实例。
     if (isRdp) {
       stopRdpPolling(tabId);
+      // 同步标记重启中：旧 launch_id 未更换前就不再显示 launched，
+      // RdpSessionView 的 busy 随之生效，同 tab 的第二次点击被上面的早退挡住。
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.tabId === tabId
+            ? {
+                ...t,
+                rdpPhase: "starting" as const,
+                status: "connecting" as TabStatus,
+                connectedAt: null,
+                error: undefined,
+              }
+            : t
+        ),
+      }));
       const previousLaunchId = tab.rdpInfo?.launch_id;
       if (previousLaunchId) {
-        await rdpClose(previousLaunchId).catch((e) => {
-          console.warn(`reconnectTab: 关闭旧远程桌面实例失败 ${previousLaunchId}`, e);
-        });
+        try {
+          await rdpClose(previousLaunchId);
+        } catch (e) {
+          // 关闭失败必须可见且可重试：不启动新实例，保留旧 launch_id，
+          // 让重试和 closeTab 都还能释放它，避免静默遗留孤立实例。
+          if (isCurrent()) {
+            const message = formatFriendlyError(e);
+            set((state) => ({
+              tabs: state.tabs.map((t) =>
+                t.tabId === tabId
+                  ? {
+                      ...t,
+                      status: "error" as TabStatus,
+                      rdpPhase: "failed" as const,
+                      rdpLaunchedAt: null,
+                      connectedAt: null,
+                      error: `关闭旧远程桌面实例失败：${message}；可点击重新唤起重试`,
+                    }
+                  : t
+              ),
+            }));
+          }
+          return;
+        }
       }
     }
 
@@ -674,6 +771,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // 订阅关系保留，重连成功后由 resumeSerialRead 原地恢复。
     if (tab.protocol === "serial") {
       const { pauseSerialRead, stopSerialSendTimer } = await import("./serialStore");
+      if (!isCurrent()) return;
       stopSerialSendTimer();
       pauseSerialRead(tab.cardId || tab.tabId);
     }
@@ -695,13 +793,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // 先等断线清理落盘，再释放旧 PTY，避免与新连接复用同一标签 ID 时互相踩踏。
     await pendingTeardown.get(tabId);
     await releaseTab(tabId, tab.connectionId);
-    if (!get().tabs.some((item) => item.tabId === tabId)) return;
+    if (!isCurrent()) return;
 
     // Windows 远程桌面：重新生成 .rdp 并唤起 mstsc.exe；启动成功仍不等于远端已连接。
     if (tab.protocol === "rdp") {
       try {
         const rdpInfo = await launchRdp(tab.sessionId);
-        if (!get().tabs.some((item) => item.tabId === tabId)) {
+        if (!isCurrent()) {
+          // 迟到或被替代的实例必须释放，不能写进标签状态
           await rdpClose(rdpInfo.launch_id).catch(() => {});
           return;
         }
@@ -723,6 +822,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         }));
         startRdpPolling(tabId, rdpInfo.launch_id);
       } catch (err: any) {
+        // 旧代次的失败不能覆盖新代次已经写入的状态
+        if (!isCurrent()) return;
         const message = formatFriendlyError(err);
         set((state) => ({
           tabs: state.tabs.map((t) =>
@@ -798,7 +899,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         // 设备异常时旧句柄可能仍处于打开状态；先释放再按原配置重开。
         await closeSerial(activeCardId).catch(() => {});
         await openSerial(activeCardId, serialConfig, false);
-        if (!get().tabs.some((item) => item.tabId === tabId)) {
+        if (!isCurrent()) {
           await closeSerial(activeCardId).catch(() => {});
           return;
         }
@@ -818,8 +919,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           ),
         }));
         const { resumeSerialRead } = await import("./serialStore");
+        if (!isCurrent()) return;
         resumeSerialRead(activeCardId);
       } catch (err: any) {
+        if (!isCurrent()) return;
         const message = formatFriendlyError(err);
         get().markDisconnected(tabId, message);
       }
@@ -829,7 +932,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     try {
       const requestId = "req_" + generateId();
       const res = await connectSession(requestId, tab.sessionId, overrides);
-      if (!get().tabs.some((item) => item.tabId === tabId)) {
+      if (!isCurrent()) {
         await closeConnection(res.connection_id).catch(() => {});
         return;
       }
@@ -851,6 +954,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       // 连接成功后自动启动该会话中标记为“自动启动”的端口转发规则
       await startAutoForwardRules(tab.sessionId, res.connection_id);
     } catch (err: any) {
+      if (!isCurrent()) return;
       const message = formatFriendlyError(err);
       get().markDisconnected(tabId, message);
     }
@@ -860,6 +964,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
 
+    // 旧连接身份终止：在途发送/重连结果立即失效
+    bumpConnectionEpoch(tabId);
     clearAutoReconnectTimer(tabId);
 
     // 远程桌面被动断开/退出时停止状态轮询，避免迟到的 connected 结果复活会话
@@ -963,6 +1069,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const tab = get().tabs.find((t) => t.tabId === tabId);
     if (!tab) return;
 
+    // 标签身份消失：在途发送与尚未完成的重连结果立即失效
+    bumpConnectionEpoch(tabId);
     clearAutoReconnectTimer(tabId);
     // 关闭标签先停掉该标签的状态轮询，防止标签移除后仍被迟到结果复活
     stopRdpPolling(tabId);

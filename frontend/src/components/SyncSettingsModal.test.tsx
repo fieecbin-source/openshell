@@ -5,11 +5,14 @@ import { SyncSettingsModal } from "./SyncSettingsModal";
 
 const mock = vi.hoisted(() => ({
   modalOpen: true, config: null as any, conflicts: [] as any[], resolvingConflictId: null as string | null, syncing: false, error: null,
-  setModalOpen: vi.fn(), loadConfig: vi.fn(), loadConflicts: vi.fn(), resolveConflict: vi.fn(), saveConfig: vi.fn(),
+  refreshError: null as string | null, refreshingViews: false,
+  setModalOpen: vi.fn(), loadConfig: vi.fn(), loadConflicts: vi.fn(), resolveConflict: vi.fn(), retryRefreshViews: vi.fn(), saveConfig: vi.fn(),
   register: vi.fn(), login: vi.fn(), logout: vi.fn(), clearLocalSyncData: vi.fn(),
   syncNow: vi.fn(), checkUpdates: vi.fn(),
 }));
-vi.mock("../stores/syncStore", () => ({ useSyncStore: () => mock }));
+vi.mock("../stores/syncStore", () => ({
+  useSyncStore: Object.assign(() => mock, { getState: () => mock }),
+}));
 vi.mock("./ui/Overlay", () => ({ Modal: ({ children, onClose }: any) => <div><button onClick={onClose}>close</button>{children}</div> }));
 vi.mock("./ui/GlassMaterial", () => ({ GlassMaterial: () => null }));
 
@@ -112,5 +115,61 @@ describe("sync login privacy", () => {
 
     expect(mock.resolveConflict).toHaveBeenCalledWith("conf_test_1", "remote");
     expect(container.textContent).toContain("已选择使用远端数据");
+  });
+
+  it("displays '操作已成功、刷新失败' and offers '重试刷新' button when resolve succeeds but refresh fails", async () => {
+    mock.config = {
+      server_url: "https://sync.example.com",
+      account_id: "acc_1",
+      device_id: "dev_1",
+      auto_sync: true,
+      last_sync_at: 1700000000000,
+      last_error: null,
+      conflict_count: 1,
+      is_logged_in: true,
+    };
+    mock.conflicts = [
+      {
+        id: "conf_test_refresh_fail",
+        record_id: "session_s07",
+        record_type: "session",
+        created_at: 1700000000000,
+        has_local_snapshot: true,
+      },
+    ];
+    mock.resolveConflict.mockImplementation(async () => {
+      mock.refreshError = "Failed to load snippets";
+    });
+    mock.retryRefreshViews.mockResolvedValue(undefined);
+
+    render();
+
+    const localBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("保留本地副本")
+    );
+    expect(localBtn).toBeTruthy();
+
+    await act(async () => {
+      localBtn!.click();
+    });
+
+    // 1. Resolve conflict was called once
+    expect(mock.resolveConflict).toHaveBeenCalledWith("conf_test_refresh_fail", "local");
+    // 2. Feedback and notice indicate success of commit, but refresh failure
+    expect(container.textContent).toContain("操作已成功、刷新失败");
+    expect(container.textContent).toContain("重试刷新");
+
+    // 3. Clicking "重试刷新" retries views without calling resolveConflict again
+    const retryBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("重试刷新")
+    );
+    expect(retryBtn).toBeTruthy();
+
+    await act(async () => {
+      retryBtn!.click();
+    });
+
+    expect(mock.retryRefreshViews).toHaveBeenCalledTimes(1);
+    expect(mock.resolveConflict).toHaveBeenCalledTimes(1); // Not called again!
   });
 });

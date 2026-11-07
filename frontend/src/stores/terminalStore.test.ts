@@ -464,3 +464,184 @@ it("sendCommandToTabs broadcasts with session encoding and surfaces per-target f
   expect(state.tabs.find((item) => item.tabId === "b-1")?.error).toBeTruthy();
   expect(state.tabs.find((item) => item.tabId === "b-2")?.error).toBeUndefined();
 });
+
+// Task6 S05/S06 竞态回归：先写红测复现，再做最小修复。
+const rdpRaceTab = (tabId: string, launchId = "L-old") =>
+  ({
+    ...tab,
+    tabId,
+    sessionId: "rdp-race-session",
+    protocol: "rdp",
+    connectionId: null,
+    status: "connecting",
+    rdpPhase: "launched",
+    rdpInfo: launchResult(launchId, "rdp-race-session"),
+    connectedAt: null,
+  }) as unknown as TerminalTab;
+
+const raceSession = (id: string, protocol = "ssh") =>
+  ({ id, name: "Race host", protocol, encoding: "gb18030", protocol_options_json: {} }) as unknown as Session;
+
+it("S05: two quick restarts during a delayed rdpClose must not create two instances", async () => {
+  useTerminalStore.setState({ tabs: [rdpRaceTab("rdp-race")], activeTabId: "rdp-race" });
+  let finishClose!: () => void;
+  vi.mocked(rdpClose).mockImplementationOnce(
+    () => new Promise<void>((resolve) => { finishClose = resolve; })
+  );
+  vi.mocked(launchRdp).mockResolvedValue(launchResult("L-new", "rdp-race-session"));
+
+  const first = useTerminalStore.getState().reconnectTab("rdp-race");
+  const second = useTerminalStore.getState().reconnectTab("rdp-race");
+  await vi.advanceTimersByTimeAsync(0);
+
+  // 第一次 await 之前必须已锁定本次重启：阶段不再是 launched，按钮 busy 生效
+  expect(findTab("rdp-race")?.rdpPhase).not.toBe("launched");
+  expect(rdpClose).toHaveBeenCalledTimes(1);
+  expect(launchRdp).not.toHaveBeenCalled();
+
+  finishClose();
+  await Promise.all([first, second]);
+
+  expect(rdpClose).toHaveBeenCalledWith("L-old");
+  expect(launchRdp).toHaveBeenCalledTimes(1);
+  expect(findTab("rdp-race")?.rdpInfo?.launch_id).toBe("L-new");
+});
+
+it("S05: an rdpClose failure is visible and retryable without launching a replacement", async () => {
+  useTerminalStore.setState({ tabs: [rdpRaceTab("rdp-close-fail")], activeTabId: "rdp-close-fail" });
+  vi.mocked(rdpClose).mockRejectedValueOnce(new Error("close denied"));
+  vi.mocked(launchRdp).mockResolvedValue(launchResult("L-new", "rdp-race-session"));
+
+  await useTerminalStore.getState().reconnectTab("rdp-close-fail");
+
+  expect(launchRdp).not.toHaveBeenCalled();
+  const failed = findTab("rdp-close-fail");
+  expect(failed?.status).toBe("error");
+  expect(failed?.rdpPhase).toBe("failed");
+  expect(failed?.error).toBeTruthy();
+
+  // 重试仍持有旧 launch_id：再次关闭旧实例后只启动一个新实例
+  await useTerminalStore.getState().reconnectTab("rdp-close-fail");
+  expect(rdpClose).toHaveBeenCalledTimes(2);
+  expect(launchRdp).toHaveBeenCalledTimes(1);
+  expect(findTab("rdp-close-fail")?.rdpInfo?.launch_id).toBe("L-new");
+});
+
+it("S05: a launch finishing after the tab was closed is released and never revives it", async () => {
+  useTerminalStore.setState({ tabs: [rdpRaceTab("rdp-late")], activeTabId: "rdp-late" });
+  let finishLaunch!: (value: any) => void;
+  vi.mocked(launchRdp).mockImplementationOnce(
+    () => new Promise((resolve) => { finishLaunch = resolve; })
+  );
+
+  const restarting = useTerminalStore.getState().reconnectTab("rdp-late");
+  await vi.advanceTimersByTimeAsync(0);
+  const closing = useTerminalStore.getState().closeTab("rdp-late");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(findTab("rdp-late")).toBeUndefined();
+
+  finishLaunch(launchResult("L-late-new", "rdp-race-session"));
+  await Promise.all([restarting, closing]);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(rdpClose).toHaveBeenCalledWith("L-late-new");
+  expect(findTab("rdp-late")).toBeUndefined();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("S05: restarting one RDP tab does not disturb another tab of the same session", async () => {
+  useTerminalStore.setState({
+    tabs: [rdpRaceTab("rdp-a", "L-a"), rdpRaceTab("rdp-b", "L-b")],
+    activeTabId: "rdp-a",
+  });
+  vi.mocked(launchRdp).mockResolvedValue(launchResult("L-a-new", "rdp-race-session"));
+
+  await useTerminalStore.getState().reconnectTab("rdp-a");
+
+  expect(rdpClose).toHaveBeenCalledWith("L-a");
+  expect(rdpClose).not.toHaveBeenCalledWith("L-b");
+  expect(findTab("rdp-a")?.rdpInfo?.launch_id).toBe("L-a-new");
+  expect(findTab("rdp-b")?.rdpInfo?.launch_id).toBe("L-b");
+});
+
+it("S06: rejects a pending send when the SSH connection changes during encoding", async () => {
+  useSessionStore.setState({ sessions: [raceSession("race-ssh")] });
+  useTerminalStore.setState({
+    tabs: [
+      { ...tab, tabId: "race-1", sessionId: "race-ssh", protocol: "ssh", status: "connected", connectionId: "old-conn" } as TerminalTab,
+    ],
+    activeTabId: "race-1",
+  });
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishEncode = resolve; })
+  );
+
+  const pending = useTerminalStore.getState().sendTextToTab("race-1", "中文");
+  await vi.advanceTimersByTimeAsync(0);
+  useTerminalStore.setState((state) => ({
+    tabs: state.tabs.map((t) => (t.tabId === "race-1" ? { ...t, connectionId: "new-conn" } : t)),
+  }));
+  finishEncode([0xc4, 0xe3]);
+
+  await expect(pending).rejects.toThrow();
+  expect(writeTerminal).not.toHaveBeenCalled();
+});
+
+it("S06: rejects a pending send when the tab is closed or reconnected during encoding", async () => {
+  useSessionStore.setState({ sessions: [raceSession("race-close")] });
+  useTerminalStore.setState({
+    tabs: [
+      { ...tab, tabId: "race-2", sessionId: "race-close", protocol: "ssh", status: "connected", connectionId: "conn-2" } as TerminalTab,
+    ],
+    activeTabId: "race-2",
+  });
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishEncode = resolve; })
+  );
+
+  const pending = useTerminalStore.getState().sendTextToTab("race-2", "中文");
+  await vi.advanceTimersByTimeAsync(0);
+  await useTerminalStore.getState().closeTab("race-2");
+  finishEncode([0xc4, 0xe3]);
+
+  await expect(pending).rejects.toThrow();
+  expect(writeTerminal).not.toHaveBeenCalled();
+});
+
+it("S06: rejects a pending send when the same serial card is reopened during encoding", async () => {
+  useSessionStore.setState({ sessions: [raceSession("race-serial", "serial")] });
+  useTerminalStore.setState({
+    tabs: [
+      {
+        ...tab,
+        tabId: "race-serial",
+        sessionId: "race-serial",
+        protocol: "serial",
+        cardId: "card-race",
+        connectionId: null,
+        status: "connected",
+        serialConfig,
+      } as TerminalTab,
+    ],
+    activeTabId: "race-serial",
+  });
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishEncode = resolve; })
+  );
+
+  const pending = useTerminalStore.getState().sendTextToTab("race-serial", "中文");
+  await vi.advanceTimersByTimeAsync(0);
+  // 真实链路：设备先断开（connected 态下 reconnectTab 本就早退），再按同一 cardId 重开
+  useTerminalStore.getState().markDisconnected("race-serial", "device reset");
+  const reconnecting = useTerminalStore.getState().reconnectTab("race-serial");
+  await vi.advanceTimersByTimeAsync(0);
+  finishEncode([0xc4, 0xe3]);
+
+  await expect(pending).rejects.toThrow();
+  await reconnecting;
+  expect(closeSerial).toHaveBeenCalledWith("card-race");
+  expect(openSerial).toHaveBeenCalledWith("card-race", serialConfig, false);
+  expect(sendSerial).not.toHaveBeenCalled();
+});

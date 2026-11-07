@@ -158,4 +158,33 @@ describe("snippetStore and Snippet logic", () => {
     expect(formatCommand("uptime", "insert")).toBe("uptime");
     expect(formatCommand("echo 123", "insert")).not.toContain("\n");
   });
+
+  it("loadSnippets rejects when snippetList IPC fails, keeping existing snippets and resetting loading", async () => {
+    const existing = [
+      {
+        id: "snip_existing",
+        group_id: null,
+        name: "Existing Snip",
+        kind: "snippet" as const,
+        body: "echo keep_me",
+        shortcut: null,
+        send_mode: "insert" as const,
+        sort_order: 0,
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+    ];
+    useSnippetStore.setState({ snippets: existing, loading: false });
+
+    vi.mocked(ipcModule.snippetList).mockRejectedValueOnce(new Error("IPC snippet list failure"));
+
+    await expect(useSnippetStore.getState().loadSnippets()).rejects.toThrow(
+      "IPC snippet list failure"
+    );
+
+    // snippets must not be cleared on failure
+    expect(useSnippetStore.getState().snippets).toEqual(existing);
+    expect(useSnippetStore.getState().loading).toBe(false);
+  });
 });

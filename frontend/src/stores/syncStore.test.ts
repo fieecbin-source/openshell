@@ -182,4 +182,32 @@ describe("useSyncStore", () => {
     expect(useSyncStore.getState().conflicts.length).toBe(1);
     expect(useSyncStore.getState().resolvingConflictId).toBeNull();
   });
+
+  it("should record refreshError when conflict resolution succeeds but view refresh fails, and allow retryRefreshViews without repeating resolution", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(undefined) // sync_resolve_conflict
+      .mockRejectedValueOnce(new Error("Refresh network failure")); // loadConflicts after resolve
+
+    await useSyncStore.getState().resolveConflict("conf_s07", "local");
+
+    expect(invoke).toHaveBeenCalledWith("sync_resolve_conflict", {
+      conflictId: "conf_s07",
+      choice: "local",
+    });
+    expect(useSyncStore.getState().resolvingConflictId).toBeNull();
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+
+    // Now retryRefreshViews succeeds
+    vi.mocked(invoke)
+      .mockResolvedValueOnce([]) // loadConflicts
+      .mockResolvedValueOnce({ is_logged_in: true, conflict_count: 0 }); // loadConfig
+
+    await useSyncStore.getState().retryRefreshViews();
+
+    expect(useSyncStore.getState().refreshError).toBeNull();
+    const resolveCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter((call) => call[0] === "sync_resolve_conflict");
+    expect(resolveCalls.length).toBe(1);
+  });
 });

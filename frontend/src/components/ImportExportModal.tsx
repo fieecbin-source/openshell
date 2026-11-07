@@ -112,6 +112,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
   const [restoreJsonText, setRestoreJsonText] = useState("");
   const [restoreBytes, setRestoreBytes] = useState<Uint8Array | null>(null);
   const [restorePassword, setRestorePassword] = useState("");
+  const [readingFile, setReadingFile] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
   const activeTokenRef = useRef<string | null>(null);
@@ -132,34 +135,50 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     };
   }, []);
 
-  const handleClose = () => {
+  const invalidatePendingOperations = () => {
     generationRef.current++;
     if (previewReport?.archive_token) {
       void discardArchiveToken(previewReport.archive_token);
     }
     setPreviewReport(null);
+    setLoading(false);
+    setReadingFile(false);
+  };
+
+  const handleClose = () => {
+    invalidatePendingOperations();
     onClose();
   };
 
   const switchTab = (tab: ImportTab) => {
-    generationRef.current++;
-    if (previewReport?.archive_token) {
-      void discardArchiveToken(previewReport.archive_token);
-    }
+    invalidatePendingOperations();
     setActiveTab(tab);
-    setPreviewReport(null);
     setCommittedWarnings([]);
     setErrorMsg(null);
     setSuccessMsg(null);
+    setRefreshError(null);
   };
 
   const handleStrategyChange = (next: ConflictStrategy) => {
-    generationRef.current++;
-    if (previewReport?.archive_token) {
-      void discardArchiveToken(previewReport.archive_token);
-    }
-    setPreviewReport(null);
+    invalidatePendingOperations();
     setStrategy(next);
+  };
+
+  const handleRefreshAfterCommit = async () => {
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      await Promise.all([
+        useSessionStore.getState().loadAll(),
+        useSnippetStore.getState().loadSnippets(),
+      ]);
+      setRefreshError(null);
+    } catch (refreshErr: any) {
+      console.warn("View refresh failed:", refreshErr);
+      setRefreshError(formatFriendlyError(refreshErr));
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handlePreview = async () => {
@@ -175,6 +194,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
+    setRefreshError(null);
     setCommittedWarnings([]);
     try {
       let report: ImportPreviewReport;
@@ -206,6 +226,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     const token = previewReport.archive_token;
     setLoading(true);
     setErrorMsg(null);
+    setRefreshError(null);
     try {
       const count = await importerCommit(previewReport.candidates, token);
       setCommittedWarnings(previewReport.warnings || []);
@@ -224,8 +245,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
           useSessionStore.getState().loadAll(),
           useSnippetStore.getState().loadSnippets(),
         ]);
-      } catch (refreshErr) {
+      } catch (refreshErr: any) {
         console.warn("Commit succeeded but view refresh failed:", refreshErr);
+        setRefreshError(formatFriendlyError(refreshErr));
       }
     } catch (e: any) {
       setErrorMsg(formatFriendlyError(e));
@@ -279,7 +301,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     e.target.value = "";
     if (!file) return;
 
-    generationRef.current++;
+    const currentGen = ++generationRef.current;
     if (previewReport?.archive_token) {
       void discardArchiveToken(previewReport.archive_token);
     }
@@ -287,21 +309,43 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     setSuccessMsg(null);
     setCommittedWarnings([]);
     setPreviewReport(null);
+    setLoading(false);
+    setReadingFile(true);
     setRestoreFileName(file.name);
     setRestoreJsonText("");
     setRestoreBytes(null);
+    setRestorePassword("");
 
     try {
       if (file.name.toLowerCase().endsWith(".osvault")) {
         const buffer = await file.arrayBuffer();
+        if (!mountedRef.current || generationRef.current !== currentGen) return;
         setRestoreBytes(new Uint8Array(buffer));
+        setRestoreJsonText("");
       } else {
-        setRestoreJsonText(await file.text());
+        const text = await file.text();
+        if (!mountedRef.current || generationRef.current !== currentGen) return;
+        setRestoreJsonText(text);
+        setRestoreBytes(null);
       }
     } catch (err) {
-      setErrorMsg(formatFriendlyError(err));
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setRestoreFileName("");
+        setRestoreJsonText("");
+        setRestoreBytes(null);
+        setErrorMsg(formatFriendlyError(err));
+      }
+    } finally {
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setReadingFile(false);
+      }
     }
   };
+
+  const isRestoreReady =
+    !readingFile &&
+    !!restoreFileName &&
+    (restoreBytes !== null || restoreJsonText.trim().length > 0);
 
   const handleRestorePreview = async () => {
     const isEncrypted = restoreBytes !== null;
@@ -322,6 +366,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
+    setRefreshError(null);
     setCommittedWarnings([]);
     try {
       const report = isEncrypted
@@ -463,6 +508,24 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
             </ul>
           </InlineNotice>
         )}
+        {refreshError && (
+          <InlineNotice
+            tone="warning"
+            title="操作已成功、刷新失败"
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={refreshing}
+                onClick={handleRefreshAfterCommit}
+              >
+                重试刷新
+              </Button>
+            }
+          >
+            {`数据已成功保存，但本地视图刷新失败（${refreshError}）。您可以点击重试刷新。`}
+          </InlineNotice>
+        )}
 
         {activeTab === "restore" ? (
           <div className="flex flex-col gap-3">
@@ -481,7 +544,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
                   浏览文件
                 </Button>
                 <span className="truncate text-os-xs text-ink-secondary">
-                  {restoreFileName || "尚未选择文件"}
+                  {readingFile ? `${restoreFileName} (读取中...)` : restoreFileName || "尚未选择文件"}
                 </span>
                 <input
                   ref={restoreInputRef}
@@ -520,10 +583,10 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
                 variant="primary"
                 size="sm"
                 onClick={handleRestorePreview}
-                loading={loading}
-                disabled={!restoreFileName}
+                loading={loading || readingFile}
+                disabled={!isRestoreReady || loading || readingFile}
               >
-                {loading ? "校验中..." : "校验并预览"}
+                {loading ? "校验中..." : readingFile ? "读取中..." : "校验并预览"}
               </Button>
             </div>
 

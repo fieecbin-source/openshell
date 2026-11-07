@@ -58,11 +58,14 @@ interface SyncStoreState {
   lastResult: SyncResult | null;
   updateInfo: UpdateManifest | null;
   error: string | null;
+  refreshError: string | null;
+  refreshingViews: boolean;
 
   setModalOpen: (open: boolean) => void;
   loadConfig: () => Promise<void>;
   loadConflicts: () => Promise<SyncConflict[]>;
   resolveConflict: (conflictId: string, choice: "local" | "remote") => Promise<void>;
+  retryRefreshViews: () => Promise<void>;
   saveConfig: (serverUrl: string | null, autoSync: boolean) => Promise<void>;
   register: (serverUrl: string, email: string, pass: string, invite?: string) => Promise<void>;
   login: (serverUrl: string, email: string, pass: string) => Promise<void>;
@@ -81,15 +84,17 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   lastResult: null,
   updateInfo: null,
   error: null,
+  refreshError: null,
+  refreshingViews: false,
 
-  setModalOpen: (open) => set({ modalOpen: open, error: null }),
+  setModalOpen: (open) => set({ modalOpen: open, error: null, refreshError: null }),
 
   loadConfig: async () => {
     try {
       const cfg = await invoke<SyncConfig>("sync_get_config");
       set({ config: cfg });
       if (cfg && cfg.conflict_count > 0) {
-        void get().loadConflicts().catch(() => {});
+        void get().loadConflicts().catch(() => { });
       }
     } catch (err: any) {
       console.error("Failed to load sync config:", err);
@@ -111,7 +116,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   resolveConflict: async (conflictId: string, choice: "local" | "remote") => {
     const { resolvingConflictId } = get();
     if (resolvingConflictId) return; // 执行中防重复
-    set({ resolvingConflictId: conflictId, error: null });
+    set({ resolvingConflictId: conflictId, error: null, refreshError: null });
     try {
       await syncResolveConflict(conflictId, choice);
     } catch (err: any) {
@@ -125,8 +130,25 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       await get().loadConflicts();
       await get().loadConfig();
       await refreshSyncedViews();
-    } catch (refreshErr) {
+    } catch (refreshErr: any) {
       console.warn("Sync conflict resolved but view refresh failed:", refreshErr);
+      set({ refreshError: formatFriendlyError(refreshErr) });
+    }
+  },
+
+  retryRefreshViews: async () => {
+    set({ refreshingViews: true });
+    try {
+      await get().loadConflicts();
+      await get().loadConfig();
+      await refreshSyncedViews();
+      set({ refreshError: null });
+    } catch (refreshErr: any) {
+      console.warn("Retry view refresh failed:", refreshErr);
+      set({ refreshError: formatFriendlyError(refreshErr) });
+      throw refreshErr;
+    } finally {
+      set({ refreshingViews: false });
     }
   },
 

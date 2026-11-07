@@ -6,7 +6,7 @@ import {
   teardownSerialSession,
   useSerialStore,
 } from "./serialStore";
-import { readSerial, sendSerial } from "../lib/ipc";
+import { readSerial, sendSerial, terminalEncode } from "../lib/ipc";
 
 vi.mock("../lib/ipc", () => ({
   listSerialPorts: vi.fn(),
@@ -158,4 +158,38 @@ it("tears down timer, polling, subscribers and send error together", async () =>
 
   // 视图卸载时的兜底取消不应影响已清空的 teardown 状态
   unsubscribe();
+});
+
+it("S06: does not write to a reopened card when encoding finishes after a reconnect", async () => {
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishEncode = resolve; })
+  );
+
+  const pending = useSerialStore.getState().sendCurrent("card-reopen", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+  // 断开后按同一个 cardId 重开：pause/resume 是重连路径的既有动作，所有标识都不变
+  pauseSerialRead("card-reopen");
+  resumeSerialRead("card-reopen");
+  finishEncode([0x41]);
+
+  await expect(pending).rejects.toThrow();
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("S06: does not write a snippet when the port is torn down during encoding", async () => {
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishEncode = resolve; })
+  );
+  useSerialStore.getState().addSnippet("probe", "AT", false);
+  const snippet = useSerialStore.getState().snippets.at(-1)!;
+
+  const pending = useSerialStore.getState().sendSnippet("card-teardown-race", snippet, "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+  teardownSerialSession("card-teardown-race");
+  finishEncode([0x41]);
+
+  await expect(pending).rejects.toThrow();
+  expect(write).not.toHaveBeenCalled();
 });

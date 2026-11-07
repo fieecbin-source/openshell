@@ -223,4 +223,28 @@ describe("SnippetBar (R05, R09)", () => {
     expect(sendSerial).toHaveBeenCalledWith("card_serial_99", [0xc4, 0xe3, 0xba, 0xc3]);
     expect(writeTerminal).not.toHaveBeenCalled();
   });
+
+  it("handles snippet load failure gracefully without unhandled rejection and preserves existing snippets", async () => {
+    const existingSnippet = makeSnippet({
+      id: "snip_existing_bar",
+      name: "Existing Command",
+      body: "echo hello",
+      send_mode: "execute",
+    });
+
+    const failingLoadSnippets = vi.fn().mockRejectedValue(new Error("Snippet backend read error"));
+    useSnippetStore.setState({
+      snippets: [existingSnippet],
+      loadSnippets: failingLoadSnippets,
+    });
+
+    await act(async () => {
+      root.render(<SnippetBar activeTabId="active-terminal" />);
+    });
+
+    expect(failingLoadSnippets).toHaveBeenCalled();
+    // Existing snippets must not be wiped out
+    const button = container.querySelector<HTMLButtonElement>("[aria-label='Existing Command']");
+    expect(button).toBeTruthy();
+  });
 });

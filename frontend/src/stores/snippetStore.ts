@@ -40,6 +40,7 @@ export const useSnippetStore = create<SnippetState>((set, get) => ({
     } catch (e) {
       console.warn("load snippets error", e);
       set({ loading: false });
+      throw e;
     }
   },
 
@@ -50,7 +51,11 @@ export const useSnippetStore = create<SnippetState>((set, get) => ({
       body: input.body ?? null,
     };
     const snip = await snippetCreate(normalized);
-    await get().loadSnippets(get().activeGroupId || undefined);
+    try {
+      await get().loadSnippets(get().activeGroupId || undefined);
+    } catch (e) {
+      console.warn("createSnippet succeeded but reload failed:", e);
+    }
     return snip;
   },
 
@@ -61,18 +66,30 @@ export const useSnippetStore = create<SnippetState>((set, get) => ({
       body: input.body ?? null,
     };
     const snip = await snippetUpdate(id, normalized);
-    await get().loadSnippets(get().activeGroupId || undefined);
+    try {
+      await get().loadSnippets(get().activeGroupId || undefined);
+    } catch (e) {
+      console.warn("updateSnippet succeeded but reload failed:", e);
+    }
     return snip;
   },
 
   deleteSnippet: async (id: string) => {
     await snippetDelete(id);
-    await get().loadSnippets(get().activeGroupId || undefined);
+    try {
+      await get().loadSnippets(get().activeGroupId || undefined);
+    } catch (e) {
+      console.warn("deleteSnippet succeeded but reload failed:", e);
+    }
   },
 
   setActiveGroupId: (activeGroupId: string | null) => {
     set({ activeGroupId });
-    get().loadSnippets(activeGroupId || undefined);
+    void get()
+      .loadSnippets(activeGroupId || undefined)
+      .catch((e) => {
+        console.warn("setActiveGroupId reload failed:", e);
+      });
   },
 
   setSearchQuery: (searchQuery: string) => set({ searchQuery }),

@@ -1092,7 +1092,16 @@ pub fn apply_remote_records(
 pub fn apply_remote_records_with_conflicts(
     store: &Store,
     records: &[LocalSyncRecord],
+    conflicts: Vec<ConflictBackupInput>,
+) -> DomainResult<ApplySummary> {
+    apply_remote_batch(store, records, conflicts, None)
+}
+
+pub(crate) fn apply_remote_batch(
+    store: &Store,
+    records: &[LocalSyncRecord],
     mut conflicts: Vec<ConflictBackupInput>,
+    cursor: Option<(&str, &str, u64)>,
 ) -> DomainResult<ApplySummary> {
     for record in records {
         validate_remote_record(record)?;
@@ -1158,6 +1167,10 @@ pub fn apply_remote_records_with_conflicts(
             backup_conflict_in_transaction(&tx, conflict)?;
         }
 
+        if let Some((vault, url, cursor)) = cursor {
+            tx.execute("INSERT INTO sync_meta(vault_id,server_url,last_cursor,last_pull_at,sync_state) VALUES (?1,?2,?3,?4,'idle') ON CONFLICT(vault_id) DO UPDATE SET last_cursor=excluded.last_cursor,last_pull_at=excluded.last_pull_at",
+                params![vault,url,cursor,now_ms()]).map_err(db_error)?;
+        }
         tx.commit().map_err(db_error)?;
         Ok(summary)
     })

@@ -52,226 +52,6 @@ impl Drop for NativeSerialBackend {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn close_waits_for_worker_to_release_device() {
-        let mut backend = NativeSerialBackend::new();
-        backend.is_open.store(true, Ordering::SeqCst);
-        let open = backend.is_open.clone();
-        let (released_tx, released_rx) = std::sync::mpsc::channel();
-        backend.worker = Some(std::thread::spawn(move || {
-            while open.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-            released_tx.send(()).unwrap();
-        }));
-        backend.close().await.unwrap();
-        assert!(
-            released_rx.try_recv().is_ok(),
-            "close returned before the device worker exited"
-        );
-        assert!(backend.worker.is_none());
-    }
-
-    #[tokio::test]
-    async fn unsupported_parameters_are_not_silently_replaced() {
-        for (parity, stop_bits) in [
-            (Parity::Mark, StopBits::One),
-            (Parity::Space, StopBits::One),
-            (Parity::None, StopBits::OnePointFive),
-        ] {
-            let mut backend = NativeSerialBackend::new();
-            let config = SerialProfileConfig {
-                port_name: "openshell-nonexistent-serial-port".into(),
-                parity,
-                stop_bits,
-                ..Default::default()
-            };
-            assert!(matches!(
-                backend.open(&config).await,
-                Err(SerialError::InvalidConfiguration(_))
-            ));
-        }
-    }
-
-    #[tokio::test]
-    async fn idle_and_queued_data_are_distinct_from_driver_failure() {
-        let mut backend = NativeSerialBackend::new();
-        backend.is_open.store(true, Ordering::SeqCst);
-        let (tx, rx) = mpsc::channel(4);
-        backend.rx_receiver = Some(rx);
-        let mut bytes = [0; 2];
-        assert_eq!(backend.read(&mut bytes).await.unwrap(), 0);
-        tx.send(Ok(vec![1, 2, 3])).await.unwrap();
-        tx.send(Err(SerialError::ReadError(
-            "synthetic driver disconnect".into(),
-        )))
-        .await
-        .unwrap();
-        backend.is_open.store(false, Ordering::SeqCst);
-        drop(tx);
-        assert_eq!(backend.read(&mut bytes).await.unwrap(), 2);
-        assert_eq!(bytes, [1, 2]);
-        assert_eq!(backend.read(&mut bytes).await.unwrap(), 1);
-        assert_eq!(bytes[0], 3);
-        assert!(
-            matches!(backend.read(&mut bytes).await, Err(SerialError::ReadError(message)) if message == "synthetic driver disconnect")
-        );
-        assert!(matches!(
-            backend.read(&mut bytes).await,
-            Err(SerialError::DeviceDisconnected)
-        ));
-        assert!(matches!(
-            backend.write(b"x").await,
-            Err(SerialError::DeviceDisconnected)
-        ));
-    }
-
-    /// 可控假设备：按顺序吐出预置字节，并记录被写入的内容。
-    struct FakeDevice {
-        chunks: Vec<Vec<u8>>,
-        written: Arc<std::sync::Mutex<Vec<u8>>>,
-        dtr: bool,
-    }
-
-    impl SerialDevice for FakeDevice {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let Some(chunk) = self.chunks.first().cloned() else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "synthetic idle",
-                ));
-            };
-            assert!(
-                chunk.len() <= buf.len(),
-                "test chunk must fit the read buffer"
-            );
-            buf[..chunk.len()].copy_from_slice(&chunk);
-            self.chunks.remove(0);
-            Ok(chunk.len())
-        }
-        fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
-            self.written.lock().unwrap().extend_from_slice(data);
-            Ok(())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-        fn set_dtr(&mut self, level: bool) -> serialport::Result<()> {
-            self.dtr = level;
-            Ok(())
-        }
-        fn set_rts(&mut self, _level: bool) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn set_baud(&mut self, _baud: u32) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn clear_to_send(&mut self) -> serialport::Result<bool> {
-            Ok(true)
-        }
-        fn data_set_ready(&mut self) -> serialport::Result<bool> {
-            Ok(true)
-        }
-        fn ring_indicator(&mut self) -> serialport::Result<bool> {
-            Ok(false)
-        }
-        fn carrier_detect(&mut self) -> serialport::Result<bool> {
-            Ok(true)
-        }
-    }
-
-    #[tokio::test]
-    async fn full_rx_queue_still_completes_control_writes_and_close() {
-        let (rx_tx, mut rx_rx) = mpsc::channel::<SerialResult<Vec<u8>>>(1);
-        // 容量 1 的 RX 队列先塞满：旧实现在这里 blocking_send 卡死整条 worker。
-        rx_tx.try_send(Ok(vec![0xAA])).unwrap();
-        let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<ControlMsg>(4);
-        let is_open = Arc::new(AtomicBool::new(true));
-        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let device = FakeDevice {
-            chunks: vec![vec![1u8; 4096], vec![2u8; 1024]],
-            written: written.clone(),
-            dtr: false,
-        };
-        let flag = is_open.clone();
-        let worker = std::thread::spawn(move || {
-            let mut device = device;
-            run_worker(&mut device, &mut ctrl_rx, &rx_tx, &flag);
-        });
-
-        // 队列满且设备仍有数据时，write 仍必须在有界时间内返回。
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ctrl_tx
-            .send(ControlMsg::Write(vec![9, 9], resp_tx))
-            .await
-            .unwrap();
-        let written_len = tokio::time::timeout(Duration::from_secs(2), resp_rx)
-            .await
-            .expect("write was blocked by a full RX queue")
-            .expect("worker dropped the write response")
-            .expect("write failed");
-        assert_eq!(written_len, 2);
-        assert_eq!(written.lock().unwrap().as_slice(), &[9, 9]);
-
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ctrl_tx.send(ControlMsg::GetModem(resp_tx)).await.unwrap();
-        let modem = tokio::time::timeout(Duration::from_secs(2), resp_rx)
-            .await
-            .expect("modem status was blocked by a full RX queue")
-            .expect("worker dropped the modem response")
-            .expect("modem status failed");
-        assert!(modem.cts);
-
-        // 消费队列后，被反压的字节必须完整、按序到达。
-        assert_eq!(rx_rx.recv().await.unwrap().unwrap(), vec![0xAA]);
-        assert_eq!(rx_rx.recv().await.unwrap().unwrap(), vec![1u8; 4096]);
-        assert_eq!(rx_rx.recv().await.unwrap().unwrap(), vec![2u8; 1024]);
-
-        is_open.store(false, Ordering::SeqCst);
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            tokio::task::spawn_blocking(move || worker.join().unwrap()),
-        )
-        .await
-        .expect("worker did not observe close while the RX queue was full")
-        .expect("worker thread panicked");
-        assert!(!is_open.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn closing_while_backpressured_stops_the_worker() {
-        let (rx_tx, _rx_rx) = mpsc::channel::<SerialResult<Vec<u8>>>(1);
-        rx_tx.try_send(Ok(vec![1])).unwrap();
-        let (_ctrl_tx, mut ctrl_rx) = mpsc::channel::<ControlMsg>(4);
-        let is_open = Arc::new(AtomicBool::new(true));
-        let device = FakeDevice {
-            chunks: vec![vec![7u8; 1024]],
-            written: Arc::new(std::sync::Mutex::new(Vec::new())),
-            dtr: true,
-        };
-        let flag = is_open.clone();
-        let worker = std::thread::spawn(move || {
-            let mut device = device;
-            run_worker(&mut device, &mut ctrl_rx, &rx_tx, &flag);
-        });
-        std::thread::sleep(Duration::from_millis(30));
-        is_open.store(false, Ordering::SeqCst);
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            tokio::task::spawn_blocking(move || worker.join().unwrap()),
-        )
-        .await
-        .expect("close did not interrupt a backpressured worker")
-        .expect("worker thread panicked");
-        assert!(!is_open.load(Ordering::SeqCst));
-    }
-}
-
 fn map_data_bits(bits: DataBits) -> serialport::DataBits {
     match bits {
         DataBits::Five => serialport::DataBits::Five,
@@ -629,5 +409,225 @@ impl SerialBackend for NativeSerialBackend {
 
     fn is_open(&self) -> bool {
         self.is_open.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn close_waits_for_worker_to_release_device() {
+        let mut backend = NativeSerialBackend::new();
+        backend.is_open.store(true, Ordering::SeqCst);
+        let open = backend.is_open.clone();
+        let (released_tx, released_rx) = std::sync::mpsc::channel();
+        backend.worker = Some(std::thread::spawn(move || {
+            while open.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            released_tx.send(()).unwrap();
+        }));
+        backend.close().await.unwrap();
+        assert!(
+            released_rx.try_recv().is_ok(),
+            "close returned before the device worker exited"
+        );
+        assert!(backend.worker.is_none());
+    }
+
+    #[tokio::test]
+    async fn unsupported_parameters_are_not_silently_replaced() {
+        for (parity, stop_bits) in [
+            (Parity::Mark, StopBits::One),
+            (Parity::Space, StopBits::One),
+            (Parity::None, StopBits::OnePointFive),
+        ] {
+            let mut backend = NativeSerialBackend::new();
+            let config = SerialProfileConfig {
+                port_name: "openshell-nonexistent-serial-port".into(),
+                parity,
+                stop_bits,
+                ..Default::default()
+            };
+            assert!(matches!(
+                backend.open(&config).await,
+                Err(SerialError::InvalidConfiguration(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_and_queued_data_are_distinct_from_driver_failure() {
+        let mut backend = NativeSerialBackend::new();
+        backend.is_open.store(true, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel(4);
+        backend.rx_receiver = Some(rx);
+        let mut bytes = [0; 2];
+        assert_eq!(backend.read(&mut bytes).await.unwrap(), 0);
+        tx.send(Ok(vec![1, 2, 3])).await.unwrap();
+        tx.send(Err(SerialError::ReadError(
+            "synthetic driver disconnect".into(),
+        )))
+        .await
+        .unwrap();
+        backend.is_open.store(false, Ordering::SeqCst);
+        drop(tx);
+        assert_eq!(backend.read(&mut bytes).await.unwrap(), 2);
+        assert_eq!(bytes, [1, 2]);
+        assert_eq!(backend.read(&mut bytes).await.unwrap(), 1);
+        assert_eq!(bytes[0], 3);
+        assert!(
+            matches!(backend.read(&mut bytes).await, Err(SerialError::ReadError(message)) if message == "synthetic driver disconnect")
+        );
+        assert!(matches!(
+            backend.read(&mut bytes).await,
+            Err(SerialError::DeviceDisconnected)
+        ));
+        assert!(matches!(
+            backend.write(b"x").await,
+            Err(SerialError::DeviceDisconnected)
+        ));
+    }
+
+    /// 可控假设备：按顺序吐出预置字节，并记录被写入的内容。
+    struct FakeDevice {
+        chunks: Vec<Vec<u8>>,
+        written: Arc<std::sync::Mutex<Vec<u8>>>,
+        dtr: bool,
+    }
+
+    impl SerialDevice for FakeDevice {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some(chunk) = self.chunks.first().cloned() else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "synthetic idle",
+                ));
+            };
+            assert!(
+                chunk.len() <= buf.len(),
+                "test chunk must fit the read buffer"
+            );
+            buf[..chunk.len()].copy_from_slice(&chunk);
+            self.chunks.remove(0);
+            Ok(chunk.len())
+        }
+        fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
+            self.written.lock().unwrap().extend_from_slice(data);
+            Ok(())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn set_dtr(&mut self, level: bool) -> serialport::Result<()> {
+            self.dtr = level;
+            Ok(())
+        }
+        fn set_rts(&mut self, _level: bool) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_baud(&mut self, _baud: u32) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn clear_to_send(&mut self) -> serialport::Result<bool> {
+            Ok(true)
+        }
+        fn data_set_ready(&mut self) -> serialport::Result<bool> {
+            Ok(true)
+        }
+        fn ring_indicator(&mut self) -> serialport::Result<bool> {
+            Ok(false)
+        }
+        fn carrier_detect(&mut self) -> serialport::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn full_rx_queue_still_completes_control_writes_and_close() {
+        let (rx_tx, mut rx_rx) = mpsc::channel::<SerialResult<Vec<u8>>>(1);
+        // 容量 1 的 RX 队列先塞满：旧实现在这里 blocking_send 卡死整条 worker。
+        rx_tx.try_send(Ok(vec![0xAA])).unwrap();
+        let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<ControlMsg>(4);
+        let is_open = Arc::new(AtomicBool::new(true));
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let device = FakeDevice {
+            chunks: vec![vec![1u8; 4096], vec![2u8; 1024]],
+            written: written.clone(),
+            dtr: false,
+        };
+        let flag = is_open.clone();
+        let worker = std::thread::spawn(move || {
+            let mut device = device;
+            run_worker(&mut device, &mut ctrl_rx, &rx_tx, &flag);
+        });
+
+        // 队列满且设备仍有数据时，write 仍必须在有界时间内返回。
+        let (resp_tx, resp_rx) = oneshot::channel();
+        ctrl_tx
+            .send(ControlMsg::Write(vec![9, 9], resp_tx))
+            .await
+            .unwrap();
+        let written_len = tokio::time::timeout(Duration::from_secs(2), resp_rx)
+            .await
+            .expect("write was blocked by a full RX queue")
+            .expect("worker dropped the write response")
+            .expect("write failed");
+        assert_eq!(written_len, 2);
+        assert_eq!(written.lock().unwrap().as_slice(), &[9, 9]);
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        ctrl_tx.send(ControlMsg::GetModem(resp_tx)).await.unwrap();
+        let modem = tokio::time::timeout(Duration::from_secs(2), resp_rx)
+            .await
+            .expect("modem status was blocked by a full RX queue")
+            .expect("worker dropped the modem response")
+            .expect("modem status failed");
+        assert!(modem.cts);
+
+        // 消费队列后，被反压的字节必须完整、按序到达。
+        assert_eq!(rx_rx.recv().await.unwrap().unwrap(), vec![0xAA]);
+        assert_eq!(rx_rx.recv().await.unwrap().unwrap(), vec![1u8; 4096]);
+        assert_eq!(rx_rx.recv().await.unwrap().unwrap(), vec![2u8; 1024]);
+
+        is_open.store(false, Ordering::SeqCst);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || worker.join().unwrap()),
+        )
+        .await
+        .expect("worker did not observe close while the RX queue was full")
+        .expect("worker thread panicked");
+        assert!(!is_open.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn closing_while_backpressured_stops_the_worker() {
+        let (rx_tx, _rx_rx) = mpsc::channel::<SerialResult<Vec<u8>>>(1);
+        rx_tx.try_send(Ok(vec![1])).unwrap();
+        let (_ctrl_tx, mut ctrl_rx) = mpsc::channel::<ControlMsg>(4);
+        let is_open = Arc::new(AtomicBool::new(true));
+        let device = FakeDevice {
+            chunks: vec![vec![7u8; 1024]],
+            written: Arc::new(std::sync::Mutex::new(Vec::new())),
+            dtr: true,
+        };
+        let flag = is_open.clone();
+        let worker = std::thread::spawn(move || {
+            let mut device = device;
+            run_worker(&mut device, &mut ctrl_rx, &rx_tx, &flag);
+        });
+        std::thread::sleep(Duration::from_millis(30));
+        is_open.store(false, Ordering::SeqCst);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || worker.join().unwrap()),
+        )
+        .await
+        .expect("close did not interrupt a backpressured worker")
+        .expect("worker thread panicked");
+        assert!(!is_open.load(Ordering::SeqCst));
     }
 }

@@ -35,10 +35,13 @@ export const SyncSettingsModal: React.FC = () => {
     syncing,
     modalOpen,
     error,
+    refreshError,
+    refreshingViews,
     setModalOpen,
     loadConfig,
     loadConflicts,
     resolveConflict,
+    retryRefreshViews,
     saveConfig,
     register,
     login,
@@ -130,7 +133,13 @@ export const SyncSettingsModal: React.FC = () => {
     }
   };
 
-  const feedbackFailed = syncFeedback?.startsWith("同步失败");
+  const feedbackTone = syncFeedback?.startsWith("操作已成功、刷新失败")
+    ? "warning"
+    : (syncFeedback?.startsWith("同步失败") ||
+       syncFeedback?.startsWith("解决冲突失败") ||
+       syncFeedback?.startsWith("刷新失败"))
+    ? "danger"
+    : "success";
 
   return (
     <Modal
@@ -149,8 +158,34 @@ export const SyncSettingsModal: React.FC = () => {
         )}
 
         {syncFeedback && (
-          <InlineNotice tone={feedbackFailed ? "danger" : "success"} onDismiss={() => setSyncFeedback(null)}>
+          <InlineNotice tone={feedbackTone} onDismiss={() => setSyncFeedback(null)}>
             {syncFeedback}
+          </InlineNotice>
+        )}
+
+        {refreshError && (
+          <InlineNotice
+            tone="warning"
+            title="操作已成功、刷新失败"
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={refreshingViews}
+                onClick={async () => {
+                  try {
+                    await retryRefreshViews();
+                    setSyncFeedback("刷新成功");
+                  } catch (e: any) {
+                    setSyncFeedback(`刷新失败: ${formatFriendlyError(e)}`);
+                  }
+                }}
+              >
+                重试刷新
+              </Button>
+            }
+          >
+            {`冲突解决已提交，但界面刷新失败（${refreshError}）。您可以点击重试刷新，无需重新提交冲突解决。`}
           </InlineNotice>
         )}
 
@@ -223,7 +258,12 @@ export const SyncSettingsModal: React.FC = () => {
                           onClick={async () => {
                             try {
                               await resolveConflict(c.id, "local");
-                              setSyncFeedback("已选择保留本地副本");
+                              const storeRefreshErr = useSyncStore.getState().refreshError;
+                              if (storeRefreshErr) {
+                                setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
+                              } else {
+                                setSyncFeedback("已选择保留本地副本");
+                              }
                             } catch (e: any) {
                               setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
                             }
@@ -239,7 +279,12 @@ export const SyncSettingsModal: React.FC = () => {
                           onClick={async () => {
                             try {
                               await resolveConflict(c.id, "remote");
-                              setSyncFeedback("已选择使用远端数据");
+                              const storeRefreshErr = useSyncStore.getState().refreshError;
+                              if (storeRefreshErr) {
+                                setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
+                              } else {
+                                setSyncFeedback("已选择使用远端数据");
+                              }
                             } catch (e: any) {
                               setSyncFeedback(`解决冲突失败: ${formatFriendlyError(e)}`);
                             }
