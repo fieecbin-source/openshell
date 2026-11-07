@@ -13,6 +13,8 @@ import {
 } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 
+let loadGeneration = 0;
+
 interface SessionState {
   sessions: Session[];
   groups: Group[];
@@ -21,7 +23,7 @@ interface SessionState {
   isLoading: boolean;
   error: string | null;
 
-  loadAll: () => Promise<void>;
+  loadAll: (options?: { throwOnError?: boolean }) => Promise<void>;
   createSession: (input: SessionInput) => Promise<Session>;
   updateSession: (id: string, patch: SessionPatch) => Promise<Session>;
   deleteSession: (id: string) => Promise<void>;
@@ -41,16 +43,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isLoading: false,
   error: null,
 
-  loadAll: async () => {
+  loadAll: async (options?: { throwOnError?: boolean }) => {
+    const generation = ++loadGeneration;
     set({ isLoading: true, error: null });
     try {
       const [sessions, groups] = await Promise.all([
         listSessions({ query: get().searchQuery || undefined }),
         listGroups(),
       ]);
-      set({ sessions, groups, isLoading: false });
+      if (generation === loadGeneration) set({ sessions, groups, isLoading: false, error: null });
     } catch (err: any) {
-      set({ error: formatFriendlyError(err), isLoading: false });
+      const friendly = formatFriendlyError(err);
+      if (generation === loadGeneration) set({ error: friendly, isLoading: false });
+      if (options?.throwOnError) {
+        throw err;
+      }
     }
   },
 
@@ -101,6 +108,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   selectSession: (id) => set({ selectedSessionId: id }),
   setSearchQuery: (searchQuery) => {
     set({ searchQuery });
-    get().loadAll();
+    void get().loadAll().catch((e) => {
+      console.warn("setSearchQuery reload failed:", e);
+    });
   },
 }));
