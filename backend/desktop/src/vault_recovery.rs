@@ -197,7 +197,7 @@ pub fn prompt_reentries(_items: &[LegacyRecoveryItem]) -> DomainResult<RecoveryD
 mod tests {
     use super::*;
     use openshell_core_domain::{AppPaths, PortForwardId};
-    use openshell_store::Store;
+    use openshell_store::{Store, VaultRepo};
     use openshell_vault::KdfParams;
     use std::cell::{Cell, RefCell};
     use std::path::Path;
@@ -235,6 +235,34 @@ mod tests {
         }
         drop(app);
         dir
+    }
+
+    /// Task8 T7-02：未初始化旧库（vault 表为空）的可注入编排 fixture。
+    /// 故意不调用 `vault.init()`，模拟升级前尚未创建保险库的旧数据目录。
+    fn uninitialized_profile(with_broken_rule: bool) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let app = AppServices::new(dir.path().to_path_buf()).unwrap();
+        if with_broken_rule {
+            let id = PortForwardId::new().to_string();
+            app.store
+                .with_conn(|conn| {
+                    conn.execute(
+                        "INSERT INTO port_forward(id,name,type,bind_host,bind_port,socks_password_ref,created_at,updated_at) \
+                         VALUES(?1,'legacy','dynamic','127.0.0.1',1080,?2,1,1)",
+                        [id.as_str(), BAD_REF],
+                    )
+                    .unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        drop(app);
+        dir
+    }
+
+    fn vault_is_uninitialized(root: &Path) -> bool {
+        let store = Store::open(&AppPaths::new(root.to_path_buf()).db_path).unwrap();
+        VaultRepo::new(store).load().unwrap().is_none()
     }
 
     fn assert_original_reference_untouched(root: &Path) {
@@ -456,5 +484,91 @@ mod tests {
             services.store.schema_version().unwrap(),
             openshell_store::SCHEMA_VERSION
         );
+    }
+
+    /// Task8 T7-02：未初始化旧库经可注入编排取消后，不得创建 vault 或固定第一次主密码。
+    #[test]
+    fn uninitialized_recovery_cancel_keeps_vault_empty_and_accepts_a_new_master() {
+        let dir = uninitialized_profile(true);
+        let root = dir.path().to_path_buf();
+        let first = "synthetic-first-desktop-master";
+        let second = "synthetic-second-desktop-master";
+        assert!(vault_is_uninitialized(&root));
+
+        let cancelled = recover_with_reentry(
+            root.clone(),
+            || Ok(Zeroizing::new(first.to_owned())),
+            |items| {
+                assert_eq!(items.len(), 1);
+                Ok(RecoveryDecision::Cancel)
+            },
+        );
+        assert!(cancelled.is_err());
+        assert!(
+            vault_is_uninitialized(&root),
+            "检查/取消不得创建 vault 记录或绑定第一次口令"
+        );
+        assert_original_reference_untouched(&root);
+
+        let services = recover_with_reentry(
+            root.clone(),
+            || Ok(Zeroizing::new(second.to_owned())),
+            |items| {
+                assert_eq!(items.len(), 1);
+                Ok(RecoveryDecision::Apply(
+                    items
+                        .iter()
+                        .map(|item| LegacyRecoveryEntry {
+                            rule_id: item.rule_id.clone(),
+                            password: Zeroizing::new("synthetic-desktop-second-try".to_owned()),
+                        })
+                        .collect(),
+                ))
+            },
+        )
+        .expect("取消后换新主密码重试必须成功");
+        assert!(
+            services.vault.unlock(Some(first), false).is_err(),
+            "第一次口令不得被绑定"
+        );
+        services.vault.unlock(Some(second), false).unwrap();
+        let reference = services
+            .store
+            .with_conn(|conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT socks_password_ref FROM port_forward WHERE name='legacy'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap())
+            })
+            .unwrap();
+        assert_eq!(
+            services
+                .network_secrets
+                .resolve(&reference, "socks_password")
+                .unwrap()
+                .as_str(),
+            "synthetic-desktop-second-try"
+        );
+    }
+
+    /// Task8 T7-02：未初始化旧库的部分失败补录必须整事务回滚，不留下已绑定主密码。
+    #[test]
+    fn uninitialized_recovery_failed_reentry_leaves_no_vault_or_secret() {
+        let dir = uninitialized_profile(true);
+        let root = dir.path().to_path_buf();
+        let result = recover_with_reentry(
+            root.clone(),
+            || Ok(Zeroizing::new(MASTER.to_owned())),
+            |_| Ok(RecoveryDecision::Apply(Vec::new())),
+        );
+        assert!(result.is_err());
+        assert!(
+            vault_is_uninitialized(&root),
+            "失败补录不得持久化 vault 或主密码绑定"
+        );
+        assert_original_reference_untouched(&root);
     }
 }

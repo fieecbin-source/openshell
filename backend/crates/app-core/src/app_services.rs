@@ -8,7 +8,9 @@ use crate::session_service::SessionService;
 use crate::sync_service::SyncService;
 use crate::terminal_router::TerminalRouter;
 use crate::vault_service::VaultService;
-use openshell_core_domain::{AppPaths, ConnectionId, DomainError, DomainResult, ErrorCode};
+use openshell_core_domain::{
+    AppPaths, ConnectionId, DomainError, DomainResult, ErrorCode, VaultRecord,
+};
 use openshell_forward::ForwardManager;
 use openshell_monitor::MonitorEngine;
 use openshell_sftp::{CwdTracker, SftpClient, SftpSession, TransferManager};
@@ -95,7 +97,8 @@ impl AppServices {
         Self::init_with_store(paths, store, MigrationReport::default())
     }
 
-    /// 主密码解锁后列出仅含安全元数据的待补录项；错误主密码在此即失败，原库与备份不动。
+    /// 只读检查：仅校验主密码并列出含安全元数据的待补录项，不创建 vault、不改
+    /// `last_opened_at`、不绑定此次口令；错误主密码在此即失败，原库与备份不动。
     pub fn inspect_legacy_recovery(
         data_dir: PathBuf,
         master_password: &str,
@@ -112,6 +115,8 @@ impl AppServices {
         ))
     }
 
+    /// 只读打开旧库并在内存中校验主密码：不创建 vault、不写 `last_opened_at`、
+    /// 不在用户确认前绑定此次口令。返回的 VaultService 仅用于按既有顺序释放 Store 句柄。
     fn unlock_legacy_store(
         data_dir: PathBuf,
         master_password: &str,
@@ -130,21 +135,38 @@ impl AppServices {
             return Err(DomainError::validation("此数据库不能使用凭据恢复入口"));
         }
         let manager = Arc::new(VaultManager::new());
+        let vault_repo = Arc::new(VaultRepo::new(store.clone()));
         let vault = Arc::new(VaultService::new(
             manager.clone(),
-            Arc::new(VaultRepo::new(store.clone())),
+            vault_repo.clone(),
             Arc::new(CredentialRepo::new(store.clone())),
             Arc::new(SshKeyRepo::new(store.clone())),
             Arc::new(SecretRepo::new(store.clone())),
             Arc::new(EventBus::new(512)),
         ));
-        if vault.status()?.state == "uninitialized" {
-            vault.init(master_password, false, None)?;
-        } else {
-            vault.unlock(Some(master_password), false)?;
+        // 已有 vault 仅做纯内存主密码校验；未初始化 vault 在确认前不创建记录、不绑定口令。
+        if let Some(record) = vault_repo.load()? {
+            vault.verify_password(&record, master_password)?;
         }
         let network = crate::network_secrets::NetworkSecrets::new(store.clone(), manager);
         Ok((store, network, vault))
+    }
+
+    /// 仅在用户确认后生成待写入的新保险库记录：已有库返回 `None`。
+    /// 生成过程只在内存初始化 VaultManager；持久化由补录事务统一提交或回滚。
+    fn pending_vault_record(
+        store: &Store,
+        vault: &Arc<VaultService>,
+        master_password: &str,
+    ) -> DomainResult<Option<VaultRecord>> {
+        if VaultRepo::new(store.clone()).load()?.is_some() {
+            return Ok(None);
+        }
+        Ok(Some(crate::vault_service::build_vault_record(
+            &vault.manager(),
+            master_password,
+            None,
+        )?))
     }
 
     /// Unlock the old schema before any snapshot; credentials and references commit together.
@@ -167,7 +189,9 @@ impl AppServices {
                 "recovery_items": items,
             })));
         }
-        network.migrate_legacy()?;
+        // 用户确认后：新 vault 行与凭据迁移在同一事务内共同提交或共同回滚。
+        let new_vault = Self::pending_vault_record(&store, &vault, master_password)?;
+        network.commit_legacy_recovery(new_vault.as_ref(), None)?;
         drop(network);
         drop(vault);
         drop(store);
@@ -187,8 +211,10 @@ impl AppServices {
         if pending.is_empty() {
             return Err(DomainError::validation("没有需要补录的规则"));
         }
-        // 补录与凭据迁移已在同一事务内提交；此处不重复迁移，避免留下半提交状态。
-        let applied = network.reenter_legacy_socks(entries)?;
+        // 用户确认后：新 vault 行、secret、SOCKS 补录、代理迁移与来源标记在同一事务内
+        // 共同提交或共同回滚；失败不留下无法解密的 secret 或已绑定的主密码。
+        let new_vault = Self::pending_vault_record(&store, &vault, master_password)?;
+        let applied = network.commit_legacy_recovery(new_vault.as_ref(), Some(entries))?;
         if applied != pending.len() {
             return Err(DomainError::validation("仍有规则需要逐条补录"));
         }

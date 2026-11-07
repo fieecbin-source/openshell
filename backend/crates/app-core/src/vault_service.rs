@@ -31,6 +31,61 @@ pub struct VaultService {
     event_bus: Arc<EventBus>,
 }
 
+fn key_slot_parts(vault: &VaultRecord) -> KeySlotParts {
+    KeySlotParts {
+        salt: vault.kdf_salt.clone(),
+        kdf: KdfParams {
+            mem_kib: vault.kdf_mem_kib as u32,
+            time: vault.kdf_time as u32,
+            parallelism: vault.kdf_parallelism as u32,
+        },
+        wrapped_vault_key: vault.wrapped_vault_key.clone(),
+        key_check: vault.key_check.clone(),
+    }
+}
+
+/// 构造新的保险库记录，并在内存中解锁同一把保险库密钥；持久化交由调用方决定。
+///
+/// `VaultService::init` 与旧库恢复确认路径共用，不复制密钥槽生成或加密逻辑；
+/// 后者把返回的记录放进补录事务，保证 vault 行与 secret 一起提交或一起回滚。
+pub(crate) fn build_vault_record(
+    manager: &VaultManager,
+    master_password: &str,
+    kdf_params: Option<KdfParams>,
+) -> DomainResult<VaultRecord> {
+    let kdf = kdf_params.unwrap_or(DEFAULT_KDF);
+    let (parts, _vault_key) = manager.init(master_password, kdf)?;
+
+    let now = now_ms();
+    let vault_id = VaultId::new();
+    // 历史实现会在用户勾选后写入 `vault:<id>` 这样的「引用」字符串，
+    // 但从未真正保存/读取系统钥匙串，属于虚假安全声明。
+    // 这里不再写入，字段保留为 None；后续接入 keyring 时再赋值。
+    let keychain_ref: Option<String> = None;
+
+    Ok(VaultRecord {
+        id: vault_id,
+        name: "default".to_string(),
+        schema_version: openshell_store::SCHEMA_VERSION as i64,
+        crypto_suite: CRYPTO_SUITE.to_string(),
+        kdf_alg: "argon2id".to_string(),
+        kdf_mem_kib: parts.kdf.mem_kib as i64,
+        kdf_time: parts.kdf.time as i64,
+        kdf_parallelism: parts.kdf.parallelism as i64,
+        kdf_salt: parts.salt,
+        wrapped_vault_key: parts.wrapped_vault_key,
+        key_check: parts.key_check,
+        keychain_ref,
+        created_at: now,
+        updated_at: now,
+        last_opened_at: Some(now),
+        sync_enabled: false,
+        server_url: None,
+        account_id: None,
+        quota_bytes: None,
+    })
+}
+
 impl VaultService {
     pub fn new(
         vault_manager: Arc<VaultManager>,
@@ -93,37 +148,7 @@ impl VaultService {
             return Err(DomainError::validation("vault is already initialized"));
         }
 
-        let kdf = kdf_params.unwrap_or(DEFAULT_KDF);
-        let (parts, _vault_key) = self.vault_manager.init(master_password, kdf)?;
-
-        let now = now_ms();
-        let vault_id = VaultId::new();
-        // 历史实现会在用户勾选后写入 `vault:<id>` 这样的「引用」字符串，
-        // 但从未真正保存/读取系统钥匙串，属于虚假安全声明。
-        // 这里不再写入，字段保留为 None；后续接入 keyring 时再赋值。
-        let keychain_ref: Option<String> = None;
-
-        let record = VaultRecord {
-            id: vault_id.clone(),
-            name: "default".to_string(),
-            schema_version: openshell_store::SCHEMA_VERSION as i64,
-            crypto_suite: CRYPTO_SUITE.to_string(),
-            kdf_alg: "argon2id".to_string(),
-            kdf_mem_kib: parts.kdf.mem_kib as i64,
-            kdf_time: parts.kdf.time as i64,
-            kdf_parallelism: parts.kdf.parallelism as i64,
-            kdf_salt: parts.salt,
-            wrapped_vault_key: parts.wrapped_vault_key,
-            key_check: parts.key_check,
-            keychain_ref,
-            created_at: now,
-            updated_at: now,
-            last_opened_at: Some(now),
-            sync_enabled: false,
-            server_url: None,
-            account_id: None,
-            quota_bytes: None,
-        };
+        let record = build_vault_record(&self.vault_manager, master_password, kdf_params)?;
 
         self.vault_repo.save(&record)?;
         self.event_bus.emit(AppEvent::VaultState {
@@ -132,6 +157,12 @@ impl VaultService {
         });
 
         self.status()
+    }
+
+    /// 只读校验主密码：仅在内存解锁密钥，不写 `last_opened_at`、不产生任何持久化副作用。
+    /// 旧库恢复的只读检查路径专用；正常解锁仍走 `unlock`。
+    pub(crate) fn verify_password(&self, vault: &VaultRecord, password: &str) -> DomainResult<()> {
+        self.vault_manager.unlock(&key_slot_parts(vault), password)
     }
 
     pub fn unlock(
@@ -146,18 +177,8 @@ impl VaultService {
         let password = master_password
             .ok_or_else(|| DomainError::validation("master_password is required"))?;
 
-        let parts = KeySlotParts {
-            salt: vault.kdf_salt.clone(),
-            kdf: KdfParams {
-                mem_kib: vault.kdf_mem_kib as u32,
-                time: vault.kdf_time as u32,
-                parallelism: vault.kdf_parallelism as u32,
-            },
-            wrapped_vault_key: vault.wrapped_vault_key.clone(),
-            key_check: vault.key_check.clone(),
-        };
-
-        self.vault_manager.unlock(&parts, password)?;
+        self.vault_manager
+            .unlock(&key_slot_parts(&vault), password)?;
         let now = now_ms();
         let _ = self.vault_repo.set_last_opened(&vault.id, now);
 

@@ -2,6 +2,7 @@ use openshell_app_core::{AppServices, APP_VERSION};
 use openshell_core_domain::{AppPaths, PortForwardId, SecretId};
 use openshell_store::{backup, SecretRepo, SettingsRepo, Store, VaultRepo};
 use openshell_vault::KdfParams;
+use rusqlite::OptionalExtension;
 
 const MASTER: &str = "synthetic-recovery-master";
 
@@ -199,7 +200,9 @@ const LEGACY_SOCKS_PASSWORDS: [&str; 3] = [
     "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 ];
 
-fn old_profile() -> (tempfile::TempDir, Store, String, Vec<String>) {
+/// schema1 旧库 fixture。`initialize_vault=false` 时 vault 表为空，用于复现
+/// 「只读检查/取消却先创建了保险库记录」的真实失败边界。
+fn legacy_profile(initialize_vault: bool) -> (tempfile::TempDir, Store, String, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(dir.path().to_path_buf());
     let store = Store::open(&paths.db_path).unwrap();
@@ -211,21 +214,23 @@ fn old_profile() -> (tempfile::TempDir, Store, String, Vec<String>) {
             Ok(())
         })
         .unwrap();
-    let app = AppServices::new_in_memory().unwrap();
-    app.vault
-        .init(
-            MASTER,
-            false,
-            Some(KdfParams {
-                mem_kib: 1024,
-                time: 1,
-                parallelism: 1,
-            }),
-        )
-        .unwrap();
-    VaultRepo::new(store.clone())
-        .save(&VaultRepo::new(app.store.clone()).load().unwrap().unwrap())
-        .unwrap();
+    if initialize_vault {
+        let app = AppServices::new_in_memory().unwrap();
+        app.vault
+            .init(
+                MASTER,
+                false,
+                Some(KdfParams {
+                    mem_kib: 1024,
+                    time: 1,
+                    parallelism: 1,
+                }),
+            )
+            .unwrap();
+        VaultRepo::new(store.clone())
+            .save(&VaultRepo::new(app.store.clone()).load().unwrap().unwrap())
+            .unwrap();
+    }
     let proxy = format!("synthetic-proxy-{}", SecretId::new());
     SettingsRepo::new(store.clone()).set("global",None,"proxy_list",serde_json::json!([{"id":"proxy","name":"proxy","host":"localhost","port":1080,"proxy_type":"socks5","password":proxy}]),false).unwrap();
     store.with_conn(|conn| {
@@ -243,6 +248,14 @@ fn old_profile() -> (tempfile::TempDir, Store, String, Vec<String>) {
             .map(|p| (*p).to_string())
             .collect(),
     )
+}
+
+fn old_profile() -> (tempfile::TempDir, Store, String, Vec<String>) {
+    legacy_profile(true)
+}
+
+fn uninitialized_old_profile() -> (tempfile::TempDir, Store, String, Vec<String>) {
+    legacy_profile(false)
 }
 
 // Test-only recovery through the existing explicit password input, before schema upgrade.
@@ -929,4 +942,285 @@ async fn incomplete_or_invalid_reentry_rolls_back_the_whole_transaction() {
             .len(),
         3
     );
+}
+
+/// Task8 T7-02：旧库完整持久化快照。除旧 SOCKS 原值外，覆盖 vault 记录（主密码绑定
+/// kdf_salt / wrapped_vault_key / key_check、last_opened_at、updated_at）、secret、代理、
+/// 来源标记、schema 与备份；检查/取消/失败路径前后必须逐项一致。
+#[derive(Debug, PartialEq)]
+struct LegacySnapshot {
+    schema_version: i64,
+    vault: Option<serde_json::Value>,
+    secret_count: i64,
+    socks_refs: Vec<String>,
+    proxy_raw: String,
+    marker: Option<String>,
+    backups: usize,
+}
+
+fn legacy_snapshot(dir: &tempfile::TempDir, store: &Store) -> LegacySnapshot {
+    let vault = VaultRepo::new(store.clone())
+        .load()
+        .unwrap()
+        .map(|record| serde_json::to_value(record).unwrap());
+    let (schema_version, secret_count, socks_refs, proxy_raw, marker) = store
+        .with_conn(|conn| {
+            let schema_version: i64 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap();
+            let secret_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM secret", [], |row| row.get(0))
+                .unwrap();
+            let socks_refs = conn
+                .prepare("SELECT socks_password_ref FROM port_forward ORDER BY bind_port")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            let proxy_raw: String = conn
+                .query_row(
+                    "SELECT value_json FROM setting WHERE key='proxy_list'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let has_app_meta: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_meta')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let marker = if has_app_meta {
+                conn.query_row(
+                    "SELECT value FROM app_meta WHERE key='network_secrets.store'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .unwrap()
+            } else {
+                None
+            };
+            Ok((schema_version, secret_count, socks_refs, proxy_raw, marker))
+        })
+        .unwrap();
+    LegacySnapshot {
+        schema_version,
+        vault,
+        secret_count,
+        socks_refs,
+        proxy_raw,
+        marker,
+        backups: backup::list(&AppPaths::new(dir.path().to_path_buf()).backups_dir)
+            .unwrap()
+            .len(),
+    }
+}
+
+fn assert_snapshot_unchanged(dir: &tempfile::TempDir, store: &Store, before: &LegacySnapshot) {
+    assert_eq!(
+        &legacy_snapshot(dir, store),
+        before,
+        "检查/取消/失败路径不得创建 vault、绑定口令、改 last_opened 或留下任何持久化副作用"
+    );
+}
+
+/// Task8 T7-02：未初始化旧库仅做只读检查与取消，不得创建 vault 或绑定第一次口令。
+#[tokio::test]
+async fn uninitialized_legacy_inspect_and_cancel_leave_no_persisted_state() {
+    let (dir, store, _proxy, _) = uninitialized_old_profile();
+    let before = legacy_snapshot(&dir, &store);
+    assert!(before.vault.is_none(), "fixture 必须是 vault 表为空的旧库");
+
+    let items =
+        AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), "synthetic-first-master")
+            .expect("未初始化库也应能列出仅含安全元数据的待补录项");
+    assert_eq!(items.len(), LEGACY_SOCKS_PASSWORDS.len());
+    assert!(
+        AppServices::cancel_legacy_recovery().is_err(),
+        "取消须可重试"
+    );
+
+    assert_snapshot_unchanged(&dir, &store, &before);
+}
+
+/// Task8 T7-02：未初始化旧库补录缺一条/空口令等失败后仍须零写入。
+#[tokio::test]
+async fn uninitialized_legacy_failed_reentry_leaves_no_persisted_state() {
+    let (dir, store, _proxy, _) = uninitialized_old_profile();
+    let before = legacy_snapshot(&dir, &store);
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+
+    let mut partial = recovery_entries(&items, "synthetic-partial");
+    partial.pop();
+    assert!(AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &partial
+    )
+    .is_err());
+    assert_snapshot_unchanged(&dir, &store, &before);
+
+    let mut empty = recovery_entries(&items, "synthetic-empty");
+    empty[1].password = Zeroizing::new(String::new());
+    assert!(AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &empty
+    )
+    .is_err());
+    assert_snapshot_unchanged(&dir, &store, &before);
+}
+
+/// Task8 T7-02：已有 vault 的只读检查仅验证主密码，不更新 last_opened/updated_at。
+#[tokio::test]
+async fn initialized_legacy_inspect_does_not_touch_last_opened() {
+    let (dir, store, _proxy, _) = old_profile();
+    store
+        .with_conn(|conn| {
+            conn.execute("UPDATE vault SET last_opened_at=1, updated_at=1", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let before = legacy_snapshot(&dir, &store);
+    assert!(before.vault.is_some(), "fixture 必须是已初始化旧库");
+
+    assert!(AppServices::inspect_legacy_recovery(
+        dir.path().to_path_buf(),
+        "synthetic-wrong-master"
+    )
+    .is_err());
+    assert_snapshot_unchanged(&dir, &store, &before);
+
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+    assert_eq!(items.len(), LEGACY_SOCKS_PASSWORDS.len());
+    assert_snapshot_unchanged(&dir, &store, &before);
+}
+
+/// Task8 T7-02：取消不得固定第一次主密码；换新口令重试须成功且逐条 resolve 正确。
+#[tokio::test]
+async fn cancel_does_not_bind_first_master_password_on_uninitialized_store() {
+    let (dir, store, _proxy, _) = uninitialized_old_profile();
+    let before = legacy_snapshot(&dir, &store);
+
+    let items =
+        AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), "synthetic-first-master")
+            .unwrap();
+    assert!(AppServices::cancel_legacy_recovery().is_err());
+    assert_snapshot_unchanged(&dir, &store, &before);
+
+    let entries = recovery_entries(&items, "synthetic-second-try");
+    drop(store);
+    let app = AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        "synthetic-second-master",
+        &entries,
+    )
+    .expect("取消后换一个新主密码再试必须成功");
+    assert_eq!(
+        app.store.schema_version().unwrap(),
+        openshell_store::SCHEMA_VERSION
+    );
+    assert!(
+        app.vault
+            .unlock(Some("synthetic-first-master"), false)
+            .is_err(),
+        "第一次口令不得被绑定"
+    );
+    app.vault
+        .unlock(Some("synthetic-second-master"), false)
+        .unwrap();
+    let mut resolved = Vec::new();
+    for rule in app.network_secrets.forwards_strict(None).await.unwrap() {
+        resolved.push(
+            app.network_secrets
+                .resolve(
+                    rule.socks_password_ref.as_deref().unwrap(),
+                    "socks_password",
+                )
+                .unwrap()
+                .to_string(),
+        );
+    }
+    resolved.sort();
+    let mut expected = (0..items.len())
+        .map(|index| format!("synthetic-second-try-{index}"))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(resolved, expected, "新主密码下每条规则口令都应能解密");
+}
+
+/// Task8：事务中途失败时，新 vault 行与 secret/SOCKS/代理/标记一起回滚；
+/// 同一库同一主密码可重试成功，证明是原子边界而非事后删除补救。
+#[tokio::test]
+async fn uninitialized_recovery_rolls_back_vault_with_secret_on_mid_transaction_failure() {
+    let (dir, store, _proxy, _) = uninitialized_old_profile();
+    let before = legacy_snapshot(&dir, &store);
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+    let entries = recovery_entries(&items, "synthetic-atomic");
+
+    // 每库隔离故障注入：vault 行已在事务内先写入，secret 插入阶段 ABORT。
+    store
+        .with_conn(|conn| {
+            conn.execute_batch(
+                "CREATE TRIGGER reject_secret_insert BEFORE INSERT ON secret \
+                 BEGIN SELECT RAISE(ABORT,'synthetic secret failure'); END",
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &entries
+    )
+    .is_err());
+    assert_snapshot_unchanged(&dir, &store, &before);
+
+    store
+        .with_conn(|conn| {
+            conn.execute_batch("DROP TRIGGER reject_secret_insert")
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    let app = AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &entries,
+    )
+    .expect("整事务回滚后必须能用同一主密码重试成功");
+    assert_eq!(
+        app.store.schema_version().unwrap(),
+        openshell_store::SCHEMA_VERSION
+    );
+    assert!(app
+        .vault
+        .unlock(Some("synthetic-other-master"), false)
+        .is_err());
+    app.vault.unlock(Some(MASTER), false).unwrap();
+    let mut resolved = Vec::new();
+    for rule in app.network_secrets.forwards_strict(None).await.unwrap() {
+        resolved.push(
+            app.network_secrets
+                .resolve(
+                    rule.socks_password_ref.as_deref().unwrap(),
+                    "socks_password",
+                )
+                .unwrap()
+                .to_string(),
+        );
+    }
+    resolved.sort();
+    let mut expected = (0..items.len())
+        .map(|index| format!("synthetic-atomic-{index}"))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(resolved, expected, "重试成功后每条 secret 都可解密");
 }

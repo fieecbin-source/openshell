@@ -1,7 +1,7 @@
 //! Proxy/SOCKS credentials share the existing Vault secret store.
 use openshell_core_domain::*;
 use openshell_store::{models::bump_sync, repositories::secret::insert_secret_row};
-use openshell_store::{PortForwardRepo, SecretRepo, SettingsRepo, Store};
+use openshell_store::{PortForwardRepo, SecretRepo, SettingsRepo, Store, VaultRepo};
 use openshell_vault::VaultManager;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
@@ -270,17 +270,86 @@ impl NetworkSecrets {
         Ok(())
     }
 
-    /// Runs on schema 1–4 before a migration snapshot, including soft-deleted legacy rows.
-    pub fn migrate_legacy(&self) -> DomainResult<()> {
+    /// 旧库恢复的单一提交边界：可选的新 vault 行、逐条补录 secret/SOCKS、代理迁移与
+    /// 来源标记全在同一个 Immediate 事务内，失败则整事务回滚。
+    ///
+    /// `new_vault` 仅在库尚未初始化时由「用户确认后」的恢复入口传入；已有库传 `None`。
+    /// 检查/取消路径绝不调用此方法，因此不会在确认前持久化 vault 或绑定主密码。
+    pub fn commit_legacy_recovery(
+        &self,
+        new_vault: Option<&VaultRecord>,
+        entries: Option<&[LegacyRecoveryEntry]>,
+    ) -> DomainResult<usize> {
         self.store.with_conn(|conn| {
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|_| DomainError::internal("无法开始凭据迁移"))?;
-            // 代理迁移与来源标记同事务提交；不确定的 SOCKS 旧值使整个事务回滚。
-            self.migrate_legacy_in_transaction(&tx)?;
+                .map_err(|_| DomainError::internal("无法开始凭据恢复事务"))?;
+            if let Some(record) = new_vault {
+                VaultRepo::save_in_transaction(&tx, record)?;
+            }
+            let applied = match entries {
+                Some(entries) => self.reenter_in_transaction(&tx, entries)?,
+                None => {
+                    // 代理迁移与来源标记同事务提交；不确定的 SOCKS 旧值使整个事务回滚。
+                    self.migrate_legacy_in_transaction(&tx)?;
+                    0
+                }
+            };
             tx.commit()
-                .map_err(|_| DomainError::internal("无法提交凭据迁移"))
+                .map_err(|_| DomainError::internal("无法提交凭据恢复事务"))?;
+            Ok(applied)
         })
+    }
+
+    /// 逐条补录的事务体；与代理迁移、来源标记共用调用方的事务，不自行提交。
+    fn reenter_in_transaction(
+        &self,
+        tx: &Transaction<'_>,
+        entries: &[LegacyRecoveryEntry],
+    ) -> DomainResult<usize> {
+        let pending = unresolved_forward_items(tx)?;
+        let complete = entries.len() == pending.len()
+            && pending.iter().all(|item| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.rule_id == item.rule_id)
+                    .count()
+                    == 1
+            })
+            && entries
+                .iter()
+                .all(|entry| pending.iter().any(|item| item.rule_id == entry.rule_id));
+        if !complete {
+            return Err(DomainError::validation(
+                "每条待补录规则都需要逐条输入一次新密码",
+            ));
+        }
+        let mut applied = 0usize;
+        for entry in entries {
+            if entry.password.is_empty() {
+                return Err(DomainError::validation("请输入新的 SOCKS 密码"));
+            }
+            let reference = self.encrypt_in_transaction(tx, &entry.password, "socks_password")?;
+            let updated = tx
+                .execute(
+                    "UPDATE port_forward SET socks_password_ref=?1, updated_at=?2 \
+                     WHERE id=?3 AND socks_password_ref IS NOT NULL",
+                    rusqlite::params![reference, now_ms(), entry.rule_id],
+                )
+                .map_err(|_| DomainError::internal("无法保存补录后的引用"))?;
+            if updated != 1 {
+                return Err(DomainError::validation("该规则不需要补录凭据"));
+            }
+            bump_sync(tx, &entry.rule_id, "port_forward", None)?;
+            applied += 1;
+        }
+        self.migrate_legacy_in_transaction(tx)?;
+        Ok(applied)
+    }
+
+    /// Runs on schema 1–4 before a migration snapshot, including soft-deleted legacy rows.
+    pub fn migrate_legacy(&self) -> DomainResult<()> {
+        self.commit_legacy_recovery(None, None).map(|_| ())
     }
 
     /// 只读列举无法判源的旧库规则，仅返回安全元数据，绝不携带引用原值。
@@ -292,52 +361,7 @@ impl NetworkSecrets {
     /// 要求每条待补录规则恰好显式输入一次，避免只补录一部分却留下不完整状态。
     /// 不删除坏规则、不重建库、不改写备份。
     pub fn reenter_legacy_socks(&self, entries: &[LegacyRecoveryEntry]) -> DomainResult<usize> {
-        self.store.with_conn(|conn| {
-            let tx = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|_| DomainError::internal("无法开始逐条补录"))?;
-            let pending = unresolved_forward_items(&tx)?;
-            let complete = entries.len() == pending.len()
-                && pending.iter().all(|item| {
-                    entries
-                        .iter()
-                        .filter(|entry| entry.rule_id == item.rule_id)
-                        .count()
-                        == 1
-                })
-                && entries
-                    .iter()
-                    .all(|entry| pending.iter().any(|item| item.rule_id == entry.rule_id));
-            if !complete {
-                return Err(DomainError::validation(
-                    "每条待补录规则都需要逐条输入一次新密码",
-                ));
-            }
-            let mut applied = 0usize;
-            for entry in entries {
-                if entry.password.is_empty() {
-                    return Err(DomainError::validation("请输入新的 SOCKS 密码"));
-                }
-                let reference =
-                    self.encrypt_in_transaction(&tx, &entry.password, "socks_password")?;
-                let updated = tx
-                    .execute(
-                        "UPDATE port_forward SET socks_password_ref=?1, updated_at=?2 \
-                         WHERE id=?3 AND socks_password_ref IS NOT NULL",
-                        rusqlite::params![reference, now_ms(), entry.rule_id],
-                    )
-                    .map_err(|_| DomainError::internal("无法保存补录后的引用"))?;
-                if updated != 1 {
-                    return Err(DomainError::validation("该规则不需要补录凭据"));
-                }
-                bump_sync(&tx, &entry.rule_id, "port_forward", None)?;
-                applied += 1;
-            }
-            self.migrate_legacy_in_transaction(&tx)?;
-            tx.commit()
-                .map_err(|_| DomainError::internal("无法提交逐条补录"))?;
-            Ok(applied)
-        })
+        self.commit_legacy_recovery(None, Some(entries))
     }
 
     /// 启动时记录「本库凭据已全部引用化」的来源标记。

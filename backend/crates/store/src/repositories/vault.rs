@@ -3,7 +3,7 @@
 use crate::models::{ensure_id, map_sql_error, vault_from_row, VAULT_COLUMNS};
 use crate::Store;
 use openshell_core_domain::{now_ms, DomainError, DomainResult, VaultId, VaultRecord};
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 
 /// 保险库仓储。
 pub struct VaultRepo {
@@ -31,52 +31,61 @@ impl VaultRepo {
 
     /// 写入或覆盖保险库记录。
     pub fn save(&self, vault: &VaultRecord) -> DomainResult<()> {
-        ensure_id::<VaultId>(vault.id.as_str())?;
         self.store.with_conn(|conn| {
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(map_sql_error)?;
-            tx.execute(
-                "INSERT INTO vault(id, name, schema_version, crypto_suite, kdf_alg, kdf_mem_kib, \
-                 kdf_time, kdf_parallelism, kdf_salt, wrapped_vault_key, key_check, keychain_ref, \
-                 created_at, updated_at, last_opened_at, sync_enabled, server_url, account_id, \
-                 quota_bytes) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
-                 ?15, ?16, ?17, ?18, ?19) ON CONFLICT(id) DO UPDATE SET name = excluded.name, \
-                 schema_version = excluded.schema_version, crypto_suite = excluded.crypto_suite, \
-                 kdf_alg = excluded.kdf_alg, kdf_mem_kib = excluded.kdf_mem_kib, \
-                 kdf_time = excluded.kdf_time, kdf_parallelism = excluded.kdf_parallelism, \
-                 kdf_salt = excluded.kdf_salt, wrapped_vault_key = excluded.wrapped_vault_key, \
-                 key_check = excluded.key_check, keychain_ref = excluded.keychain_ref, \
-                 created_at = excluded.created_at, updated_at = excluded.updated_at, \
-                 last_opened_at = excluded.last_opened_at, sync_enabled = excluded.sync_enabled, \
-                 server_url = excluded.server_url, account_id = excluded.account_id, \
-                 quota_bytes = excluded.quota_bytes",
-                params![
-                    vault.id.as_str(),
-                    vault.name,
-                    vault.schema_version,
-                    vault.crypto_suite,
-                    vault.kdf_alg,
-                    vault.kdf_mem_kib,
-                    vault.kdf_time,
-                    vault.kdf_parallelism,
-                    vault.kdf_salt,
-                    vault.wrapped_vault_key,
-                    vault.key_check,
-                    vault.keychain_ref,
-                    vault.created_at,
-                    vault.updated_at,
-                    vault.last_opened_at,
-                    vault.sync_enabled,
-                    vault.server_url,
-                    vault.account_id,
-                    vault.quota_bytes,
-                ],
-            )
-            .map_err(map_sql_error)?;
+            Self::save_in_transaction(&tx, vault)?;
             tx.commit().map_err(map_sql_error)?;
             Ok(())
         })
+    }
+
+    /// 在调用方已有的事务内写入保险库记录，不自行提交。
+    ///
+    /// 旧库恢复借此把新 vault 行与 secret、SOCKS 补录、代理迁移和来源标记放进
+    /// 同一原子边界；UPSERT 与错误映射和 `save` 完全一致。
+    pub fn save_in_transaction(tx: &Transaction<'_>, vault: &VaultRecord) -> DomainResult<()> {
+        ensure_id::<VaultId>(vault.id.as_str())?;
+        tx.execute(
+            "INSERT INTO vault(id, name, schema_version, crypto_suite, kdf_alg, kdf_mem_kib, \
+             kdf_time, kdf_parallelism, kdf_salt, wrapped_vault_key, key_check, keychain_ref, \
+             created_at, updated_at, last_opened_at, sync_enabled, server_url, account_id, \
+             quota_bytes) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
+             ?15, ?16, ?17, ?18, ?19) ON CONFLICT(id) DO UPDATE SET name = excluded.name, \
+             schema_version = excluded.schema_version, crypto_suite = excluded.crypto_suite, \
+             kdf_alg = excluded.kdf_alg, kdf_mem_kib = excluded.kdf_mem_kib, \
+             kdf_time = excluded.kdf_time, kdf_parallelism = excluded.kdf_parallelism, \
+             kdf_salt = excluded.kdf_salt, wrapped_vault_key = excluded.wrapped_vault_key, \
+             key_check = excluded.key_check, keychain_ref = excluded.keychain_ref, \
+             created_at = excluded.created_at, updated_at = excluded.updated_at, \
+             last_opened_at = excluded.last_opened_at, sync_enabled = excluded.sync_enabled, \
+             server_url = excluded.server_url, account_id = excluded.account_id, \
+             quota_bytes = excluded.quota_bytes",
+            params![
+                vault.id.as_str(),
+                vault.name,
+                vault.schema_version,
+                vault.crypto_suite,
+                vault.kdf_alg,
+                vault.kdf_mem_kib,
+                vault.kdf_time,
+                vault.kdf_parallelism,
+                vault.kdf_salt,
+                vault.wrapped_vault_key,
+                vault.key_check,
+                vault.keychain_ref,
+                vault.created_at,
+                vault.updated_at,
+                vault.last_opened_at,
+                vault.sync_enabled,
+                vault.server_url,
+                vault.account_id,
+                vault.quota_bytes,
+            ],
+        )
+        .map_err(map_sql_error)?;
+        Ok(())
     }
 
     /// 更新最近解锁时间。
