@@ -409,8 +409,8 @@ export async function sshExec(connId: string, command: string): Promise<SshExecR
 // Port Forwarding
 // ==========================================
 
-export async function forwardList(sessionId?: string): Promise<import("../types/ipc").PortForwardRule[]> {
-  return await invoke<import("../types/ipc").PortForwardRule[]>("forward_list", { sessionId: sessionId || null });
+export async function forwardList(sessionId?: string): Promise<import("../types/ipc").ForwardRuleView[]> {
+  return await invoke<import("../types/ipc").ForwardRuleView[]>("forward_list", { sessionId: sessionId || null });
 }
 
 export async function forwardCreate(input: import("../types/ipc").PortForwardRuleInput): Promise<import("../types/ipc").PortForwardRule> {

@@ -60,6 +60,8 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
     duplicateTab,
     layoutMode,
     setLayoutMode,
+    rdpCleanupFailures,
+    retryRdpCleanups,
   } = useTerminalStore();
 
   const isHomeActive = activeTabId === null || activeTabId === "home" || tabs.length === 0;
@@ -414,6 +416,20 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
 
       {/* 右侧：当前连接状态胶囊、视图切换入口（终端 / 分屏 / SFTP）与全屏按钮 */}
       <div className="flex shrink-0 items-center gap-1.5">
+        {rdpCleanupFailures.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void retryRdpCleanups()}
+            className="inline-flex items-center gap-1.5 rounded-full border border-state-danger/40 bg-state-danger/10 px-2 py-0.5 text-[10px] font-semibold text-state-danger"
+            title={`远程桌面实例清理失败，点击重试：\n${rdpCleanupFailures
+              .map((failure) => `${failure.launchId}：${failure.error}`)
+              .join("\n")}`}
+            aria-label={`远程桌面实例清理失败，共 ${rdpCleanupFailures.length} 项，点击重试`}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-state-danger" />
+            远程桌面清理失败 · {rdpCleanupFailures.length} 项 · 点击重试
+          </button>
+        )}
         {activeStatusPill && (
           <button
             type="button"

@@ -4,6 +4,7 @@ use openshell_store::{models::bump_sync, repositories::secret::insert_secret_row
 use openshell_store::{PortForwardRepo, SecretRepo, SettingsRepo, Store};
 use openshell_vault::VaultManager;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
+use serde::Serialize;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -103,6 +104,62 @@ fn has_unresolved_credentials(conn: &rusqlite::Connection) -> DomainResult<bool>
     Ok(false)
 }
 
+/// 列举用的凭据状态。只描述状态，不描述引用内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForwardCredentialState {
+    None,
+    Ready,
+    NeedsReentry,
+}
+
+/// 脱敏列举视图：坏行不会携带来源不明的引用原值。
+#[derive(Debug, Clone, Serialize)]
+pub struct ForwardRuleView {
+    #[serde(flatten)]
+    pub rule: PortForwardRule,
+    pub credential_state: ForwardCredentialState,
+}
+
+/// 旧库启动恢复用的安全元数据：绝不包含引用原值或旧口令。
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyRecoveryItem {
+    pub rule_id: String,
+    pub name: String,
+    pub bind_port: u16,
+}
+
+/// 用户逐条显式输入的新口令；临时值在离开作用域时清零。
+pub struct LegacyRecoveryEntry {
+    pub rule_id: String,
+    pub password: Zeroizing<String>,
+}
+
+fn unresolved_forward_items(conn: &rusqlite::Connection) -> DomainResult<Vec<LegacyRecoveryItem>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT p.id, p.name, p.bind_port FROM port_forward p \
+             LEFT JOIN secret s ON s.id = p.socks_password_ref \
+               AND (s.deleted_at IS NULL OR s.deleted_at = 0) \
+             WHERE p.socks_password_ref IS NOT NULL \
+               AND (s.id IS NULL OR s.record_type IS NULL OR s.record_type <> 'socks_password') \
+             ORDER BY p.created_at, p.id",
+        )
+        .map_err(|_| DomainError::internal("无法读取待补录规则"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(LegacyRecoveryItem {
+                rule_id: row.get(0)?,
+                name: row.get(1)?,
+                bind_port: row.get(2)?,
+            })
+        })
+        .map_err(|_| DomainError::internal("无法读取待补录规则"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| DomainError::internal("无法读取待补录规则"))?;
+    Ok(rows)
+}
+
 pub struct NetworkSecrets {
     store: Store,
     vault: Arc<VaultManager>,
@@ -183,17 +240,103 @@ impl NetworkSecrets {
         }
     }
 
+    /// 凭据迁移的事务体；逐条补录复用同一事务，保证补录与迁移一起提交或一起回滚。
+    fn migrate_legacy_in_transaction(&self, tx: &Transaction<'_>) -> DomainResult<()> {
+        let proxies = tx
+            .prepare("SELECT id,value_json FROM setting WHERE key='proxy_list'")
+            .map_err(|_| DomainError::internal("无法读取代理列表"))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| DomainError::internal("无法读取代理列表"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| DomainError::internal("无法读取代理列表"))?;
+        for (id, value) in proxies {
+            self.migrate_proxy_row(tx, &id, &value)?;
+        }
+        let rules = tx
+            .prepare(
+                "SELECT socks_password_ref FROM port_forward WHERE socks_password_ref IS NOT NULL",
+            )
+            .map_err(|_| DomainError::internal("无法读取转发规则"))?
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| DomainError::internal("无法读取转发规则"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| DomainError::internal("无法读取转发规则"))?;
+        for reference in rules {
+            self.validate_socks_reference(tx, &reference)?;
+        }
+        mark_reference_store(tx)?;
+        Ok(())
+    }
+
     /// Runs on schema 1–4 before a migration snapshot, including soft-deleted legacy rows.
     pub fn migrate_legacy(&self) -> DomainResult<()> {
         self.store.with_conn(|conn| {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|_| DomainError::internal("无法开始凭据迁移"))?;
-            let proxies = tx.prepare("SELECT id,value_json FROM setting WHERE key='proxy_list'").map_err(|_| DomainError::internal("无法读取代理列表"))?.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))).map_err(|_| DomainError::internal("无法读取代理列表"))?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_| DomainError::internal("无法读取代理列表"))?;
-            for (id, value) in proxies { self.migrate_proxy_row(&tx, &id, &value)?; }
-            let rules = tx.prepare("SELECT socks_password_ref FROM port_forward WHERE socks_password_ref IS NOT NULL").map_err(|_| DomainError::internal("无法读取转发规则"))?.query_map([], |row| row.get::<_,String>(0)).map_err(|_| DomainError::internal("无法读取转发规则"))?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_| DomainError::internal("无法读取转发规则"))?;
-            for reference in rules { self.validate_socks_reference(&tx, &reference)?; }
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|_| DomainError::internal("无法开始凭据迁移"))?;
             // 代理迁移与来源标记同事务提交；不确定的 SOCKS 旧值使整个事务回滚。
-            mark_reference_store(&tx)?;
-            tx.commit().map_err(|_| DomainError::internal("无法提交凭据迁移"))
+            self.migrate_legacy_in_transaction(&tx)?;
+            tx.commit()
+                .map_err(|_| DomainError::internal("无法提交凭据迁移"))
+        })
+    }
+
+    /// 只读列举无法判源的旧库规则，仅返回安全元数据，绝不携带引用原值。
+    pub fn legacy_recovery_items(&self) -> DomainResult<Vec<LegacyRecoveryItem>> {
+        self.store.with_conn(|conn| unresolved_forward_items(conn))
+    }
+
+    /// 逐条显式补录：补录、代理迁移与来源标记在**同一事务**内提交，任一失败整事务回滚。
+    /// 要求每条待补录规则恰好显式输入一次，避免只补录一部分却留下不完整状态。
+    /// 不删除坏规则、不重建库、不改写备份。
+    pub fn reenter_legacy_socks(&self, entries: &[LegacyRecoveryEntry]) -> DomainResult<usize> {
+        self.store.with_conn(|conn| {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|_| DomainError::internal("无法开始逐条补录"))?;
+            let pending = unresolved_forward_items(&tx)?;
+            let complete = entries.len() == pending.len()
+                && pending.iter().all(|item| {
+                    entries
+                        .iter()
+                        .filter(|entry| entry.rule_id == item.rule_id)
+                        .count()
+                        == 1
+                })
+                && entries
+                    .iter()
+                    .all(|entry| pending.iter().any(|item| item.rule_id == entry.rule_id));
+            if !complete {
+                return Err(DomainError::validation(
+                    "每条待补录规则都需要逐条输入一次新密码",
+                ));
+            }
+            let mut applied = 0usize;
+            for entry in entries {
+                if entry.password.is_empty() {
+                    return Err(DomainError::validation("请输入新的 SOCKS 密码"));
+                }
+                let reference =
+                    self.encrypt_in_transaction(&tx, &entry.password, "socks_password")?;
+                let updated = tx
+                    .execute(
+                        "UPDATE port_forward SET socks_password_ref=?1, updated_at=?2 \
+                         WHERE id=?3 AND socks_password_ref IS NOT NULL",
+                        rusqlite::params![reference, now_ms(), entry.rule_id],
+                    )
+                    .map_err(|_| DomainError::internal("无法保存补录后的引用"))?;
+                if updated != 1 {
+                    return Err(DomainError::validation("该规则不需要补录凭据"));
+                }
+                bump_sync(&tx, &entry.rule_id, "port_forward", None)?;
+                applied += 1;
+            }
+            self.migrate_legacy_in_transaction(&tx)?;
+            tx.commit()
+                .map_err(|_| DomainError::internal("无法提交逐条补录"))?;
+            Ok(applied)
         })
     }
 
@@ -311,7 +454,53 @@ impl NetworkSecrets {
         Ok(proxy)
     }
 
+    /// 供编辑/列表使用的安全枚举：单遍分类，不因一条坏引用丢弃整表，也不写坏持久化原行。
+    ///
+    /// 未知、软删除、类型不符或来源不明的引用一律置空并标记需显式补录；
+    /// 既不回传原值（可能是旧版明文口令），也不把它当密码重新加密。
     pub async fn forwards(
+        &self,
+        session: Option<&SessionId>,
+    ) -> DomainResult<Vec<ForwardRuleView>> {
+        let rules = PortForwardRepo::new(self.store.clone())
+            .list(session)
+            .await?;
+        let views = self.store.with_conn(|conn| {
+            let mut statement = conn
+                .prepare(
+                    "SELECT record_type FROM secret WHERE id=?1 AND (deleted_at IS NULL OR deleted_at=0)",
+                )
+                .map_err(|_| DomainError::internal("无法读取 SOCKS 密码状态"))?;
+            let mut result = Vec::with_capacity(rules.len());
+            for mut rule in rules {
+                let state = match rule.socks_password_ref.as_deref() {
+                    None => ForwardCredentialState::None,
+                    Some(reference) => {
+                        let kind: Option<String> = statement
+                            .query_row([reference], |row| row.get(0))
+                            .optional()
+                            .map_err(|_| DomainError::internal("无法读取 SOCKS 密码状态"))?;
+                        if kind.as_deref() == Some("socks_password") {
+                            ForwardCredentialState::Ready
+                        } else {
+                            rule.socks_password_ref = None;
+                            ForwardCredentialState::NeedsReentry
+                        }
+                    }
+                };
+                rule.has_socks_password = state == ForwardCredentialState::Ready;
+                result.push(ForwardRuleView {
+                    rule,
+                    credential_state: state,
+                });
+            }
+            Ok(result)
+        })?;
+        Ok(views)
+    }
+
+    /// 含秘密导出等必须完整性的边界：任一引用无效即整表失败，且保留有效引用原值。
+    pub async fn forwards_strict(
         &self,
         session: Option<&SessionId>,
     ) -> DomainResult<Vec<PortForwardRule>> {
@@ -624,8 +813,20 @@ mod tests {
         assert!(service.record_reference_store_if_clean().unwrap());
         let reference = SecretId::new().to_string();
         insert_legacy_rule(&store, &reference);
-        let error = service.forwards(None).await.unwrap_err();
+        let listed = service.forwards(None).await.unwrap();
+        assert_eq!(listed.len(), 1, "坏引用仍要能进入编辑");
+        assert_eq!(
+            listed[0].credential_state,
+            ForwardCredentialState::NeedsReentry
+        );
+        assert!(
+            listed[0].rule.socks_password_ref.is_none(),
+            "未知引用原值绝不回传"
+        );
+        // 严格完整性边界仍拒绝运行，且错误不含原值。
+        let error = service.forwards_strict(None).await.unwrap_err();
         assert!(error.message.contains("引用不存在"), "{}", error.message);
+        assert!(!error.message.contains(&reference));
         let stored = openshell_store::PortForwardRepo::new(store)
             .list(None)
             .await
@@ -648,9 +849,15 @@ mod tests {
         for password in passwords {
             insert_legacy_rule(&store, password);
         }
-        // 缺 secret 的旧值不能证明是明文，自动迁移必须保留原值并拒绝。
+        // 缺 secret 的旧值不能证明是明文：列表脱敏但可编辑，严格边界与迁移仍拒绝。
         assert!(!service.record_reference_store_if_clean().unwrap());
-        assert!(service.forwards(None).await.is_err());
+        let listed = service.forwards(None).await.unwrap();
+        assert_eq!(listed.len(), passwords.len());
+        for view in &listed {
+            assert_eq!(view.credential_state, ForwardCredentialState::NeedsReentry);
+            assert!(view.rule.socks_password_ref.is_none());
+        }
+        assert!(service.forwards_strict(None).await.is_err());
         assert!(service.migrate_legacy().is_err());
         let repo = PortForwardRepo::new(store.clone());
         let rules = repo.list(None).await.unwrap();
@@ -674,9 +881,9 @@ mod tests {
             repo.update(&rule.id, input).await.unwrap();
         }
 
-        let mut migrated = service.forwards(None).await.unwrap();
+        let migrated = service.forwards_strict(None).await.unwrap();
         let mut resolved: Vec<String> = Vec::new();
-        for rule in &mut migrated {
+        for rule in &migrated {
             let reference = rule.socks_password_ref.clone().expect("migrated reference");
             assert!(
                 !passwords.contains(&reference.as_str()),
@@ -694,9 +901,15 @@ mod tests {
         expected.sort();
         assert_eq!(resolved, expected, "every legacy password must survive");
 
-        // 显式补录后引用均可解析，缺失的新引用仍必须报错。
+        // 显式补录后引用均可解析，缺失的新引用仍必须被严格边界拒绝。
         insert_legacy_rule(&store, &SecretId::new().to_string());
-        assert!(service.forwards(None).await.is_err());
+        assert!(service.forwards_strict(None).await.is_err());
+        assert!(service
+            .forwards(None)
+            .await
+            .unwrap()
+            .iter()
+            .any(|view| view.credential_state == ForwardCredentialState::NeedsReentry));
     }
 
     #[tokio::test]

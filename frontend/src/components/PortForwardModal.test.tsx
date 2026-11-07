@@ -28,8 +28,12 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
       rules: [],
       statuses: {},
       loading: false,
-      loadRules: vi.fn(),
-      loadStatuses: vi.fn(),
+      activeSessionId: null,
+      loadError: null,
+      refreshError: null,
+      loadRules: vi.fn(async () => {}),
+      loadStatuses: vi.fn(async () => {}),
+      retryRefresh: vi.fn(async () => {}),
       createRule: createSpy,
       updateRule: updateSpy,
       deleteRule: deleteSpy,
@@ -164,6 +168,49 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
     const sentInput = updateSpy.mock.calls[0][1];
     expect(sentInput.socks_password).toBeUndefined();
     expect(sentInput.socks_password_ref).toBeUndefined();
+  });
+
+  it("marks a rule needing credential re-entry and forces an explicit new password", async () => {
+    const brokenRule = {
+      id: "rule_b",
+      session_id: "sess_1",
+      name: "待补录SOCKS",
+      rule_type: "dynamic" as const,
+      bind_host: "127.0.0.1",
+      bind_port: 1081,
+      dest_host: null,
+      dest_port: null,
+      auto_start: false,
+      auto_reconnect: true,
+      reconnect_max: 3,
+      socks_auth: "userpass" as const,
+      socks_username: "existing_user",
+      socks_password_ref: null,
+      has_socks_password: false,
+      credential_state: "needs_reentry" as const,
+      expose_warning_ack: false,
+      sort_order: 0,
+      created_at: 100,
+      updated_at: 100,
+      deleted_at: null,
+    };
+
+    useForwardStore.setState({ rules: [brokenRule] });
+    act(() => root.render(<PortForwardModal onClose={() => {}} />));
+
+    expect(document.body.textContent).toContain("需补录");
+
+    const editBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="编辑规则"]')!;
+    act(() => editBtn.click());
+
+    const saveBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("保存修改")
+    )!;
+    await act(async () => {
+      saveBtn.click();
+    });
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("必须填写认证密码");
   });
 
   it("checking clear password sends socks_clear_password: true", async () => {

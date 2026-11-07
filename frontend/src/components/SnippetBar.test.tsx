@@ -247,4 +247,75 @@ describe("SnippetBar (R05, R09)", () => {
     const button = container.querySelector<HTMLButtonElement>("[aria-label='Existing Command']");
     expect(button).toBeTruthy();
   });
+
+  it("handles snippet creation safely when createSnippet fails", async () => {
+    const failingCreate = vi.fn().mockRejectedValue(new Error("Create IPC failed"));
+    useSnippetStore.setState({
+      snippets: [],
+      loadSnippets: vi.fn().mockResolvedValue(undefined),
+      createSnippet: failingCreate,
+    });
+
+    await act(async () => {
+      root.render(<SnippetBar activeTabId="active-terminal" />);
+    });
+
+    const addBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("新增")
+    );
+    expect(addBtn).toBeTruthy();
+
+    await act(async () => {
+      addBtn!.click();
+    });
+
+    const nameInput = document.body.querySelector<HTMLInputElement>("input[aria-label='命令名称']")!;
+    const cmdInput = document.body.querySelector<HTMLTextAreaElement>("textarea[aria-label='命令模板']")!;
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(nameInput, "New Command");
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(cmdInput, "ls -la");
+      cmdInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const saveBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("保存")
+    );
+    expect(saveBtn).toBeTruthy();
+
+    await act(async () => {
+      saveBtn!.click();
+    });
+
+    expect(failingCreate).toHaveBeenCalled();
+  });
+
+  it("handles snippet deletion safely when deleteSnippet fails", async () => {
+    const existingSnippet = makeSnippet({
+      id: "snip_delete_test",
+      name: "To Delete",
+      body: "echo delete",
+    });
+
+    const failingDelete = vi.fn().mockRejectedValue(new Error("Delete IPC failed"));
+    useSnippetStore.setState({
+      snippets: [existingSnippet],
+      loadSnippets: vi.fn().mockResolvedValue(undefined),
+      deleteSnippet: failingDelete,
+    });
+
+    await act(async () => {
+      root.render(<SnippetBar activeTabId="active-terminal" />);
+    });
+
+    const deleteBtn = container.querySelector<HTMLButtonElement>("[aria-label='删除片段']")!;
+    expect(deleteBtn).toBeTruthy();
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    expect(failingDelete).toHaveBeenCalledWith("snip_delete_test");
+  });
 });

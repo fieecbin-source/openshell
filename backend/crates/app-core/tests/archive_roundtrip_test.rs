@@ -536,7 +536,7 @@ async fn late_proxy_failure_rolls_back_entities_and_secrets_and_token_can_retry(
     );
     let socks = target
         .network_secrets
-        .forwards(None)
+        .forwards_strict(None)
         .await
         .unwrap()
         .remove(0);

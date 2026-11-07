@@ -385,6 +385,9 @@ export interface HostMetrics {
 export type PortForwardType = "local" | "remote" | "dynamic";
 export type SocksAuth = "none" | "userpass";
 
+/** 列举视图的凭据状态；只描述状态，绝不代表引用原值或口令内容。 */
+export type ForwardCredentialState = "none" | "ready" | "needs_reentry";
+
 export interface PortForwardRule {
   id: string;
   session_id: string | null;
@@ -401,11 +404,18 @@ export interface PortForwardRule {
   socks_username: string | null;
   socks_password_ref: string | null;
   has_socks_password?: boolean;
+  /** 仅列举接口返回；坏引用为 needs_reentry，此时 socks_password_ref 必为 null */
+  credential_state?: ForwardCredentialState;
   expose_warning_ack: boolean;
   sort_order: number;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+}
+
+/** forward_list 的列举视图：坏行不携带未知引用原值，仅返回凭据状态 */
+export interface ForwardRuleView extends PortForwardRule {
+  credential_state: ForwardCredentialState;
 }
 
 export interface PortForwardRuleInput {

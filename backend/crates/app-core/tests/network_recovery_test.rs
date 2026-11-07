@@ -6,6 +6,40 @@ use openshell_vault::KdfParams;
 const MASTER: &str = "synthetic-recovery-master";
 
 #[tokio::test]
+async fn recovery_closes_old_handles_before_migration_failure_restore() {
+    for needs_reentry in [false, true] {
+        let (dir, store, _, _) = old_profile();
+        let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+        let entries = recovery_entries(&items, "synthetic-restore");
+        if !needs_reentry {
+            reenter_legacy_socks(&store).await;
+        }
+        // Fail migration 3 only for this fixture, without a process-global injection.
+        store
+            .with_conn(|conn| {
+                conn.execute_batch("CREATE TABLE sync_conflict(id TEXT PRIMARY KEY)")
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        drop(store);
+        let result = if needs_reentry {
+            AppServices::recover_legacy_network_secrets_with_reentry(
+                dir.path().to_path_buf(),
+                MASTER,
+                &entries,
+            )
+        } else {
+            AppServices::recover_legacy_network_secrets(dir.path().to_path_buf(), MASTER)
+        };
+        let app = result.unwrap_or_else(|error| panic!("restore failed: {error}"));
+        assert!(app.migration.was_recovered());
+        assert_eq!(app.store.schema_version().unwrap(), 1);
+        assert_eq!(app.list_backups().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
 async fn pre_marker_missing_references_are_never_reencrypted_on_startup_or_recovery() {
     use openshell_core_domain::{PortForwardRepository, PortForwardRuleInput};
 
@@ -70,14 +104,21 @@ async fn pre_marker_missing_references_are_never_reencrypted_on_startup_or_recov
             drop(app);
             let app = AppServices::new(dir.path().to_path_buf()).unwrap();
             assert!(
-                app.network_secrets.forwards(None).await.is_err(),
+                app.network_secrets.forwards_strict(None).await.is_err(),
                 "missing pre-marker reference must be rejected"
             );
+            let listed = app.network_secrets.forwards(None).await.unwrap();
+            assert_eq!(listed.len(), 1, "坏引用仍要能进入编辑");
+            assert!(listed[0].rule.socks_password_ref.is_none());
             app.vault.unlock(Some(MASTER), false).unwrap();
             assert!(
-                app.network_secrets.forwards(None).await.is_err(),
+                app.network_secrets.forwards_strict(None).await.is_err(),
                 "unlock must not turn a missing reference into a password"
             );
+            assert!(app.network_secrets.forwards(None).await.unwrap()[0]
+                .rule
+                .socks_password_ref
+                .is_none());
             assert!(
                 AppServices::recover_legacy_network_secrets(dir.path().to_path_buf(), MASTER)
                     .is_err()
@@ -364,10 +405,10 @@ async fn old_schema_unlocks_migrates_and_creates_a_secret_free_recovery_snapshot
             .as_deref(),
         Some(proxy.as_str())
     );
-    let mut forwards = app.network_secrets.forwards(None).await.unwrap();
+    let forwards = app.network_secrets.forwards_strict(None).await.unwrap();
     assert_eq!(forwards.len(), socks.len());
     let mut resolved: Vec<String> = Vec::new();
-    for forward in &mut forwards {
+    for forward in &forwards {
         let reference = forward.socks_password_ref.clone().expect("migrated ref");
         assert!(
             !socks.contains(&reference),
@@ -420,7 +461,7 @@ async fn old_schema_unlocks_migrates_and_creates_a_secret_free_recovery_snapshot
             Ok(())
         })
         .unwrap();
-    assert!(app.network_secrets.forwards(None).await.is_err());
+    assert!(app.network_secrets.forwards_strict(None).await.is_err());
 }
 
 #[tokio::test]
@@ -470,4 +511,422 @@ async fn confirmed_socks_and_failed_proxy_migration_preserve_data_and_retry() {
     );
     drop(store);
     assert!(AppServices::recover_legacy_network_secrets(dir.path().to_path_buf(), MASTER).is_ok());
+}
+
+/// R01/S01：一条坏引用不得隐藏完好规则，也不得阻断目标级启动与元数据导出。
+/// 本用例先于修复存在，用于复现 `forwards()` 的整表失败根因。
+#[tokio::test]
+async fn broken_reference_no_longer_hides_healthy_forwards_or_blocks_metadata_export() {
+    use openshell_core_domain::{PortForwardRepository, PortForwardRuleInput};
+
+    let app = AppServices::new_in_memory().unwrap();
+    app.vault
+        .init(
+            MASTER,
+            false,
+            Some(KdfParams {
+                mem_kib: 1024,
+                time: 1,
+                parallelism: 1,
+            }),
+        )
+        .unwrap();
+
+    let good_input = app
+        .network_secrets
+        .prepare_forward(
+            PortForwardRuleInput {
+                name: "healthy".into(),
+                bind_port: 1080,
+                socks_password: Some("synthetic-healthy".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let good = app.port_forward_repo.create(good_input).await.unwrap();
+
+    let broken_ref = SecretId::new().to_string();
+    let bad_id = PortForwardId::new();
+    app.store
+        .with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO port_forward(id,name,type,bind_host,bind_port,socks_auth,socks_password_ref,created_at,updated_at) \
+                 VALUES(?1,'broken','dynamic','127.0.0.1',1081,'userpass',?2,1,1)",
+                rusqlite::params![bad_id.to_string(), broken_ref],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+    let listed = app
+        .network_secrets
+        .forwards(None)
+        .await
+        .expect("一条坏引用不应让整份转发列表不可用");
+    assert_eq!(listed.len(), 2, "两条规则都必须可编辑");
+    // 通过真实序列化边界断言脱敏契约，不依赖列举结构的 Rust 具体类型。
+    let rows = serde_json::to_value(&listed).unwrap();
+    let bad = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == bad_id.as_str())
+        .expect("坏规则必须仍在列表中");
+    assert!(bad["socks_password_ref"].is_null(), "未知引用原值绝不回传");
+    assert_eq!(bad["credential_state"], "needs_reentry");
+    let good_row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == good.id.as_str())
+        .unwrap();
+    assert_eq!(good_row["credential_state"], "ready");
+
+    let stored_ref: String = app
+        .store
+        .with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT socks_password_ref FROM port_forward WHERE id=?1",
+                    [bad_id.as_str()],
+                    |row| row.get(0),
+                )
+                .unwrap())
+        })
+        .unwrap();
+    assert_eq!(stored_ref, broken_ref, "读操作不得改坏持久化原行");
+
+    assert!(app
+        .network_secrets
+        .resolve(&broken_ref, "socks_password")
+        .is_err());
+    assert_eq!(
+        app.network_secrets
+            .resolve(
+                good.socks_password_ref.as_deref().unwrap(),
+                "socks_password"
+            )
+            .unwrap()
+            .as_str(),
+        "synthetic-healthy"
+    );
+
+    let archive = openshell_app_core::archive_service::ArchiveService::new(
+        app.store.clone(),
+        app.vault.manager().clone(),
+    );
+    let json = archive
+        .export_json()
+        .await
+        .expect("元数据导出不应被无关的坏引用卡死");
+    assert!(!json.contains(&broken_ref), "导出不得含未知引用原值");
+    assert!(!json.contains("synthetic-healthy"), "导出不得含合成口令");
+}
+
+/// R01/S01：启动恢复不能只反复询问主密码后退出，须给出仅含安全元数据的逐条补录路径。
+#[tokio::test]
+async fn startup_recovery_offers_only_safe_per_rule_reentry_metadata() {
+    let (dir, _store, _, _) = old_profile();
+    let error = match AppServices::recover_legacy_network_secrets(dir.path().to_path_buf(), MASTER)
+    {
+        Ok(_) => panic!("来源不明时仅主密码不得直接完成恢复"),
+        Err(error) => error,
+    };
+    let items = error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("recovery_items"))
+        .and_then(|value| value.as_array())
+        .expect("恢复入口必须给出逐条补录的安全元数据");
+    assert_eq!(
+        error
+            .details
+            .as_ref()
+            .and_then(|details| details["requires_reentry"].as_bool()),
+        Some(true),
+        "恢复入口必须显式要求逐条补录"
+    );
+    assert_eq!(items.len(), 3, "每条无法判源的规则都要可逐条补录");
+    for item in items {
+        let object = item.as_object().unwrap();
+        assert!(object.contains_key("rule_id"));
+        assert!(object.contains_key("name"));
+        assert!(object.contains_key("bind_port"));
+        assert!(!object.contains_key("socks_password_ref"));
+        let serialized = serde_json::to_string(item).unwrap();
+        for password in LEGACY_SOCKS_PASSWORDS {
+            assert!(
+                !serialized.contains(password),
+                "安全元数据不得包含旧值原内容"
+            );
+        }
+    }
+    assert!(!error.message.contains(MASTER));
+    for password in LEGACY_SOCKS_PASSWORDS {
+        assert!(!error.message.contains(password));
+    }
+}
+
+use openshell_app_core::network_secrets::{
+    ForwardCredentialState, LegacyRecoveryEntry, LegacyRecoveryItem,
+};
+use zeroize::Zeroizing;
+
+fn recovery_entries(items: &[LegacyRecoveryItem], prefix: &str) -> Vec<LegacyRecoveryEntry> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| LegacyRecoveryEntry {
+            rule_id: item.rule_id.clone(),
+            password: Zeroizing::new(format!("{prefix}-{index}")),
+        })
+        .collect()
+}
+
+fn assert_no_plaintext(bytes: &[u8], values: &[&str]) {
+    for value in values {
+        if value.is_empty() {
+            continue;
+        }
+        assert!(
+            !bytes
+                .windows(value.len())
+                .any(|window| window == value.as_bytes()),
+            "合成秘密或旧值不得出现在持久化字节中"
+        );
+    }
+}
+
+/// 只读列举、错误主密码、取消与失败补录都不得改动 schema1 原库。
+fn assert_legacy_rows_untouched(store: &Store, proxy: &str) {
+    assert_eq!(store.schema_version().unwrap(), 1);
+    store
+        .with_conn(|conn| {
+            let refs = conn
+                .prepare("SELECT socks_password_ref FROM port_forward ORDER BY bind_port")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(
+                refs,
+                LEGACY_SOCKS_PASSWORDS
+                    .iter()
+                    .map(|password| (*password).to_owned())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM secret", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "失败路径不得创建或重加密任何秘密"
+            );
+            let raw: String = conn
+                .query_row(
+                    "SELECT value_json FROM setting WHERE key='proxy_list'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(raw.contains(proxy));
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// R01/S01：正确主密码才逐条列出待补录项；错误主密码与只读列举都不写库、不泄露。
+#[tokio::test]
+async fn legacy_recovery_verifies_master_password_before_listing_or_writing() {
+    let (dir, store, proxy, _) = old_profile();
+    let wrong = match AppServices::inspect_legacy_recovery(
+        dir.path().to_path_buf(),
+        "synthetic-wrong-master",
+    ) {
+        Ok(_) => panic!("错误主密码不得解锁旧库"),
+        Err(error) => error,
+    };
+    let rendered = format!("{} {:?} {:?}", wrong.message, wrong.details, wrong);
+    assert!(!rendered.contains("synthetic-wrong-master"));
+    assert!(!rendered.contains(MASTER));
+    for password in LEGACY_SOCKS_PASSWORDS {
+        assert!(!rendered.contains(password));
+    }
+    assert_legacy_rows_untouched(&store, &proxy);
+
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+    assert_eq!(items.len(), 3);
+    let serialized = serde_json::to_string(&items).unwrap();
+    assert!(!serialized.contains("socks_password_ref"));
+    assert!(!serialized.contains(MASTER));
+    for password in LEGACY_SOCKS_PASSWORDS {
+        assert!(!serialized.contains(password));
+    }
+    assert_legacy_rows_untouched(&store, &proxy);
+    assert!(
+        backup::list(&AppPaths::new(dir.path().to_path_buf()).backups_dir)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// R01/S01：逐条补录后旧库真正升级，规则可读可启动；导出与备份不含旧值或新口令。
+#[tokio::test]
+async fn per_rule_reentry_upgrades_legacy_store_and_enables_read_and_start() {
+    let (dir, store, proxy, _) = old_profile();
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+    let entries = recovery_entries(&items, "synthetic-reentered-socks");
+    drop(store);
+    let app = AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &entries,
+    )
+    .unwrap();
+    assert_eq!(
+        app.store.schema_version().unwrap(),
+        openshell_store::SCHEMA_VERSION
+    );
+    let views = app.network_secrets.forwards(None).await.unwrap();
+    assert_eq!(views.len(), items.len());
+    assert!(views
+        .iter()
+        .all(|view| view.credential_state == ForwardCredentialState::Ready));
+    let strict = app.network_secrets.forwards_strict(None).await.unwrap();
+    assert_eq!(strict.len(), items.len());
+    let mut resolved = Vec::new();
+    for rule in &strict {
+        let reference = rule.socks_password_ref.as_deref().unwrap();
+        assert!(!LEGACY_SOCKS_PASSWORDS.contains(&reference));
+        resolved.push(
+            app.network_secrets
+                .resolve(reference, "socks_password")
+                .unwrap()
+                .to_string(),
+        );
+    }
+    resolved.sort();
+    let mut expected = (0..items.len())
+        .map(|index| format!("synthetic-reentered-socks-{index}"))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(resolved, expected, "补录后的口令必须可解密且可用于运行");
+
+    let mut leaks = LEGACY_SOCKS_PASSWORDS.to_vec();
+    leaks.push(proxy.as_str());
+    for entry in &entries {
+        leaks.push(entry.password.as_str());
+    }
+    let snapshots = app.list_backups().unwrap();
+    assert_eq!(snapshots.len(), 1, "升级必须留下迁移前快照");
+    for snapshot in &snapshots {
+        assert_no_plaintext(&std::fs::read(&snapshot.path).unwrap(), &leaks);
+    }
+    let json = openshell_app_core::archive_service::ArchiveService::new(
+        app.store.clone(),
+        app.vault.manager().clone(),
+    )
+    .export_json()
+    .await
+    .unwrap();
+    for value in &leaks {
+        assert!(!json.contains(value), "元数据导出不得含口令或未知引用");
+    }
+}
+
+/// R01/S01：取消保留不写库、不覆盖备份，且重新启动仍可重试并成功。
+#[tokio::test]
+async fn cancelling_reentry_preserves_original_store_and_keeps_retry_open() {
+    let (dir, store, proxy, _) = old_profile();
+    let backups_dir = AppPaths::new(dir.path().to_path_buf()).backups_dir;
+    let before = backup::list(&backups_dir).unwrap();
+    let error = match AppServices::cancel_legacy_recovery() {
+        Ok(()) => panic!("取消必须给出可重试的明确结果"),
+        Err(error) => error,
+    };
+    assert!(error.message.contains("取消"));
+    assert!(!error.message.contains(MASTER));
+    for password in LEGACY_SOCKS_PASSWORDS {
+        assert!(!error.message.contains(password));
+    }
+    assert_legacy_rows_untouched(&store, &proxy);
+    assert_eq!(backup::list(&backups_dir).unwrap().len(), before.len());
+    drop(store);
+
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+    assert_eq!(items.len(), 3, "取消后必须仍能重新逐条补录");
+    let entries = recovery_entries(&items, "synthetic-after-cancel");
+    let app = AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &entries,
+    )
+    .unwrap();
+    assert_eq!(
+        app.store.schema_version().unwrap(),
+        openshell_store::SCHEMA_VERSION
+    );
+}
+
+/// R01/S01：少一条、空口令、重复规则等混合失败一律整事务回滚，且可重试。
+#[tokio::test]
+async fn incomplete_or_invalid_reentry_rolls_back_the_whole_transaction() {
+    let (dir, store, proxy, _) = old_profile();
+    let items = AppServices::inspect_legacy_recovery(dir.path().to_path_buf(), MASTER).unwrap();
+
+    let mut partial = recovery_entries(&items, "synthetic-partial");
+    partial.pop();
+    assert!(AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &partial
+    )
+    .is_err());
+    assert_legacy_rows_untouched(&store, &proxy);
+
+    let mut empty = recovery_entries(&items, "synthetic-empty");
+    empty[1].password = Zeroizing::new(String::new());
+    assert!(AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &empty
+    )
+    .is_err());
+    assert_legacy_rows_untouched(&store, &proxy);
+
+    let mut duplicate = recovery_entries(&items, "synthetic-duplicate");
+    let duplicated_id = duplicate[0].rule_id.clone();
+    duplicate[2].rule_id = duplicated_id;
+    assert!(AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &duplicate
+    )
+    .is_err());
+    assert_legacy_rows_untouched(&store, &proxy);
+
+    let entries = recovery_entries(&items, "synthetic-after-rollback");
+    drop(store);
+    let app = AppServices::recover_legacy_network_secrets_with_reentry(
+        dir.path().to_path_buf(),
+        MASTER,
+        &entries,
+    )
+    .unwrap();
+    assert_eq!(
+        app.store.schema_version().unwrap(),
+        openshell_store::SCHEMA_VERSION
+    );
+    assert_eq!(
+        app.network_secrets
+            .forwards_strict(None)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
 }

@@ -113,11 +113,13 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
   const [restoreBytes, setRestoreBytes] = useState<Uint8Array | null>(null);
   const [restorePassword, setRestorePassword] = useState("");
   const [readingFile, setReadingFile] = useState(false);
+  const [readingFileName, setReadingFileName] = useState("");
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
   const activeTokenRef = useRef<string | null>(null);
+  const committingTokenRef = useRef<string | null>(null);
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
 
@@ -129,20 +131,24 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (activeTokenRef.current) {
-        void discardArchiveToken(activeTokenRef.current);
+      const activeToken = activeTokenRef.current;
+      const committingToken = committingTokenRef.current;
+      if (activeToken && activeToken !== committingToken) {
+        void discardArchiveToken(activeToken);
       }
     };
   }, []);
 
   const invalidatePendingOperations = () => {
     generationRef.current++;
-    if (previewReport?.archive_token) {
-      void discardArchiveToken(previewReport.archive_token);
+    const currentPreviewToken = previewReport?.archive_token;
+    if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
+      void discardArchiveToken(currentPreviewToken);
     }
     setPreviewReport(null);
     setLoading(false);
     setReadingFile(false);
+    setReadingFileName("");
   };
 
   const handleClose = () => {
@@ -169,7 +175,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     setRefreshError(null);
     try {
       await Promise.all([
-        useSessionStore.getState().loadAll(),
+        useSessionStore.getState().loadAll({ throwOnError: true }),
         useSnippetStore.getState().loadSnippets(),
       ]);
       setRefreshError(null);
@@ -187,8 +193,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
       return;
     }
     const currentGen = ++generationRef.current;
-    if (previewReport?.archive_token) {
-      void discardArchiveToken(previewReport.archive_token);
+    const currentPreviewToken = previewReport?.archive_token;
+    if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
+      void discardArchiveToken(currentPreviewToken);
     }
     setPreviewReport(null);
     setLoading(true);
@@ -204,7 +211,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
         report = await importerPreviewFinalShell(inputText, strategy);
       }
       if (!mountedRef.current || generationRef.current !== currentGen) {
-        if (report?.archive_token) {
+        if (report?.archive_token && report.archive_token !== committingTokenRef.current) {
           void discardArchiveToken(report.archive_token);
         }
         return;
@@ -223,36 +230,62 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
 
   const handleCommit = async () => {
     if (!previewReport || (previewReport.candidates.length === 0 && !previewReport.archive_token)) return;
-    const token = previewReport.archive_token;
+    const commitToken = previewReport.archive_token ?? null;
+    const candidates = previewReport.candidates;
+    const warnings = previewReport.warnings || [];
+    const commitGen = ++generationRef.current;
+    committingTokenRef.current = commitToken;
+
     setLoading(true);
     setErrorMsg(null);
     setRefreshError(null);
+
+    let commitSucceeded = false;
+    let count = 0;
+
     try {
-      const count = await importerCommit(previewReport.candidates, token);
-      setCommittedWarnings(previewReport.warnings || []);
-      setSuccessMsg(
-        token
-          ? `已成功恢复 ${count} 个会话及对应归档配置。`
-          : `成功导入 ${count} 个会话。`
-      );
-      setPreviewReport(null);
-      setInputText("");
-      setRestoreJsonText("");
-      setRestoreBytes(null);
-      setRestoreFileName("");
+      count = await importerCommit(candidates, commitToken ?? undefined);
+      commitSucceeded = true;
+
+      if (mountedRef.current && generationRef.current === commitGen) {
+        setCommittedWarnings(warnings);
+        setSuccessMsg(
+          commitToken
+            ? `已成功恢复 ${count} 个会话及对应归档配置。`
+            : `成功导入 ${count} 个会话。`
+        );
+        setPreviewReport(null);
+        setInputText("");
+        setRestoreJsonText("");
+        setRestoreBytes(null);
+        setRestoreFileName("");
+      }
+
+      // Requirement 1: "提交成功仍完成应有全局读刷新。关闭/卸载同理。"
       try {
         await Promise.all([
-          useSessionStore.getState().loadAll(),
+          useSessionStore.getState().loadAll({ throwOnError: true }),
           useSnippetStore.getState().loadSnippets(),
         ]);
       } catch (refreshErr: any) {
         console.warn("Commit succeeded but view refresh failed:", refreshErr);
-        setRefreshError(formatFriendlyError(refreshErr));
+        if (mountedRef.current && generationRef.current === commitGen) {
+          setRefreshError(formatFriendlyError(refreshErr));
+        }
       }
     } catch (e: any) {
-      setErrorMsg(formatFriendlyError(e));
+      if (mountedRef.current && generationRef.current === commitGen) {
+        setErrorMsg(formatFriendlyError(e));
+      } else if (!commitSucceeded && commitToken) {
+        void discardArchiveToken(commitToken);
+      }
     } finally {
-      setLoading(false);
+      if (committingTokenRef.current === commitToken) {
+        committingTokenRef.current = null;
+      }
+      if (mountedRef.current && generationRef.current === commitGen) {
+        setLoading(false);
+      }
     }
   };
 
@@ -302,8 +335,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     if (!file) return;
 
     const currentGen = ++generationRef.current;
-    if (previewReport?.archive_token) {
-      void discardArchiveToken(previewReport.archive_token);
+    const currentPreviewToken = previewReport?.archive_token;
+    if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
+      void discardArchiveToken(currentPreviewToken);
     }
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -311,9 +345,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     setPreviewReport(null);
     setLoading(false);
     setReadingFile(true);
-    setRestoreFileName(file.name);
-    setRestoreJsonText("");
-    setRestoreBytes(null);
+    setReadingFileName(file.name);
     setRestorePassword("");
 
     try {
@@ -322,11 +354,13 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
         if (!mountedRef.current || generationRef.current !== currentGen) return;
         setRestoreBytes(new Uint8Array(buffer));
         setRestoreJsonText("");
+        setRestoreFileName(file.name);
       } else {
         const text = await file.text();
         if (!mountedRef.current || generationRef.current !== currentGen) return;
         setRestoreJsonText(text);
         setRestoreBytes(null);
+        setRestoreFileName(file.name);
       }
     } catch (err) {
       if (mountedRef.current && generationRef.current === currentGen) {
@@ -338,6 +372,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     } finally {
       if (mountedRef.current && generationRef.current === currentGen) {
         setReadingFile(false);
+        setReadingFileName("");
       }
     }
   };
@@ -345,12 +380,22 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
   const isRestoreReady =
     !readingFile &&
     !!restoreFileName &&
-    (restoreBytes !== null || restoreJsonText.trim().length > 0);
+    (restoreBytes !== null
+      ? restoreFileName.toLowerCase().endsWith(".osvault")
+      : restoreJsonText.trim().length > 0 && !restoreFileName.toLowerCase().endsWith(".osvault"));
 
   const handleRestorePreview = async () => {
     const isEncrypted = restoreBytes !== null;
-    if (!isEncrypted && !restoreJsonText.trim()) {
+    if (!restoreFileName) {
       setErrorMsg("请先选择需要恢复的备份文件");
+      return;
+    }
+    if (isEncrypted && !restoreFileName.toLowerCase().endsWith(".osvault")) {
+      setErrorMsg("备份文件与内容类型不匹配，请重新选择文件");
+      return;
+    }
+    if (!isEncrypted && (restoreFileName.toLowerCase().endsWith(".osvault") || !restoreJsonText.trim())) {
+      setErrorMsg("备份文件与内容类型不匹配，请重新选择文件");
       return;
     }
     if (isEncrypted && !restorePassword) {
@@ -359,8 +404,9 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     }
 
     const currentGen = ++generationRef.current;
-    if (previewReport?.archive_token) {
-      void discardArchiveToken(previewReport.archive_token);
+    const currentPreviewToken = previewReport?.archive_token;
+    if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
+      void discardArchiveToken(currentPreviewToken);
     }
     setPreviewReport(null);
     setLoading(true);
@@ -374,7 +420,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
         : await importerPreviewBundleJson(restoreJsonText, strategy);
 
       if (!mountedRef.current || generationRef.current !== currentGen) {
-        if (report?.archive_token) {
+        if (report?.archive_token && report.archive_token !== committingTokenRef.current) {
           void discardArchiveToken(report.archive_token);
         }
         return;
@@ -544,7 +590,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
                   浏览文件
                 </Button>
                 <span className="truncate text-os-xs text-ink-secondary">
-                  {readingFile ? `${restoreFileName} (读取中...)` : restoreFileName || "尚未选择文件"}
+                  {readingFile ? `${readingFileName} (读取中...)` : restoreFileName || "尚未选择文件"}
                 </span>
                 <input
                   ref={restoreInputRef}

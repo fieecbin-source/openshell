@@ -32,6 +32,7 @@ beforeEach(() => {
     newlineMode: "none",
     isTimerRunning: false,
     timerHandle: null,
+    timerCardId: null,
     sendError: null,
   });
 });
@@ -192,4 +193,77 @@ it("S06: does not write a snippet when the port is torn down during encoding", a
 
   await expect(pending).rejects.toThrow();
   expect(write).not.toHaveBeenCalled();
+});
+
+// ── Task7 R06：旧 encode / send 拒绝不得污染新 timer、旧 sendError 或其他 card ──
+it("R06: a stale encode rejection cannot stop the new timer or write an old sendError", async () => {
+  let failEncode!: (error: Error) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((_resolve, reject) => { failEncode = reject; })
+  );
+  const stale = useSerialStore.getState().sendCurrent("card-stale", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+
+  // 断开重开后新 timer 已启动；旧句柄的编码拒绝此时才到达
+  pauseSerialRead("card-stale");
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 2 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "card-stale",
+    sendError: null,
+  });
+  failEncode(new Error("encoder unavailable"));
+
+  await expect(stale).rejects.toThrow();
+  expect(useSerialStore.getState().sendError).toBeNull();
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerHandle).toBe(2 as unknown as ReturnType<typeof setInterval>);
+  expect(useSerialStore.getState().timerCardId).toBe("card-stale");
+});
+
+it("R06: a stale sendSerial rejection cannot stop a different card's timer", async () => {
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+  let failWrite!: (error: Error) => void;
+  write.mockImplementationOnce(
+    () => new Promise<number>((_resolve, reject) => { failWrite = reject; })
+  );
+  const stale = useSerialStore.getState().sendCurrent("card-old", "utf-8");
+  await vi.advanceTimersByTimeAsync(0);
+
+  pauseSerialRead("card-old");
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 3 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "card-other",
+    sendError: null,
+  });
+  failWrite(new Error("device gone"));
+
+  await expect(stale).rejects.toThrow();
+  expect(useSerialStore.getState().sendError).toBeNull();
+  expect(useSerialStore.getState().isTimerRunning).toBe(true);
+  expect(useSerialStore.getState().timerHandle).toBe(3 as unknown as ReturnType<typeof setInterval>);
+  expect(useSerialStore.getState().timerCardId).toBe("card-other");
+});
+
+it("R06: a genuine failure on the current card still reports the error and stops its own timer", async () => {
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+  write.mockRejectedValueOnce(new Error("write failed"));
+  useSerialStore.setState({
+    isTimerRunning: true,
+    timerHandle: 4 as unknown as ReturnType<typeof setInterval>,
+    timerCardId: "card-current",
+    sendError: null,
+  });
+
+  await expect(
+    useSerialStore.getState().sendCurrent("card-current", "utf-8")
+  ).rejects.toThrow("write failed");
+  expect(useSerialStore.getState().sendError).toMatchObject({
+    cardId: "card-current",
+    message: expect.stringContaining("write failed"),
+  });
+  expect(useSerialStore.getState().isTimerRunning).toBe(false);
+  expect(useSerialStore.getState().timerHandle).toBeNull();
+  expect(useSerialStore.getState().timerCardId).toBeNull();
 });

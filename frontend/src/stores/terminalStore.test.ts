@@ -12,13 +12,16 @@ import {
   terminalEncode,
   writeTerminal,
 } from "../lib/ipc";
-import { closeSerial, createCard, launchRdp, openSerial } from "../lib/ipc";
+import { closeCard, closeSerial, createCard, launchRdp, openSerial } from "../lib/ipc";
+import { useSerialStore } from "./serialStore";
 import type { SerialProfileConfig, Session } from "../types/ipc";
 
 vi.mock("../lib/ipc", () => ({
   closeConnection: vi.fn(), closeTerminal: vi.fn(), connectSession: vi.fn(), forwardList: vi.fn(),
   closeSerial: vi.fn(), closeCard: vi.fn(), createCard: vi.fn(), openSerial: vi.fn(), launchRdp: vi.fn(),
   rdpClose: vi.fn(), rdpGetStatus: vi.fn(), sendSerial: vi.fn(), writeTerminal: vi.fn(), terminalEncode: vi.fn(),
+  setCardMode: vi.fn(), forwardStart: vi.fn(), listSerialPorts: vi.fn(), setSerialLines: vi.fn(),
+  getSerialModemStatus: vi.fn(), getSerialStats: vi.fn(), readSerial: vi.fn(),
 }));
 const tab = { tabId: "tab", sessionId: "session", sessionName: "Test host", protocol: "ssh", connectionId: "old-connection", status: "connected", currentMode: "command" } as TerminalTab;
 const serialConfig = {
@@ -54,7 +57,7 @@ beforeEach(() => {
     exit_code: null,
   } as any);
   useSessionStore.setState({ sessions: [] });
-  useTerminalStore.setState({ tabs: [{ ...tab }], activeTabId: tab.tabId });
+  useTerminalStore.setState({ tabs: [{ ...tab }], activeTabId: tab.tabId, rdpCleanupFailures: [] });
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
@@ -644,4 +647,279 @@ it("S06: rejects a pending send when the same serial card is reopened during enc
   expect(closeSerial).toHaveBeenCalledWith("card-race");
   expect(openSerial).toHaveBeenCalledWith("card-race", serialConfig, false);
   expect(sendSerial).not.toHaveBeenCalled();
+});
+
+// ── Task7 R06–R09：先在未修复实现上作为红测复现，再做最小修复 ──
+const serialRaceTab = (tabId: string, cardId: string) =>
+  ({
+    ...tab,
+    tabId,
+    sessionId: "serial-close-session",
+    protocol: "serial",
+    cardId,
+    connectionId: null,
+    status: "connected",
+    serialConfig,
+  }) as unknown as TerminalTab;
+
+const reconnectSsh = async (tabId: string, sessionId: string, connectionId: string) => {
+  vi.mocked(connectSession).mockResolvedValue({ connection_id: connectionId, session_id: sessionId });
+  useTerminalStore.getState().markDisconnected(tabId, "link reset");
+  await useTerminalStore.getState().reconnectTab(tabId);
+};
+
+it("R06: a stale terminalEncode rejection after a reconnect is not reported as a write failure", async () => {
+  useSessionStore.setState({ sessions: [raceSession("r06-ssh")] });
+  useTerminalStore.setState({
+    tabs: [{ ...tab, tabId: "r06-ssh-tab", sessionId: "r06-ssh", protocol: "ssh", status: "connected", connectionId: "r06-old" } as TerminalTab],
+    activeTabId: "r06-ssh-tab",
+  });
+  let failEncode!: (error: Error) => void;
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((_resolve, reject) => { failEncode = reject; })
+  );
+
+  const pending = useTerminalStore.getState().sendTextToTab("r06-ssh-tab", "中文");
+  await vi.advanceTimersByTimeAsync(0);
+  vi.mocked(connectSession).mockResolvedValue({ connection_id: "r06-new", session_id: "r06-ssh" });
+  useTerminalStore.getState().markDisconnected("r06-ssh-tab", "link reset");
+  const reconnecting = useTerminalStore.getState().reconnectTab("r06-ssh-tab");
+  await vi.advanceTimersByTimeAsync(0);
+  failEncode(new Error("encoder unavailable"));
+  await reconnecting;
+
+  await expect(pending).rejects.toMatchObject({ name: "StaleTargetError" });
+  expect(writeTerminal).not.toHaveBeenCalled();
+  expect(findTab("r06-ssh-tab")).toMatchObject({ status: "connected", connectionId: "r06-new" });
+});
+
+it("R06: a stale writeTerminal rejection after a reconnect is not reported as a write failure", async () => {
+  useTerminalStore.setState({
+    tabs: [{ ...tab, tabId: "r06-write", status: "connected", connectionId: "r06-w-old" } as TerminalTab],
+    activeTabId: "r06-write",
+  });
+  let failWrite!: (error: Error) => void;
+  vi.mocked(writeTerminal).mockImplementationOnce(
+    () => new Promise<number>((_resolve, reject) => { failWrite = reject; })
+  );
+
+  const pending = useTerminalStore.getState().sendTextToTab("r06-write", "A");
+  await vi.advanceTimersByTimeAsync(0);
+  await reconnectSsh("r06-write", "session", "r06-w-new");
+  failWrite(new Error("pty write failed"));
+
+  await expect(pending).rejects.toMatchObject({ name: "StaleTargetError" });
+  expect(findTab("r06-write")).toMatchObject({ status: "connected", connectionId: "r06-w-new" });
+});
+
+it("R07: closeTab expires pending serial sends before the deferred closeCard resolves", async () => {
+  useTerminalStore.setState({
+    tabs: [serialRaceTab("r07-tab", "r07-card")],
+    activeTabId: "r07-tab",
+  });
+  useSerialStore.setState({ sendText: "AT", sendIsHex: false, newlineMode: "none", sendError: null });
+  let finishEncode!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishEncode = resolve; })
+  );
+
+  const pendingSend = useSerialStore.getState().sendCurrent("r07-card", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+
+  let finishCloseCard!: () => void;
+  vi.mocked(closeCard).mockImplementationOnce(
+    () => new Promise<void>((resolve) => { finishCloseCard = resolve; })
+  );
+  const closing = useTerminalStore.getState().closeTab("r07-tab");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(useTerminalStore.getState().tabs).toHaveLength(0);
+
+  // closeCard 仍然 pending：旧编码结果不能落到旧句柄或随后重开的同 cardId 句柄
+  finishEncode([0x41]);
+  await expect(pendingSend).rejects.toThrow();
+  expect(sendSerial).not.toHaveBeenCalled();
+
+  finishCloseCard();
+  await closing;
+});
+
+it("R07: reopening the same card accepts a fresh send but still rejects the stale one", async () => {
+  useTerminalStore.setState({
+    tabs: [serialRaceTab("r07-reopen", "r07-reopen-card")],
+    activeTabId: "r07-reopen",
+  });
+  useSerialStore.setState({ sendText: "AT", sendIsHex: false, newlineMode: "none", sendError: null });
+  let finishStale!: (value: number[]) => void;
+  let finishFresh!: (value: number[]) => void;
+  vi.mocked(terminalEncode)
+    .mockImplementationOnce(() => new Promise<number[]>((resolve) => { finishStale = resolve; }))
+    .mockImplementationOnce(() => new Promise<number[]>((resolve) => { finishFresh = resolve; }));
+
+  const staleSend = useSerialStore.getState().sendCurrent("r07-reopen-card", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+  await useTerminalStore.getState().closeTab("r07-reopen");
+
+  // 相同 cardId 重新打开：新发送领到新代次，旧发送仍是旧代次
+  const freshSend = useSerialStore.getState().sendCurrent("r07-reopen-card", "gb18030");
+  await vi.advanceTimersByTimeAsync(0);
+  finishFresh([0x42]);
+  await freshSend;
+  expect(sendSerial).toHaveBeenCalledTimes(1);
+  expect(sendSerial).toHaveBeenCalledWith("r07-reopen-card", expect.any(Uint8Array));
+
+  finishStale([0x41]);
+  await expect(staleSend).rejects.toThrow();
+  expect(sendSerial).toHaveBeenCalledTimes(1);
+});
+
+it("R09: freezes the whole broadcast set so a tab reconnecting during A's await gets no old command", async () => {
+  useSessionStore.setState({ sessions: [raceSession("r09")] });
+  useTerminalStore.setState({
+    tabs: [
+      { ...tab, tabId: "r09-A", sessionId: "r09", protocol: "ssh", status: "connected", connectionId: "r09-conn-A" } as TerminalTab,
+      { ...tab, tabId: "r09-B", sessionId: "r09", protocol: "ssh", status: "connected", connectionId: "r09-conn-B" } as TerminalTab,
+      { ...tab, tabId: "r09-C", sessionId: "r09", protocol: "ssh", status: "connected", connectionId: "r09-conn-C" } as TerminalTab,
+    ],
+    activeTabId: "r09-A",
+  });
+  let finishA!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockResolvedValue([0x43]);
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishA = resolve; })
+  );
+
+  const broadcast = useTerminalStore.getState().sendCommandToTabs("ls", { allTabs: true });
+  await vi.advanceTimersByTimeAsync(0);
+  vi.mocked(connectSession).mockResolvedValue({ connection_id: "r09-conn-B-new", session_id: "r09" });
+  useTerminalStore.getState().markDisconnected("r09-B", "network reset");
+  const reconnectB = useTerminalStore.getState().reconnectTab("r09-B");
+  await vi.advanceTimersByTimeAsync(0);
+  finishA([0x41]);
+  await reconnectB;
+  await broadcast;
+
+  expect(terminalEncode).toHaveBeenNthCalledWith(1, "ls\r", "gb18030");
+  expect(writeTerminal).toHaveBeenCalledWith("r09-A", new Uint8Array([0x41]));
+  expect(writeTerminal).toHaveBeenCalledWith("r09-C", new Uint8Array([0x43]));
+  expect(writeTerminal).not.toHaveBeenCalledWith("r09-B", expect.anything());
+  expect(findTab("r09-B")).toMatchObject({ status: "connected", connectionId: "r09-conn-B-new" });
+  expect(findTab("r09-B")?.error).toBeUndefined();
+});
+
+it("R09: a tab closed during A's await is dropped and an unchanged C still receives the command", async () => {
+  useSessionStore.setState({ sessions: [raceSession("r09-close")] });
+  useTerminalStore.setState({
+    tabs: [
+      { ...tab, tabId: "r09c-A", sessionId: "r09-close", status: "connected" } as TerminalTab,
+      { ...tab, tabId: "r09c-B", sessionId: "r09-close", status: "connected" } as TerminalTab,
+      { ...tab, tabId: "r09c-C", sessionId: "r09-close", status: "connected" } as TerminalTab,
+    ],
+    activeTabId: "r09c-A",
+  });
+  let finishA!: (value: number[]) => void;
+  vi.mocked(terminalEncode).mockResolvedValue([0x43]);
+  vi.mocked(terminalEncode).mockImplementationOnce(
+    () => new Promise<number[]>((resolve) => { finishA = resolve; })
+  );
+
+  const broadcast = useTerminalStore.getState().sendCommandToTabs("ls", { allTabs: true });
+  await vi.advanceTimersByTimeAsync(0);
+  const closing = useTerminalStore.getState().closeTab("r09c-B");
+  await vi.advanceTimersByTimeAsync(0);
+  finishA([0x41]);
+  await closing;
+  await broadcast;
+
+  expect(writeTerminal).not.toHaveBeenCalledWith("r09c-B", expect.anything());
+  expect(writeTerminal).toHaveBeenCalledWith("r09c-C", new Uint8Array([0x43]));
+  expect(findTab("r09c-B")).toBeUndefined();
+});
+
+it("R09: the frozen broadcast keeps the selected tab, CRLF payload, active tab and history", async () => {
+  useSessionStore.setState({ sessions: [raceSession("r09-select")] });
+  useTerminalStore.setState({
+    tabs: [
+      { ...tab, tabId: "r09s-A", sessionId: "r09-select", status: "connected" } as TerminalTab,
+      { ...tab, tabId: "r09s-B", sessionId: "r09-select", status: "connected" } as TerminalTab,
+    ],
+    activeTabId: "r09s-A",
+    commandHistory: [],
+  });
+  vi.mocked(terminalEncode).mockResolvedValue([0x41]);
+
+  await useTerminalStore.getState().sendCommandToTabs("ls");
+
+  expect(terminalEncode).toHaveBeenCalledTimes(1);
+  expect(terminalEncode).toHaveBeenCalledWith("ls\r", "gb18030");
+  expect(writeTerminal).toHaveBeenCalledTimes(1);
+  expect(writeTerminal).toHaveBeenCalledWith("r09s-A", new Uint8Array([0x41]));
+  expect(useTerminalStore.getState().activeTabId).toBe("r09s-A");
+  expect(useTerminalStore.getState().commandHistory).toHaveLength(0);
+});
+
+it("R08: a late first-open launch whose cleanup fails keeps a retryable launch_id owner", async () => {
+  let finishLaunch!: (value: any) => void;
+  vi.mocked(launchRdp).mockImplementationOnce(
+    () => new Promise((resolve) => { finishLaunch = resolve; })
+  );
+  const opening = useTerminalStore.getState().openSessionTab(rdpSession("r08-first"));
+  const tabId = useTerminalStore.getState().tabs.at(-1)!.tabId;
+  await vi.advanceTimersByTimeAsync(0);
+  await useTerminalStore.getState().closeTab(tabId);
+  expect(findTab(tabId)).toBeUndefined();
+
+  vi.mocked(rdpClose).mockRejectedValueOnce(new Error("kill denied"));
+  finishLaunch(launchResult("L-orphan-first", "r08-first"));
+  await opening;
+
+  expect(rdpClose).toHaveBeenCalledWith("L-orphan-first");
+  expect(useTerminalStore.getState().rdpCleanupFailures).toEqual([
+    expect.objectContaining({ tabId, launchId: "L-orphan-first", error: expect.any(String) }),
+  ]);
+  expect(typeof useTerminalStore.getState().retryRdpCleanups).toBe("function");
+
+  await useTerminalStore.getState().retryRdpCleanups();
+  expect(rdpClose).toHaveBeenCalledTimes(2);
+  expect(useTerminalStore.getState().rdpCleanupFailures).toHaveLength(0);
+  expect(findTab(tabId)).toBeUndefined();
+});
+
+it("R08: a late restart launch whose cleanup fails keeps a retryable owner without reviving the tab", async () => {
+  useTerminalStore.setState({ tabs: [rdpRaceTab("r08-late", "L-old")], activeTabId: "r08-late" });
+  let finishLaunch!: (value: any) => void;
+  vi.mocked(launchRdp).mockImplementationOnce(
+    () => new Promise((resolve) => { finishLaunch = resolve; })
+  );
+  const restarting = useTerminalStore.getState().reconnectTab("r08-late");
+  await vi.advanceTimersByTimeAsync(0);
+  await useTerminalStore.getState().closeTab("r08-late");
+  expect(findTab("r08-late")).toBeUndefined();
+
+  vi.mocked(rdpClose).mockRejectedValueOnce(new Error("kill denied"));
+  finishLaunch(launchResult("L-late-orphan", "rdp-race-session"));
+  await restarting;
+
+  expect(rdpClose).toHaveBeenCalledWith("L-late-orphan");
+  expect(useTerminalStore.getState().rdpCleanupFailures).toEqual([
+    expect.objectContaining({ tabId: "r08-late", launchId: "L-late-orphan" }),
+  ]);
+  await useTerminalStore.getState().retryRdpCleanups();
+  expect(useTerminalStore.getState().rdpCleanupFailures).toHaveLength(0);
+  expect(findTab("r08-late")).toBeUndefined();
+});
+
+it("R08: a closeTab rdpClose failure keeps the launch_id for an explicit retry", async () => {
+  useTerminalStore.setState({ tabs: [rdpRaceTab("r08-close", "L-close")], activeTabId: "r08-close" });
+  vi.mocked(rdpClose).mockRejectedValueOnce(new Error("kill denied"));
+
+  await useTerminalStore.getState().closeTab("r08-close");
+
+  expect(findTab("r08-close")).toBeUndefined();
+  expect(useTerminalStore.getState().rdpCleanupFailures).toEqual([
+    expect.objectContaining({ tabId: "r08-close", launchId: "L-close" }),
+  ]);
+  await useTerminalStore.getState().retryRdpCleanups();
+  expect(rdpClose).toHaveBeenCalledTimes(2);
+  expect(useTerminalStore.getState().rdpCleanupFailures).toHaveLength(0);
 });

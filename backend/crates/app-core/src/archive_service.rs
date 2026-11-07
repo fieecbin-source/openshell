@@ -332,7 +332,18 @@ impl ArchiveService {
         let network =
             crate::network_secrets::NetworkSecrets::new(self.store.clone(), self.vault.clone());
         let proxies = network.proxies()?;
-        let forwards = network.forwards(None).await?;
+        // 元数据导出走脱敏列举：坏行不携带未知 ref 原值，也不阻断整份导出。
+        // 含秘密导出仍走严格完整性校验，缺失依赖必须拒绝，不能接受不完整状态。
+        let forwards = if with_secrets {
+            network.forwards_strict(None).await?
+        } else {
+            network
+                .forwards(None)
+                .await?
+                .into_iter()
+                .map(|view| view.rule)
+                .collect()
+        };
         let mut groups = GroupRepo::new(self.store.clone())
             .list(GroupKind::Session)
             .await?;

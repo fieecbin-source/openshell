@@ -41,7 +41,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
     rules,
     statuses,
     loading,
+    loadError,
+    refreshError,
     loadRules,
+    retryRefresh,
     createRule,
     updateRule,
     deleteRule,
@@ -64,16 +67,18 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
   const [socksPassword, setSocksPassword] = useState("");
   const [clearSocksPassword, setClearSocksPassword] = useState(false);
   const [hasStoredSocksPassword, setHasStoredSocksPassword] = useState(false);
+  const [needsCredentialReentry, setNeedsCredentialReentry] = useState(false);
   const [exposeAck, setExposeAck] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    loadRules(sessionId);
+    void loadRules(sessionId).catch((e) => setReadError(formatFriendlyError(e)));
   }, [sessionId]);
 
   const isExposeRisky = bindHost === "0.0.0.0" || bindHost === "::";
@@ -92,6 +97,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
     setSocksPassword("");
     setClearSocksPassword(false);
     setHasStoredSocksPassword(false);
+    setNeedsCredentialReentry(false);
     setExposeAck(false);
     setAutoStart(false);
     setAutoReconnect(true);
@@ -114,7 +120,11 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
     setSocksUsername(rule.socks_username || "");
     setSocksPassword("");
     setClearSocksPassword(false);
-    setHasStoredSocksPassword(Boolean((rule as any).has_socks_password || rule.socks_password_ref));
+    const needsReentry = rule.credential_state === "needs_reentry";
+    setNeedsCredentialReentry(needsReentry);
+    setHasStoredSocksPassword(
+      !needsReentry && Boolean(rule.has_socks_password || rule.socks_password_ref),
+    );
     setExposeAck(rule.expose_warning_ack || false);
     setAutoStart(rule.auto_start || false);
     setAutoReconnect(rule.auto_reconnect ?? true);
@@ -149,6 +159,17 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
         setErrorMsg("选择用户名口令认证时必须填写认证密码");
         return;
       }
+    }
+    // 坏引用规则不得被静默保存：必须显式输入新密码，或明确改选无密码认证/清除。
+    if (
+      editingRuleId &&
+      needsCredentialReentry &&
+      ruleType === "dynamic" &&
+      isUserPass &&
+      !socksPassword
+    ) {
+      setErrorMsg("该规则凭据需补录，必须填写认证密码");
+      return;
     }
 
     setSubmitting(true);
@@ -258,6 +279,26 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
             </InlineNotice>
           )}
 
+          {(readError || loadError || refreshError) && (
+            <InlineNotice
+              tone="danger"
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setReadError(null);
+                    void retryRefresh();
+                  }}
+                >
+                  重试
+                </Button>
+              }
+            >
+              {readError || loadError || refreshError}
+            </InlineNotice>
+          )}
+
           {loading ? (
             <div className="py-12 text-center text-os-xs text-ink-tertiary">加载规则中...</div>
           ) : rules.length === 0 ? (
@@ -302,6 +343,9 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                         )}
                         {rule.auto_start && (
                           <Badge tone="neutral">自动启动</Badge>
+                        )}
+                        {rule.credential_state === "needs_reentry" && (
+                          <Badge tone="warning">需补录</Badge>
                         )}
                         {isListening ? (
                           <Badge tone="success" className="gap-1 font-mono">
@@ -562,7 +606,10 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
                       <div className="flex items-center justify-between w-full">
                         <span>
                           认证密码
-                          {editingRuleId && hasStoredSocksPassword && !clearSocksPassword && (
+                          {editingRuleId && needsCredentialReentry && (
+                            <span className="ml-1.5 font-normal text-state-warning text-os-2xs">需补录</span>
+                          )}
+                          {editingRuleId && !needsCredentialReentry && hasStoredSocksPassword && !clearSocksPassword && (
                             <span className="ml-1.5 font-normal text-accent text-os-2xs">已存</span>
                           )}
                         </span>

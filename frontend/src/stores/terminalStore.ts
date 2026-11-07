@@ -28,6 +28,7 @@ import {
 } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { encodeTextForSession } from "../lib/terminal-actions";
+import { expireSerialSendEpoch } from "./serialStore";
 
 export interface ConnectOverrides {
   host?: string;
@@ -164,6 +165,28 @@ class StaleTargetError extends Error {
   }
 }
 
+/** 清理失败但仍需释放的 RDP 实例：保留 launch_id 所有权，供界面显式重试 */
+export interface RdpCleanupFailure {
+  tabId: string;
+  launchId: string;
+  error: string;
+}
+
+/**
+ * rdpClose 失败时不能 .catch 吞掉 launch_id，也不能只靠应用退出兜底。
+ * 记录所有权与可见错误（不写回 tab.error，避免旧失败污染已接管的新连接界面），
+ * 由 retryRdpCleanups 对同一 launch_id 重新发起真实关闭。
+ */
+function recordRdpCleanupFailure(tabId: string, launchId: string, error: unknown): void {
+  const message = formatFriendlyError(error);
+  useTerminalStore.setState((state) => ({
+    rdpCleanupFailures: [
+      ...state.rdpCleanupFailures.filter((item) => item.launchId !== launchId),
+      { tabId, launchId, error: message },
+    ],
+  }));
+}
+
 /** 断线自动重连定时器：按标签 ID 记录，手动重连/关闭标签/连接成功时统一清理 */
 const autoReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -276,6 +299,9 @@ interface TerminalState {
   renameTab: (tabId: string, newName: string) => void;
   duplicateTab: (tabId: string) => Promise<string | null>;
   reorderTabs: (sourceIndex: number, destinationIndex: number) => void;
+  /** 清理失败但仍持有 launch_id 的 RDP 实例，供界面展示错误并显式重试 */
+  rdpCleanupFailures: RdpCleanupFailure[];
+  retryRdpCleanups: () => Promise<void>;
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -286,6 +312,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   splitRatio: 0.58,
   isFullscreen: false,
   commandHistory: readCommandHistory(),
+  rdpCleanupFailures: [],
 
   setLayoutMode: (layoutMode) => set({ layoutMode }),
   setSplitRatio: (splitRatio) => set({ splitRatio: Math.min(0.85, Math.max(0.15, splitRatio)) }),
@@ -383,8 +410,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       try {
         const rdpInfo = await launchRdp(session.id);
         if (!get().tabs.some((item) => item.tabId === tabId)) {
-          // 启动请求迟到且标签已被关闭：释放刚刚创建的实例，避免遗留自有进程
-          await rdpClose(rdpInfo.launch_id).catch(() => {});
+          // 启动请求迟到且标签已被关闭：释放刚刚创建的实例，避免遗留自有进程。
+          // 关闭失败时保留 launch_id 所有权与可见错误，供显式重试，不靠应用退出兜底。
+          try {
+            await rdpClose(rdpInfo.launch_id);
+          } catch (e) {
+            recordRdpCleanupFailure(tabId, rdpInfo.launch_id, e);
+          }
           return tabId;
         }
         set((state) => ({
@@ -594,6 +626,27 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set({ commandHistory: [] });
   },
 
+  retryRdpCleanups: async () => {
+    // 只重试记录中的 launch_id；成功后移除所有权，失败则保留并更新可见错误。
+    for (const item of [...get().rdpCleanupFailures]) {
+      try {
+        await rdpClose(item.launchId);
+        set((state) => ({
+          rdpCleanupFailures: state.rdpCleanupFailures.filter(
+            (failure) => failure.launchId !== item.launchId
+          ),
+        }));
+      } catch (e) {
+        const message = formatFriendlyError(e);
+        set((state) => ({
+          rdpCleanupFailures: state.rdpCleanupFailures.map((failure) =>
+            failure.launchId === item.launchId ? { ...failure, error: message } : failure
+          ),
+        }));
+      }
+    }
+  },
+
   sendTextToTab: async (tabId, text) => {
     const tab = get().tabs.find((item) => item.tabId === tabId);
     if (!tab) throw new Error("目标标签不存在或已关闭");
@@ -601,36 +654,46 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       throw new Error(`目标标签当前不可发送：${tab.sessionName}`);
     }
 
-    // 入口捕获连接代次与身份；串口用 cardId，其余用 connectionId。
+    // 入口冻结连接代次与身份；串口用 cardId，其余用 connectionId。
     const epoch = currentConnectionEpoch(tabId);
     const capturedProtocol = tab.protocol;
     const capturedConnectionId = tab.connectionId;
     const capturedCardId = tab.cardId || tab.tabId;
 
-    const { useSessionStore } = await import("./sessionStore");
-    const encoding = useSessionStore
-      .getState()
-      .sessions.find((item) => item.id === tab.sessionId)?.encoding;
-    // 编码失败/发送失败都向上抛出，由调用者决定如何提示；这里不吞错。
-    const bytes = await encodeTextForSession(text, encoding);
+    const identityUnchanged = (live: TerminalTab): boolean =>
+      live.protocol === capturedProtocol &&
+      isCurrentConnectionEpoch(tabId, epoch) &&
+      (capturedProtocol !== "serial" || (live.cardId || live.tabId) === capturedCardId) &&
+      (capturedProtocol === "serial" || live.connectionId === capturedConnectionId);
+    const stale = () => new StaleTargetError("目标标签连接已变更，本次发送已取消");
+    const assertCurrent = (): TerminalTab => {
+      const live = get().tabs.find((item) => item.tabId === tabId);
+      if (!live || !identityUnchanged(live) || live.status !== "connected") throw stale();
+      return live;
+    };
 
-    // 动态 import 与非 UTF-8 编码都是真实 await：期间标签可能已关闭、重连，
-    // 或串口同 cardId 重开。写入前重新读取 live tab 并复核归属，旧操作直接拒绝。
-    const live = get().tabs.find((item) => item.tabId === tabId);
-    if (
-      !live ||
-      live.status !== "connected" ||
-      live.protocol !== capturedProtocol ||
-      !isCurrentConnectionEpoch(tabId, epoch) ||
-      (capturedProtocol !== "serial" && live.connectionId !== capturedConnectionId) ||
-      (capturedProtocol === "serial" && (live.cardId || live.tabId) !== capturedCardId)
-    ) {
-      throw new StaleTargetError("目标标签连接已变更，本次发送已取消");
-    }
-    if (live.protocol === "serial") {
-      await sendSerial(live.cardId || live.tabId, Array.from(bytes));
-    } else {
-      await writeTerminal(live.tabId, bytes);
+    try {
+      // import / 编码 / 写入的每个 await 的 resolve 与 reject 都按所属代次校验。
+      const { useSessionStore } = await import("./sessionStore");
+      assertCurrent();
+      const encoding = useSessionStore
+        .getState()
+        .sessions.find((item) => item.id === tab.sessionId)?.encoding;
+      const bytes = await encodeTextForSession(text, encoding);
+      const live = assertCurrent();
+      if (live.protocol === "serial") {
+        await sendSerial(live.cardId || live.tabId, Array.from(bytes));
+      } else {
+        await writeTerminal(live.tabId, bytes);
+      }
+      assertCurrent();
+    } catch (err) {
+      if (err instanceof StaleTargetError) throw err;
+      // 代次/身份已变的旧 import、编码或写入拒绝归一为主动取消，调用者才不会
+      // 把新连接标记成断开；当前代次的真实失败照常上报，不吞错。
+      const live = get().tabs.find((item) => item.tabId === tabId);
+      if (!live || !identityUnchanged(live)) throw stale();
+      throw err;
     }
   },
 
@@ -639,7 +702,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const payload = appendCr ? `${command}\r` : command;
 
     const state = get();
-    const targets = options?.allTabs
+    const eligible = options?.allTabs
       ? state.tabs.filter(
           (tab) => tab.status === "connected" && COMMAND_TARGET_PROTOCOLS.includes(tab.protocol)
         )
@@ -649,19 +712,39 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             tab.status === "connected" &&
             COMMAND_TARGET_PROTOCOLS.includes(tab.protocol)
         );
+    // 进入时冻结完整目标集合及各自身份/代次。顺序 await 期间才捕获 epoch 会让
+    // 在 A 等待时重连的 B 领到旧广播；冻结后既不扩大目标集，也不接收新身份。
+    const targets = eligible.map((tab) => ({
+      tabId: tab.tabId,
+      protocol: tab.protocol,
+      connectionId: tab.connectionId,
+      cardId: tab.cardId || tab.tabId,
+      epoch: currentConnectionEpoch(tab.tabId),
+    }));
+    const matches = (target: (typeof targets)[number]): boolean => {
+      const live = get().tabs.find((item) => item.tabId === target.tabId);
+      return (
+        !!live &&
+        live.status === "connected" &&
+        live.protocol === target.protocol &&
+        isCurrentConnectionEpoch(target.tabId, target.epoch) &&
+        (target.protocol !== "serial" || (live.cardId || live.tabId) === target.cardId) &&
+        (target.protocol === "serial" || live.connectionId === target.connectionId)
+      );
+    };
 
-    for (const tab of targets) {
-      const epoch = currentConnectionEpoch(tab.tabId);
+    for (const target of targets) {
+      if (!matches(target)) continue;
       try {
         // 统一走按会话编码的单目标发送入口，不再各调用点直接 UTF-8 写 PTY
-        await get().sendTextToTab(tab.tabId, payload);
+        await get().sendTextToTab(target.tabId, payload);
       } catch (e) {
-        console.warn(`sendCommandToTabs: 写入 ${tab.tabId} 失败`, e);
-        // 目标在发送期间已关闭/重连：旧失败不能打到新连接上
-        if (!isCurrentConnectionEpoch(tab.tabId, epoch)) continue;
+        // 目标在发送期间已关闭/重连：旧失败不能打到新连接或新界面上
+        if (!matches(target)) continue;
+        console.warn(`sendCommandToTabs: 写入 ${target.tabId} 失败`, e);
         const message = formatFriendlyError(e);
         set((current) => ({
-          tabs: current.tabs.map((t) => (t.tabId === tab.tabId ? { ...t, error: message } : t)),
+          tabs: current.tabs.map((t) => (t.tabId === target.tabId ? { ...t, error: message } : t)),
         }));
       }
     }
@@ -800,8 +883,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       try {
         const rdpInfo = await launchRdp(tab.sessionId);
         if (!isCurrent()) {
-          // 迟到或被替代的实例必须释放，不能写进标签状态
-          await rdpClose(rdpInfo.launch_id).catch(() => {});
+          // 迟到或被替代的实例必须释放，不能写进标签状态。
+          // 清理失败保留 launch_id 所有权与可见错误，不覆盖新代次状态。
+          try {
+            await rdpClose(rdpInfo.launch_id);
+          } catch (e) {
+            recordRdpCleanupFailure(tabId, rdpInfo.launch_id, e);
+          }
           return;
         }
         set((state) => ({
@@ -1075,6 +1163,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // 关闭标签先停掉该标签的状态轮询，防止标签移除后仍被迟到结果复活
     stopRdpPolling(tabId);
 
+    // 串口必须在第一个 await 之前同步作废在途发送：closeCard 可能长时间 pending，
+    // 等 teardownSerialSession 再失效会让旧编码结果写进旧句柄或重开的同 cardId 句柄。
+    if (tab.protocol === "serial") {
+      expireSerialSendEpoch(tab.cardId || tab.tabId);
+    }
+
     // 先移除标签，让仍在连接中的响应立即失效，再异步释放资源。
     set((state) => {
       const nextTabs = state.tabs.filter((t) => t.tabId !== tabId);
@@ -1113,7 +1207,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         "closeRdp",
         async () => {
           if (tab.protocol === "rdp" && tab.rdpInfo?.launch_id) {
-            await rdpClose(tab.rdpInfo.launch_id);
+            const launchId = tab.rdpInfo.launch_id;
+            try {
+              await rdpClose(launchId);
+            } catch (e) {
+              // 标签已移除，失败若只 console.warn 就再无所有者可重试
+              recordRdpCleanupFailure(tabId, launchId, e);
+            }
           }
         },
       ],

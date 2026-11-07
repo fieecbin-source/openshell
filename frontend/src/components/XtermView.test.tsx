@@ -36,6 +36,12 @@ vi.mock("../lib/ipc", () => ({
   resizeTerminal: vi.fn().mockResolvedValue(undefined), writeTerminal: vi.fn().mockResolvedValue(1),
   sendSerial: vi.fn().mockResolvedValue(1), readSerial: vi.fn().mockResolvedValue([]),
   closeTerminal: vi.fn().mockResolvedValue(undefined), closeConnection: vi.fn().mockResolvedValue(undefined),
+  connectSession: vi.fn(), createCard: vi.fn(), closeCard: vi.fn(), setCardMode: vi.fn(),
+  forwardList: vi.fn(), forwardStart: vi.fn(), openSerial: vi.fn(), closeSerial: vi.fn(),
+  launchRdp: vi.fn(), rdpGetStatus: vi.fn(), rdpClose: vi.fn(), terminalEncode: vi.fn(),
+  createGroup: vi.fn(), createSession: vi.fn(), deleteGroup: vi.fn(), deleteSession: vi.fn(),
+  duplicateSession: vi.fn(), listGroups: vi.fn(), listSessions: vi.fn(), renameGroup: vi.fn(),
+  updateSession: vi.fn(),
 }));
 
 let root: Root;
@@ -173,5 +179,38 @@ it("routes keyboard input through sendTextToTab without marking a changed connec
     });
   } finally {
     useTerminalStore.setState({ sendTextToTab: original });
+  }
+});
+
+it("R06: a stale write failure after a reconnect never marks the new connection disconnected", async () => {
+  const markDisconnected = vi.spyOn(useTerminalStore.getState(), "markDisconnected");
+  let rejectWrite!: (error: Error) => void;
+  vi.mocked(writeTerminal).mockImplementationOnce(
+    () => new Promise<number>((_resolve, reject) => { rejectWrite = reject; })
+  );
+  try {
+    act(() => { data.handler!("A"); });
+    // 等真实发送链走到 writeTerminal（该 promise 保持 pending），再触发重连
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(writeTerminal).toHaveBeenCalledTimes(1);
+    // 真实断开动作递增连接代次，再模拟同 tab 重连完成
+    act(() => { useTerminalStore.getState().markDisconnected("tab", "link reset"); });
+    act(() => {
+      useTerminalStore.setState({
+        tabs: [{ ...tab, connectionId: "new-connection", status: "connected" }],
+      });
+    });
+    markDisconnected.mockClear();
+
+    rejectWrite(new Error("pty write failed"));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(markDisconnected).not.toHaveBeenCalled();
+    expect(useTerminalStore.getState().tabs[0]).toMatchObject({
+      status: "connected",
+      connectionId: "new-connection",
+    });
+  } finally {
+    markDisconnected.mockRestore();
   }
 });

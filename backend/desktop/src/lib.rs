@@ -92,16 +92,18 @@ pub fn run() {
             }
             tracing::info!(dir = %data_dir.display(), "using user data directory");
 
-            let services = (|| -> openshell_core_domain::DomainResult<AppServices> {
-                match AppServices::new(data_dir.clone()) {
-                    Ok(services) => Ok(services),
-                    Err(error) if error.details.as_ref().is_some_and(|details| details["requires_network_secret_migration"] == true) => {
-                        let password = vault_recovery::prompt()?;
-                        AppServices::recover_legacy_network_secrets(data_dir.clone(), &password)
-                    }
-                    Err(error) => Err(error),
+            let services = (match AppServices::new(data_dir.clone()) {
+                Ok(services) => Ok(services),
+                Err(error) if needs_legacy_recovery(&error) => {
+                    // 解锁后若有来源不明项，进入逐条补录或取消保留路径，而非反复只问主密码。
+                    vault_recovery::recover_with_reentry(
+                        data_dir.clone(),
+                        vault_recovery::prompt,
+                        vault_recovery::prompt_reentries,
+                    )
                 }
-            })().map_err(|error| {
+                Err(error) => Err(error),
+            }).map_err(|error| {
                 tauri_plugin_dialog::DialogExt::dialog(app.handle()).message(format!("无法升级本地数据：{}",error.message)).title("OpenShell 启动失败").kind(tauri_plugin_dialog::MessageDialogKind::Error).blocking_show();
                 Box::<dyn std::error::Error>::from(error)
             })?;
@@ -353,9 +355,33 @@ fn reject_install_dir(data_dir: &std::path::Path, exe_dir: &std::path::Path) -> 
     Ok(())
 }
 
+/// 仅当迁移前快照明确要求凭据恢复时进入启动期恢复分支；其它错误照常直接失败。
+fn needs_legacy_recovery(error: &openshell_core_domain::DomainError) -> bool {
+    error
+        .details
+        .as_ref()
+        .is_some_and(|details| details["requires_network_secret_migration"] == true)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::reject_install_dir;
+    use super::{needs_legacy_recovery, reject_install_dir};
+
+    #[test]
+    fn startup_recovery_is_selected_only_for_legacy_credential_migration_errors() {
+        use openshell_core_domain::DomainError;
+        let flagged = DomainError::internal("synthetic").with_details(serde_json::json!({
+            "stage": "pre_migration_backup",
+            "requires_network_secret_migration": true,
+        }));
+        assert!(needs_legacy_recovery(&flagged));
+        let not_flagged = DomainError::internal("synthetic").with_details(serde_json::json!({
+            "stage": "pre_migration_backup",
+            "requires_network_secret_migration": false,
+        }));
+        assert!(!needs_legacy_recovery(&not_flagged));
+        assert!(!needs_legacy_recovery(&DomainError::internal("synthetic")));
+    }
 
     #[test]
     fn rejects_data_dir_inside_install_dir() {

@@ -210,4 +210,136 @@ describe("useSyncStore", () => {
       .mock.calls.filter((call) => call[0] === "sync_resolve_conflict");
     expect(resolveCalls.length).toBe(1);
   });
+
+  it("syncNow preserves lastResult and records refreshError if view refresh rejects, allowing retry without re-syncing", async () => {
+    const mockResult = {
+      pushed_count: 5,
+      pulled_count: 2,
+      conflict_count: 0,
+      head_seq: 100,
+    };
+
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_now") return mockResult;
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") throw new Error("Snippet DB locked during sync refresh");
+      return undefined;
+    });
+
+    const res = await useSyncStore.getState().syncNow();
+
+    expect(res).toEqual(mockResult);
+    expect(useSyncStore.getState().lastResult).toEqual(mockResult);
+    expect(useSyncStore.getState().syncing).toBe(false);
+    // error must be null because mutation itself succeeded!
+    expect(useSyncStore.getState().error).toBeNull();
+    // refreshError must capture the view refresh error
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+
+    // Now retryRefreshViews succeeds
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_now") throw new Error("Should not be called!");
+      if (cmd === "sync_list_conflicts") return [];
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") return [];
+      return undefined;
+    });
+
+    await useSyncStore.getState().retryRefreshViews();
+
+    expect(useSyncStore.getState().refreshError).toBeNull();
+    const syncCalls = vi.mocked(invoke).mock.calls.filter((call) => call[0] === "sync_now");
+    expect(syncCalls.length).toBe(1); // Still only 1 call from before!
+  });
+
+  it("login preserves login success and records refreshError if view refresh rejects, allowing retry without re-login", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_login") return undefined;
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") throw new Error("Snippet list failed");
+      return undefined;
+    });
+
+    await useSyncStore.getState().login("https://sync.example.com", "user@test.com", "pass");
+
+    expect(useSyncStore.getState().syncing).toBe(false);
+    expect(useSyncStore.getState().error).toBeNull();
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+
+    // retryRefreshViews succeeds
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_login") throw new Error("Should not re-login!");
+      if (cmd === "sync_list_conflicts") return [];
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") return [];
+      return undefined;
+    });
+
+    await useSyncStore.getState().retryRefreshViews();
+
+    expect(useSyncStore.getState().refreshError).toBeNull();
+    const loginCalls = vi.mocked(invoke).mock.calls.filter((call) => call[0] === "sync_login");
+    expect(loginCalls.length).toBe(1);
+  });
+
+  it("register preserves registration success and records refreshError if view refresh rejects, allowing retry without re-registering", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_register") return undefined;
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") return { state: "unlocked", has_keychain: true, auto_lock_minutes: 15 };
+      if (cmd === "snippet_list") throw new Error("Snippet list failed");
+      return undefined;
+    });
+
+    await useSyncStore.getState().register("https://sync.example.com", "user@test.com", "pass");
+
+    expect(useSyncStore.getState().syncing).toBe(false);
+    expect(useSyncStore.getState().error).toBeNull();
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+
+    const regCalls = vi.mocked(invoke).mock.calls.filter((call) => call[0] === "sync_register");
+    expect(regCalls.length).toBe(1);
+  });
+
+  it("retryRefreshViews fails and does not clear refreshError if loadConfig or checkStatus fails", async () => {
+    useSyncStore.setState({ refreshError: "Existing refresh error" });
+
+    // Test failure in loadConfig
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_list_conflicts") return [];
+      if (cmd === "sync_get_config") throw new Error("Config sync error");
+      return undefined;
+    });
+
+    await expect(useSyncStore.getState().retryRefreshViews()).rejects.toThrow();
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+
+    // Test failure in vault checkStatus
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "sync_list_conflicts") return [];
+      if (cmd === "sync_get_config") return { is_logged_in: true, conflict_count: 0 };
+      if (cmd === "session_list") return [];
+      if (cmd === "group_list") return [];
+      if (cmd === "vault_status") throw new Error("Vault check error");
+      if (cmd === "snippet_list") return [];
+      return undefined;
+    });
+
+    await expect(useSyncStore.getState().retryRefreshViews()).rejects.toThrow();
+    expect(useSyncStore.getState().refreshError).toBeTruthy();
+  });
 });

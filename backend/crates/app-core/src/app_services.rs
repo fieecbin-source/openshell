@@ -95,12 +95,32 @@ impl AppServices {
         Self::init_with_store(paths, store, MigrationReport::default())
     }
 
-    /// Unlock the old schema before any snapshot; credentials and references commit together.
-    pub fn recover_legacy_network_secrets(
+    /// 主密码解锁后列出仅含安全元数据的待补录项；错误主密码在此即失败，原库与备份不动。
+    pub fn inspect_legacy_recovery(
         data_dir: PathBuf,
         master_password: &str,
-    ) -> DomainResult<Self> {
-        let paths = AppPaths::new(data_dir.clone());
+    ) -> DomainResult<Vec<crate::network_secrets::LegacyRecoveryItem>> {
+        let (_, network, _) = Self::unlock_legacy_store(data_dir, master_password)?;
+        network.legacy_recovery_items()
+    }
+
+    /// 取消保留：不写库、不覆盖备份，供启动编排如实告知用户可重试。
+    pub fn cancel_legacy_recovery() -> DomainResult<()> {
+        Err(DomainError::new(
+            ErrorCode::VaultLocked,
+            "已取消数据恢复；原数据库与备份保持不变，可重新启动后重试或改走逐条补录",
+        ))
+    }
+
+    fn unlock_legacy_store(
+        data_dir: PathBuf,
+        master_password: &str,
+    ) -> DomainResult<(
+        Store,
+        crate::network_secrets::NetworkSecrets,
+        Arc<VaultService>,
+    )> {
+        let paths = AppPaths::new(data_dir);
         if !paths.db_path.is_file() {
             return Err(DomainError::not_found("旧数据库不存在"));
         }
@@ -110,20 +130,69 @@ impl AppServices {
             return Err(DomainError::validation("此数据库不能使用凭据恢复入口"));
         }
         let manager = Arc::new(VaultManager::new());
-        let vault = VaultService::new(
+        let vault = Arc::new(VaultService::new(
             manager.clone(),
             Arc::new(VaultRepo::new(store.clone())),
             Arc::new(CredentialRepo::new(store.clone())),
             Arc::new(SshKeyRepo::new(store.clone())),
             Arc::new(SecretRepo::new(store.clone())),
             Arc::new(EventBus::new(512)),
-        );
+        ));
         if vault.status()?.state == "uninitialized" {
             vault.init(master_password, false, None)?;
         } else {
             vault.unlock(Some(master_password), false)?;
         }
-        crate::network_secrets::NetworkSecrets::new(store.clone(), manager).migrate_legacy()?;
+        let network = crate::network_secrets::NetworkSecrets::new(store.clone(), manager);
+        Ok((store, network, vault))
+    }
+
+    /// Unlock the old schema before any snapshot; credentials and references commit together.
+    ///
+    /// 若仍有来源不明项，返回带 `recovery_items` 的错误（仅安全元数据），
+    /// 使启动入口能逐条补录或取消，而不是反复只问主密码后退出。
+    pub fn recover_legacy_network_secrets(
+        data_dir: PathBuf,
+        master_password: &str,
+    ) -> DomainResult<Self> {
+        let (store, network, vault) = Self::unlock_legacy_store(data_dir.clone(), master_password)?;
+        let items = network.legacy_recovery_items()?;
+        if !items.is_empty() {
+            return Err(DomainError::new(
+                ErrorCode::VaultLocked,
+                "部分规则凭据来源不明，请逐条补录或取消保留",
+            )
+            .with_details(serde_json::json!({
+                "requires_reentry": true,
+                "recovery_items": items,
+            })));
+        }
+        network.migrate_legacy()?;
+        drop(network);
+        drop(vault);
+        drop(store);
+        let services = Self::new(data_dir)?;
+        services.vault.unlock(Some(master_password), false)?;
+        Ok(services)
+    }
+
+    /// 逐条显式补录后恢复；新口令由调用方以 Zeroizing 持有，单事务提交或整事务回滚。
+    pub fn recover_legacy_network_secrets_with_reentry(
+        data_dir: PathBuf,
+        master_password: &str,
+        entries: &[crate::network_secrets::LegacyRecoveryEntry],
+    ) -> DomainResult<Self> {
+        let (store, network, vault) = Self::unlock_legacy_store(data_dir.clone(), master_password)?;
+        let pending = network.legacy_recovery_items()?;
+        if pending.is_empty() {
+            return Err(DomainError::validation("没有需要补录的规则"));
+        }
+        // 补录与凭据迁移已在同一事务内提交；此处不重复迁移，避免留下半提交状态。
+        let applied = network.reenter_legacy_socks(entries)?;
+        if applied != pending.len() {
+            return Err(DomainError::validation("仍有规则需要逐条补录"));
+        }
+        drop(network);
         drop(vault);
         drop(store);
         let services = Self::new(data_dir)?;

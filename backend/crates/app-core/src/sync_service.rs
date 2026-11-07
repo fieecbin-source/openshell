@@ -427,7 +427,8 @@ impl SyncService {
             self.vault_manager.clone(),
         );
         network_secrets.proxies()?;
-        network_secrets.forwards(None).await?;
+        // 不同步全库 SOCKS 引用：同步本应能拉回缺失的 secret，
+        // 与本次操作无关的坏引用不得阻断认证、历史拉取与图事务。
         if !self.vault_manager.is_unlocked() {
             return Err(DomainError::new(
                 ErrorCode::VaultLocked,

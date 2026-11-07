@@ -68,6 +68,35 @@ function assertCurrentSerialSendEpoch(cardId: string, epoch: number): void {
   }
 }
 
+/**
+ * 编码/写入的结果统一按代次归属：旧句柄的 resolve 已由 assert 拦下，
+ * 旧句柄的 reject 也必须归一为主动取消，不能停掉重开后的新 timer、
+ * 写入旧 sendError 或影响其他 card 的定时发送。当前句柄的真实失败照常上报。
+ */
+function failSerialSend(cardId: string, epoch: number, error: unknown): never {
+  if (currentSerialSendEpoch(cardId) !== epoch) {
+    throw error instanceof StaleSerialSendError
+      ? error
+      : new StaleSerialSendError("串口连接已变更，本次发送已取消");
+  }
+  if (error instanceof StaleSerialSendError) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  const state = useSerialStore.getState();
+  // 未记录归属（旧式/直接注入的全局 timer）仍按原有语义随本次真实失败停止；
+  // 只有明确属于另一个 card 的 timer 才不受影响。
+  const ownsTimer = state.timerCardId === null || state.timerCardId === cardId;
+  if (ownsTimer && state.isTimerRunning && state.timerHandle) {
+    clearInterval(state.timerHandle);
+  }
+  useSerialStore.setState({
+    sendError: { cardId, message },
+    ...(ownsTimer
+      ? { isTimerRunning: false, timerHandle: null, timerCardId: null }
+      : {}),
+  });
+  throw error instanceof Error ? error : new Error(message);
+}
+
 function stopSerialReadPoller(cardId: string): void {
   const timer = serialReadTimers.get(cardId);
   if (timer !== undefined) clearInterval(timer);
@@ -148,6 +177,8 @@ interface SerialState {
   timerIntervalMs: number;
   isTimerRunning: boolean;
   timerHandle: any | null;
+  /** 定时发送所属 cardId：旧句柄的失败不能停掉重开后的新 timer 或其他 card 的 timer */
+  timerCardId: string | null;
   history: string[];
   snippets: SerialSnippet[];
   /** 最近一次串口发送失败；由 TerminalHost 转成断开状态后清空 */
@@ -192,6 +223,7 @@ export const useSerialStore = create<SerialState>((set, get) => ({
   timerIntervalMs: 1000,
   isTimerRunning: false,
   timerHandle: null,
+  timerCardId: null,
   history: [],
   snippets: [
     { id: "1", name: "AT Ping", payload: "AT\r\n", isHex: false },
@@ -244,17 +276,7 @@ export const useSerialStore = create<SerialState>((set, get) => ({
       assertCurrentSerialSendEpoch(cardId, epoch);
       await sendSerial(cardId, new Uint8Array(payloadBytes));
     } catch (error) {
-      // 主动取消不是写入失败：不停定时器、不写 sendError
-      if (error instanceof StaleSerialSendError) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      const { timerHandle, isTimerRunning } = get();
-      if (isTimerRunning && timerHandle) clearInterval(timerHandle);
-      set({
-        sendError: { cardId, message },
-        isTimerRunning: false,
-        timerHandle: null,
-      });
-      throw error instanceof Error ? error : new Error(message);
+      failSerialSend(cardId, epoch, error);
     }
 
     const newHistory = [sendText, ...history.filter((h) => h !== sendText)].slice(0, 50);
@@ -277,16 +299,7 @@ export const useSerialStore = create<SerialState>((set, get) => ({
       assertCurrentSerialSendEpoch(cardId, epoch);
       await sendSerial(cardId, new Uint8Array(payloadBytes));
     } catch (error) {
-      if (error instanceof StaleSerialSendError) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      const { timerHandle, isTimerRunning } = get();
-      if (isTimerRunning && timerHandle) clearInterval(timerHandle);
-      set({
-        sendError: { cardId, message },
-        isTimerRunning: false,
-        timerHandle: null,
-      });
-      throw error instanceof Error ? error : new Error(message);
+      failSerialSend(cardId, epoch, error);
     }
     get().fetchStats(cardId);
   },
@@ -340,13 +353,13 @@ export const useSerialStore = create<SerialState>((set, get) => ({
       void sendCurrent(cardId, encoding).catch(() => {});
     }, Math.max(10, timerIntervalMs));
 
-    set({ isTimerRunning: true, timerHandle: handle });
+    set({ isTimerRunning: true, timerHandle: handle, timerCardId: cardId });
   },
 
   stopTimer: () => {
     const { timerHandle } = get();
     if (timerHandle) clearInterval(timerHandle);
-    set({ isTimerRunning: false, timerHandle: null });
+    set({ isTimerRunning: false, timerHandle: null, timerCardId: null });
   },
 
   setViewMode: (viewMode) => set({ viewMode }),
@@ -411,4 +424,13 @@ export function teardownSerialSession(cardId: string): void {
     sendError: state.sendError?.cardId === cardId ? null : state.sendError,
     activeCardId: state.activeCardId === cardId ? null : state.activeCardId,
   }));
+}
+
+/**
+ * 关闭标签时在第一个 await 之前同步作废在途串口发送。
+ * closeCard / closeSerial 可能长时间 pending，等到 teardown 再失效会让旧编码结果
+ * 写进旧句柄或随后重开的同 cardId 句柄；这里只动代次，其它清理仍按原顺序执行。
+ */
+export function expireSerialSendEpoch(cardId: string): void {
+  bumpSerialSendEpoch(cardId);
 }

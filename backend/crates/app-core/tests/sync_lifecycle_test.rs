@@ -67,6 +67,34 @@ async fn resolving_a_snapshot_requires_its_proxy_dependency() {
     assert!(app.sync.list_conflicts().unwrap().is_empty());
 }
 
+/// R01/S01：同步本应能拉回缺失 secret，不应被与本次操作无关的 SOCKS 全库预检卡死。
+#[tokio::test]
+async fn broken_forward_reference_does_not_block_sync() {
+    use openshell_core_domain::{PortForwardId, SecretId};
+
+    let (url, _server_db, _server_dir, task) = server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = AppServices::new(dir.path().into()).unwrap();
+    app.sync.login(&url, ACCOUNT, PASSWORD).await.unwrap();
+
+    let broken_ref = SecretId::new().to_string();
+    app.store
+        .with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO port_forward(id,name,type,bind_host,bind_port,socks_auth,socks_password_ref,created_at,updated_at) \
+                 VALUES(?1,'broken','dynamic','127.0.0.1',1081,'userpass',?2,1,1)",
+                rusqlite::params![PortForwardId::new().to_string(), broken_ref],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+    let result = app.sync.sync_now().await;
+    assert!(result.is_ok(), "无关的坏引用不得阻断整体同步: {result:?}");
+    task.abort();
+}
+
 async fn server() -> (
     String,
     DbPool,

@@ -8,8 +8,8 @@ import { useSnippetStore } from "./snippetStore";
 
 const refreshSyncedViews = async () => {
   await Promise.all([
-    useSessionStore.getState().loadAll(),
-    useVaultStore.getState().checkStatus(),
+    useSessionStore.getState().loadAll({ throwOnError: true }),
+    useVaultStore.getState().checkStatus({ throwOnError: true }),
     useSnippetStore.getState().loadSnippets(),
   ]);
 };
@@ -51,6 +51,7 @@ export interface UpdateManifest {
 
 interface SyncStoreState {
   config: SyncConfig | null;
+  configError: string | null;
   conflicts: SyncConflict[];
   resolvingConflictId: string | null;
   syncing: boolean;
@@ -62,7 +63,7 @@ interface SyncStoreState {
   refreshingViews: boolean;
 
   setModalOpen: (open: boolean) => void;
-  loadConfig: () => Promise<void>;
+  loadConfig: (options?: { throwOnError?: boolean }) => Promise<void>;
   loadConflicts: () => Promise<SyncConflict[]>;
   resolveConflict: (conflictId: string, choice: "local" | "remote") => Promise<void>;
   retryRefreshViews: () => Promise<void>;
@@ -77,6 +78,7 @@ interface SyncStoreState {
 
 export const useSyncStore = create<SyncStoreState>((set, get) => ({
   config: null,
+  configError: null,
   conflicts: [],
   resolvingConflictId: null,
   syncing: false,
@@ -89,15 +91,20 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
 
   setModalOpen: (open) => set({ modalOpen: open, error: null, refreshError: null }),
 
-  loadConfig: async () => {
+  loadConfig: async (options?: { throwOnError?: boolean }) => {
     try {
       const cfg = await invoke<SyncConfig>("sync_get_config");
-      set({ config: cfg });
+      set({ config: cfg, configError: null });
       if (cfg && cfg.conflict_count > 0) {
         void get().loadConflicts().catch(() => { });
       }
     } catch (err: any) {
       console.error("Failed to load sync config:", err);
+      const friendly = formatFriendlyError(err);
+      set({ configError: friendly });
+      if (options?.throwOnError) {
+        throw err;
+      }
     }
   },
 
@@ -128,7 +135,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
 
     try {
       await get().loadConflicts();
-      await get().loadConfig();
+      await get().loadConfig({ throwOnError: true });
       await refreshSyncedViews();
     } catch (refreshErr: any) {
       console.warn("Sync conflict resolved but view refresh failed:", refreshErr);
@@ -140,7 +147,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     set({ refreshingViews: true });
     try {
       await get().loadConflicts();
-      await get().loadConfig();
+      await get().loadConfig({ throwOnError: true });
       await refreshSyncedViews();
       set({ refreshError: null });
     } catch (refreshErr: any) {
@@ -163,7 +170,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   },
 
   register: async (serverUrl, email, password, inviteCode) => {
-    set({ syncing: true, error: null });
+    set({ syncing: true, error: null, refreshError: null });
     try {
       await invoke("sync_register", {
         serverUrl,
@@ -171,27 +178,39 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
         password,
         inviteCode: inviteCode || null,
       });
-      await get().loadConfig();
-      await refreshSyncedViews();
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });
       throw err;
     } finally {
       set({ syncing: false });
     }
+
+    try {
+      await get().loadConfig({ throwOnError: true });
+      await refreshSyncedViews();
+    } catch (refreshErr: any) {
+      console.warn("Register succeeded but view refresh failed:", refreshErr);
+      set({ refreshError: formatFriendlyError(refreshErr) });
+    }
   },
 
   login: async (serverUrl, email, password) => {
-    set({ syncing: true, error: null });
+    set({ syncing: true, error: null, refreshError: null });
     try {
       await invoke("sync_login", { serverUrl, email, password });
-      await get().loadConfig();
-      await refreshSyncedViews();
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });
       throw err;
     } finally {
       set({ syncing: false });
+    }
+
+    try {
+      await get().loadConfig({ throwOnError: true });
+      await refreshSyncedViews();
+    } catch (refreshErr: any) {
+      console.warn("Login succeeded but view refresh failed:", refreshErr);
+      set({ refreshError: formatFriendlyError(refreshErr) });
     }
   },
 
@@ -217,19 +236,26 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   },
 
   syncNow: async () => {
-    set({ syncing: true, error: null });
+    set({ syncing: true, error: null, refreshError: null });
+    let result: SyncResult;
     try {
-      const result = await invoke<SyncResult>("sync_now");
+      result = await invoke<SyncResult>("sync_now");
       set({ lastResult: result });
-      await get().loadConfig();
-      await refreshSyncedViews();
-      return result;
     } catch (err: any) {
       set({ error: formatFriendlyError(err) });
       throw err;
     } finally {
       set({ syncing: false });
     }
+
+    try {
+      await get().loadConfig({ throwOnError: true });
+      await refreshSyncedViews();
+    } catch (refreshErr: any) {
+      console.warn("Sync succeeded but view refresh failed:", refreshErr);
+      set({ refreshError: formatFriendlyError(refreshErr) });
+    }
+    return result;
   },
 
   checkUpdates: async () => {

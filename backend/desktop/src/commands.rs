@@ -1027,17 +1027,24 @@ pub async fn ssh_exec(
 // Port Forwarding
 // ==========================================
 
-#[tauri::command]
-pub async fn forward_list(
-    state: tauri::State<'_, Arc<AppServices>>,
+/// 路由级列举实现：命令体与内联测试都经过这里，避免只测底层服务函数。
+pub(crate) async fn forward_list_impl(
+    state: &AppServices,
     session_id: Option<String>,
-) -> Result<Vec<PortForwardRule>, IpcError> {
+) -> Result<Vec<openshell_app_core::network_secrets::ForwardRuleView>, IpcError> {
     let sid = session_id
         .as_deref()
         .map(SessionId::from_string)
         .transpose()?;
-    let list = state.network_secrets.forwards(sid.as_ref()).await?;
-    Ok(list)
+    Ok(state.network_secrets.forwards(sid.as_ref()).await?)
+}
+
+#[tauri::command]
+pub async fn forward_list(
+    state: tauri::State<'_, Arc<AppServices>>,
+    session_id: Option<String>,
+) -> Result<Vec<openshell_app_core::network_secrets::ForwardRuleView>, IpcError> {
+    forward_list_impl(state.inner(), session_id).await
 }
 
 #[tauri::command]
@@ -1050,19 +1057,28 @@ pub async fn forward_create(
     Ok(rule)
 }
 
-#[tauri::command]
-pub async fn forward_update(
-    state: tauri::State<'_, Arc<AppServices>>,
-    id: String,
+/// 路由级更新实现：显式补录必须走真实命令参数路径。
+pub(crate) async fn forward_update_impl(
+    state: &AppServices,
+    id: &str,
     input: PortForwardRuleInput,
 ) -> Result<PortForwardRule, IpcError> {
-    let pf_id = PortForwardId::from_string(&id)?;
+    let pf_id = PortForwardId::from_string(id)?;
     let input = state
         .network_secrets
         .prepare_forward(input, Some(&pf_id))
         .await?;
     let rule = state.port_forward_repo.update(&pf_id, input).await?;
     Ok(rule)
+}
+
+#[tauri::command]
+pub async fn forward_update(
+    state: tauri::State<'_, Arc<AppServices>>,
+    id: String,
+    input: PortForwardRuleInput,
+) -> Result<PortForwardRule, IpcError> {
+    forward_update_impl(state.inner(), &id, input).await
 }
 
 #[tauri::command]
@@ -1076,15 +1092,12 @@ pub async fn forward_delete(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn forward_start(
-    state: tauri::State<'_, Arc<AppServices>>,
-    id: String,
-    conn_id: String,
-) -> Result<(), IpcError> {
-    let pf_id = PortForwardId::from_string(&id)?;
-    let cid = ConnectionId::from_string(&conn_id)?;
-    state.network_secrets.forwards(None).await?;
+/// 目标级运行校验：只解析该规则的凭据，坏引用拒绝运行但不牵连其它规则。
+pub(crate) async fn forward_start_credentials(
+    state: &AppServices,
+    id: &str,
+) -> Result<(PortForwardRule, Option<String>), IpcError> {
+    let pf_id = PortForwardId::from_string(id)?;
     let rule = state.port_forward_repo.get(&pf_id).await?;
     let socks_password = rule
         .socks_password_ref
@@ -1092,6 +1105,17 @@ pub async fn forward_start(
         .map(|reference| state.network_secrets.resolve(reference, "socks_password"))
         .transpose()?
         .map(|password| password.to_string());
+    Ok((rule, socks_password))
+}
+
+#[tauri::command]
+pub async fn forward_start(
+    state: tauri::State<'_, Arc<AppServices>>,
+    id: String,
+    conn_id: String,
+) -> Result<(), IpcError> {
+    let cid = ConnectionId::from_string(&conn_id)?;
+    let (rule, socks_password) = forward_start_credentials(state.inner(), &id).await?;
     let conn = state.ssh_manager.get(&cid).await?;
     state
         .forward
@@ -2746,6 +2770,148 @@ mod protocol_command_tests {
             assert!(!rules[0].auto_reconnect);
             assert_eq!(rules[0].reconnect_max, 11);
         }
+    }
+
+    #[tokio::test]
+    async fn forward_routes_list_broken_rules_and_start_only_the_requested_target() {
+        use openshell_app_core::network_secrets::ForwardCredentialState;
+        use openshell_core_domain::{PortForwardRuleInput, SecretId};
+        use openshell_vault::KdfParams;
+
+        let state = AppServices::new_in_memory().unwrap();
+        state
+            .vault
+            .init(
+                "synthetic-route-master",
+                false,
+                Some(KdfParams {
+                    mem_kib: 1024,
+                    time: 1,
+                    parallelism: 1,
+                }),
+            )
+            .unwrap();
+
+        let input = state
+            .network_secrets
+            .prepare_forward(
+                PortForwardRuleInput {
+                    name: "healthy".into(),
+                    bind_port: 1080,
+                    socks_password: Some("synthetic-healthy".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let healthy = state.port_forward_repo.create(input).await.unwrap();
+
+        let broken_ref = SecretId::new().to_string();
+        let broken_id = PortForwardId::new();
+        state
+            .store
+            .with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO port_forward(id,name,type,bind_host,bind_port,socks_auth,socks_password_ref,created_at,updated_at) \
+                     VALUES(?1,'broken','dynamic','127.0.0.1',1081,'userpass',?2,1,1)",
+                    (broken_id.as_str(), broken_ref.as_str()),
+                )
+                .map_err(|_| DomainError::internal("无法插入测试规则"))?;
+                Ok(())
+            })
+            .unwrap();
+
+        let listed = forward_list_impl(&state, None).await.unwrap();
+        assert_eq!(listed.len(), 2, "一条坏引用不得隐藏完好规则");
+        let bad = listed
+            .iter()
+            .find(|view| view.rule.id.as_str() == broken_id.as_str())
+            .unwrap();
+        assert!(bad.rule.socks_password_ref.is_none());
+        assert_eq!(bad.credential_state, ForwardCredentialState::NeedsReentry);
+
+        // 好规则的目标级校验不受坏规则牵连；坏规则仍被拒绝且错误不含原值。
+        let (_, password) = forward_start_credentials(&state, healthy.id.as_str())
+            .await
+            .unwrap();
+        assert_eq!(password.as_deref(), Some("synthetic-healthy"));
+        let error = forward_start_credentials(&state, broken_id.as_str())
+            .await
+            .unwrap_err();
+        assert!(!error.message.contains(&broken_ref), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn explicit_reentry_through_forward_update_makes_the_rule_readable_and_startable() {
+        use openshell_core_domain::{PortForwardRuleInput, SecretId, SocksAuth};
+        use openshell_vault::KdfParams;
+
+        let state = AppServices::new_in_memory().unwrap();
+        state
+            .vault
+            .init(
+                "synthetic-reentry-master",
+                false,
+                Some(KdfParams {
+                    mem_kib: 1024,
+                    time: 1,
+                    parallelism: 1,
+                }),
+            )
+            .unwrap();
+
+        let broken_ref = SecretId::new().to_string();
+        let rule_id = PortForwardId::new();
+        state
+            .store
+            .with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO port_forward(id,name,type,bind_host,bind_port,socks_auth,socks_username,socks_password_ref,created_at,updated_at) \
+                     VALUES(?1,'broken','dynamic','127.0.0.1',1081,'userpass','user',?2,1,1)",
+                    (rule_id.as_str(), broken_ref.as_str()),
+                )
+                .map_err(|_| DomainError::internal("无法插入测试规则"))?;
+                Ok(())
+            })
+            .unwrap();
+
+        // 补录前：列表可见且脱敏，目标启动被拒绝。
+        let before = forward_list_impl(&state, None).await.unwrap();
+        assert!(before[0].rule.socks_password_ref.is_none());
+        assert!(forward_start_credentials(&state, rule_id.as_str())
+            .await
+            .is_err());
+
+        // 真实编辑命令路径：显式输入新密码，不把旧 ref 当密码。
+        let updated = forward_update_impl(
+            &state,
+            rule_id.as_str(),
+            PortForwardRuleInput {
+                name: "repaired".into(),
+                bind_port: 1081,
+                socks_auth: Some(SocksAuth::Userpass),
+                socks_username: Some("user".into()),
+                socks_password: Some("synthetic-new-password".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            updated.socks_password_ref.as_deref(),
+            Some(broken_ref.as_str())
+        );
+
+        // 重读与启动均可用，且旧值不作为秘密被持久化。
+        let after = forward_list_impl(&state, None).await.unwrap();
+        assert!(after[0].rule.socks_password_ref.is_some());
+        let (_, password) = forward_start_credentials(&state, rule_id.as_str())
+            .await
+            .unwrap();
+        assert_eq!(password.as_deref(), Some("synthetic-new-password"));
+        let serialized = serde_json::to_string(&after).unwrap();
+        assert!(!serialized.contains(&broken_ref));
     }
 
     #[test]

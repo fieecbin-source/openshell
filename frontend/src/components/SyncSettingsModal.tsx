@@ -92,11 +92,21 @@ export const SyncSettingsModal: React.FC = () => {
     try {
       if (mode === "register") {
         await register(target, email, password, inviteCode || undefined);
-        setSyncFeedback("注册并完成首次同步。");
+        const storeRefreshErr = useSyncStore.getState().refreshError;
+        if (storeRefreshErr) {
+          setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
+        } else {
+          setSyncFeedback("注册并完成首次同步。");
+        }
       } else {
         await login(target, email, password);
         setPassword("");
-        setSyncFeedback("登录并完成首次同步，后续变更将自动同步。");
+        const storeRefreshErr = useSyncStore.getState().refreshError;
+        if (storeRefreshErr) {
+          setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
+        } else {
+          setSyncFeedback("登录并完成首次同步，后续变更将自动同步。");
+        }
       }
     } catch {
       // handled by store error
@@ -109,9 +119,14 @@ export const SyncSettingsModal: React.FC = () => {
     setSyncFeedback(null);
     try {
       const res = await syncNow();
-      setSyncFeedback(
-        `同步成功：已推送 ${res.pushed_count} 条变更，拉取 ${res.pulled_count} 条，版本 #${res.head_seq}`
-      );
+      const storeRefreshErr = useSyncStore.getState().refreshError;
+      if (storeRefreshErr) {
+        setSyncFeedback(`操作已成功、刷新失败：${storeRefreshErr}`);
+      } else {
+        setSyncFeedback(
+          `同步成功：已推送 ${res.pushed_count} 条变更，拉取 ${res.pulled_count} 条，版本 #${res.head_seq}`
+        );
+      }
     } catch (err: any) {
       setSyncFeedback(`同步失败: ${formatFriendlyError(err)}`);
     }
@@ -185,7 +200,7 @@ export const SyncSettingsModal: React.FC = () => {
               </Button>
             }
           >
-            {`冲突解决已提交，但界面刷新失败（${refreshError}）。您可以点击重试刷新，无需重新提交冲突解决。`}
+            {`数据已成功保存或同步，但界面刷新失败（${refreshError}）。您可以点击重试刷新，无需重新执行操作。`}
           </InlineNotice>
         )}
 

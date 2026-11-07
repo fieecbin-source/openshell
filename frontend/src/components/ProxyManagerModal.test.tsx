@@ -182,6 +182,51 @@ it("checking clear password sends clear_password: true and password: null", asyn
   })]);
 });
 
+it("explicitly re-enters a proxy password without echoing or reusing the stored reference", async () => {
+  act(() => root.unmount());
+  const existingProxy = {
+    id: "p_ref",
+    name: "引用代理",
+    proxy_type: "socks5" as const,
+    host: "10.0.0.2",
+    port: 1081,
+    username: "user2",
+    password: null,
+    has_password: true,
+    password_ref: "vault://secret/456",
+    notes: null,
+    created_at: 100,
+    updated_at: 100,
+  };
+  vi.mocked(proxyListGet).mockResolvedValue([existingProxy as any]);
+  root = createRoot(container);
+  await act(async () => root.render(<ProxyManagerModal open onClose={() => {}} />));
+
+  const editBtn = container.querySelector<HTMLButtonElement>('button[aria-label="编辑代理 引用代理"]')!;
+  act(() => editBtn.click());
+
+  const pwdInput = container.querySelector<HTMLInputElement>('input[aria-label="密码"]')!;
+  expect(pwdInput.value).toBe("");
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(pwdInput, "new_proxy_pwd_77");
+    pwdInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  const submit = async () => act(async () => {
+    container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  await submit();
+
+  const savedItem = vi.mocked(proxyListSave).mock.calls[0][0][0];
+  expect(savedItem).toMatchObject({
+    id: "p_ref",
+    password: "new_proxy_pwd_77",
+    clear_password: false,
+  });
+  expect(savedItem.password_ref).toBe("vault://secret/456");
+  expect(localStorage.getItem("openshell_proxy_list_fallback_v1")).toBeNull();
+});
+
 it("retains form values and displays alert if proxyListSave fails", async () => {
   vi.mocked(proxyListSave).mockRejectedValueOnce(new Error("Vault is locked"));
   fill("proxy-name", "测试失败");

@@ -172,4 +172,70 @@ describe("sync login privacy", () => {
     expect(mock.retryRefreshViews).toHaveBeenCalledTimes(1);
     expect(mock.resolveConflict).toHaveBeenCalledTimes(1); // Not called again!
   });
+
+  it("displays '操作已成功、刷新失败' when syncNow succeeds but view refresh fails, allowing retry without re-sync", async () => {
+    mock.config = {
+      server_url: "https://sync.example.com",
+      account_id: "acc_1",
+      device_id: "dev_1",
+      auto_sync: true,
+      last_sync_at: 1700000000000,
+      last_error: null,
+      conflict_count: 0,
+      is_logged_in: true,
+    };
+    mock.syncNow.mockImplementation(async () => {
+      mock.refreshError = "Snippet list failed";
+      return { pushed_count: 1, pulled_count: 0, conflict_count: 0, head_seq: 10 };
+    });
+    mock.retryRefreshViews.mockResolvedValue(undefined);
+
+    render();
+
+    const syncBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("立即同步")
+    );
+    expect(syncBtn).toBeTruthy();
+
+    await act(async () => {
+      syncBtn!.click();
+    });
+
+    expect(mock.syncNow).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("操作已成功、刷新失败");
+    expect(container.textContent).not.toContain("同步失败");
+    expect(container.textContent).toContain("重试刷新");
+
+    const retryBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("重试刷新")
+    );
+    await act(async () => {
+      retryBtn!.click();
+    });
+
+    expect(mock.retryRefreshViews).toHaveBeenCalledTimes(1);
+    expect(mock.syncNow).toHaveBeenCalledTimes(1); // Not called again!
+  });
+
+  it("displays '操作已成功、刷新失败' when login succeeds but view refresh fails", async () => {
+    mock.config = null;
+    mock.login.mockImplementation(async () => {
+      mock.refreshError = "Session list failed";
+      mock.config = { is_logged_in: true, server_url: "https://sync.example.com" };
+    });
+
+    render();
+
+    change(input("服务端地址"), "https://sync.example.com");
+    change(input("同步账号"), "user@example.com");
+    change(input("同步密码"), "password123");
+
+    await act(async () => {
+      container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(mock.login).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("操作已成功、刷新失败");
+    expect(container.textContent).not.toContain("登录失败");
+  });
 });
