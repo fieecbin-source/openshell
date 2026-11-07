@@ -1,6 +1,8 @@
 # Task9：最后一轮数据迁移、同步归属与覆盖收口
 
-花名册沿用：员工1=gpt，员工2=gemini，员工3=trae。状态：待用户统一下发。工作区 E:\projects\openshell，分支/完整HEAD以 BASELINE.md 为准。只接着现有代码，不重做全仓审计、逆向或恢复旧 patch。批准副本 E:\projects\openshell-approved 只读；本地主分支含未验收保全，禁止整支推送。
+花名册沿用：员工1=gpt，员工2=gemini，员工3=trae。状态：2026-11-07 已执行并完成本地代码/测试收口，独立复审剩余必修项 0；集中门禁与环境限制见 PROGRESS.md、Task 9 Feedback.md。工作区 E:\projects\openshell，分支/完整HEAD以 BASELINE.md 为准。只接着现有代码，不重做全仓审计、逆向或恢复旧 patch。批准副本 E:\projects\openshell-approved 只读；本地主分支含未验收保全，禁止整支推送。
+
+执行说明：下文保留原始要求。历史 `docs/bug/2026-11-07-TASK8_REVIEW.md` 和批准副本未随远端发布，本轮依据已发布 Task8 回执与明确失败矩阵推进，未伪造历史评审。CEO 另集成 sessionStore 嵌套读取等待及集中检查复现的两项最小 CI 修复，具体边界见 BASELINE.md 与反馈。
 
 先读 docs/bug/2026-11-07-TASK8_REVIEW.md、BASELINE.md、本人任务和 Task8 回执。Task8 CEO 已修只读旧库检查/原子恢复、串口关闭前停定时器、晚成功与历史合并、RDP 命令清理重试、导入 refreshing 与转发状态读取归属、代理 clear_password 与旧缓存误删。不得撤销。
 
