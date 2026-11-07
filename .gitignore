@@ -91,7 +91,31 @@ bin/
 .trae/
 skills-lock.json
 
-# Local audit evidence and multi-agent coordination (keep on disk, out of releases)
-/audit/
-/multi-agent/
+# Local audit evidence: publish curated Markdown conclusions only. Raw process
+# output (logs, screenshots, patches, venvs, generated baselines) stays local
+# so the repository remains reviewable.
+/audit/**/*.json
+/audit/**/*.jsonl
+/audit/**/*.png
+/audit/**/*.jpg
+/audit/**/*.jpeg
+/audit/**/*.patch
+/audit/**/*.diff
+/audit/**/*.txt
+/audit/**/*.exitcode
+/audit/**/*.sha256
+/audit/**/*.py
+/audit/**/*.ps1
+/audit/**/*.mjs
+/audit/**/*.js
+/audit/**/venv/
+/audit/**/__pycache__/
+/audit/**/snapshot-drift-captured/
+# FinalShell desktop background assets lack redistribution permission: local only
+/audit/local-only-backgrounds/
+
+# Multi-agent records are Markdown only; screenshots and raw output stay local
+/multi-agent/**/*.png
+/multi-agent/**/*.log
+/multi-agent/**/*.json
 /VERIFICATION_REPORT.md
