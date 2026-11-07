@@ -76,7 +76,7 @@ const sample = (extra: Partial<HostMetrics> = {}): HostMetrics => ({
   disk_mounts: [], top_processes: [], uptime_seconds: 90000, ...extra,
 });
 
-it("uses release-style capsules and shows both network directions above the whale entry", () => {
+it("uses release-style capsules and shows parallel network meters above the whale entry", () => {
   const latest = sample();
   useMonitorStore.setState({ latest });
   act(() => root.render(<ServerSidebar tab={tab("server-a")} collapsed onOpenContainer={vi.fn()} />));
@@ -88,19 +88,20 @@ it("uses release-style capsules and shows both network directions above the whal
   expect(host.textContent).toContain("50%");
   expect(host.querySelector('[title="容器管理"] svg text')?.textContent).toBe("🐳");
   expect(host.querySelector('[title="容器管理"]')!.parentElement).toBe(cpu!.parentElement);
-  expect(host.querySelectorAll('[aria-label="网络传输速率"] svg[role="img"]')).toHaveLength(2);
+  expect(host.querySelectorAll('[aria-label="网络传输速率"] [role="meter"]')).toHaveLength(2);
 });
 
-it("identifies the fullest disk partition instead of presenting root usage as the entire host", () => {
+it("shows each disk partition as its own meter", () => {
   useMonitorStore.setState({ latest: sample({ disk_mounts: [
     { mount_point: "/", filesystem: "root", total_bytes: 100, used_bytes: 35, available_bytes: 65, use_percent: 35 },
     { mount_point: "/data", filesystem: "data", total_bytes: 100, used_bytes: 87, available_bytes: 13, use_percent: 87 },
   ] }) });
   act(() => root.render(<ServerSidebar tab={tab("server-a")} collapsed />));
-  const disk = host.querySelector('[aria-label="最高分区占用"]');
-  expect(disk).not.toBeNull();
-  expect(disk!.textContent).toContain("87%");
-  expect(disk!.getAttribute("title")).toContain("/data");
+  const disks = host.querySelectorAll('[aria-label="磁盘分区占用"] [role="meter"]');
+  expect(disks).toHaveLength(2);
+  expect(disks[0].getAttribute("aria-valuenow")).toBe("35");
+  expect(disks[1].getAttribute("aria-valuenow")).toBe("87");
+  expect(disks[1].getAttribute("title")).toContain("/data");
 });
 
 it("does not render unavailable memory or CPU as a healthy zero", () => {

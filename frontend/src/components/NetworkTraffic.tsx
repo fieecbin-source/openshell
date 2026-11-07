@@ -25,6 +25,22 @@ const readRate = (metrics: HostMetrics | null, field: string) => {
   return value !== null && value >= 0 ? value : null;
 };
 
+/** At most three number characters, with the unit on its own line in an 18px column. */
+const railSpeed = (bps: number | null) => {
+  if (bps === null) return { value: "—", unit: "" };
+  const units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s", "PB/s", "EB/s"];
+  let value = bps;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  let rounded = unit && value < 10 ? Number(value.toFixed(1)) : Math.round(value);
+  if (rounded >= 1000 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+    rounded = Number(value.toFixed(1));
+  }
+  return { value: unit && rounded < 10 ? rounded.toFixed(1) : String(rounded), unit: units[unit] };
+};
+
 /** The chart and both directions share one scale, using actual monitor samples. */
 export function NetworkTraffic({ metrics, mode = "sidebar" }: {
   metrics: HostMetrics | null;
@@ -102,14 +118,31 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
   );
 
   if (mode === "rail") return (
-    <div className="flex flex-col items-center gap-2" aria-label="网络传输速率"
-      title={`上行 ${upload} · 下行 ${download}`}>
-      {FIELDS.map((field) => <div key={field} className="flex items-center gap-1">
-        <span aria-hidden="true" className={`text-[10px] leading-none ${field === "net_tx_bps" ? "text-accent" : "text-state-success"}`}>
-          {field === "net_tx_bps" ? "↑" : "↓"}
-        </span>
-        {graph([field], "h-3 w-6 shrink-0", `${field === "net_tx_bps" ? "上行" : "下行"}速率历史：${field === "net_tx_bps" ? upload : download}`)}
-      </div>)}
+    <div className="relative grid w-[38px] grid-cols-2 gap-x-0.5" aria-label="网络传输速率">
+      <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-4 bottom-0 w-px bg-line/10" />
+      {FIELDS.map((field) => {
+        const value = field === "net_tx_bps" ? tx : rx;
+        const label = field === "net_tx_bps" ? "上行" : "下行";
+        const formatted = field === "net_tx_bps" ? upload : download;
+        const compact = railSpeed(value);
+        const scale = Math.max(peak, tx ?? 0, rx ?? 0);
+        return <div key={field} role="meter" aria-label={`${label}速率：${formatted}`}
+          aria-valuemin={0} aria-valuemax={scale} aria-valuenow={value ?? undefined} aria-valuetext={formatted}
+          title={`${label} ${formatted} · 柱高相对最近 3 分钟双向峰值 ${speed(scale)}`}
+          className="flex w-[18px] flex-col items-center gap-1">
+          <span aria-hidden="true" className={`text-[10px] leading-3 ${field === "net_tx_bps" ? "text-accent" : "text-state-success"}`}>
+            {field === "net_tx_bps" ? "↑" : "↓"}
+          </span>
+          <div className="flex h-12 w-1.5 flex-col justify-end overflow-hidden rounded-full bg-line/10">
+            <div data-network-fill className={`w-full rounded-full transition-[height] duration-300 motion-reduce:transition-none ${field === "net_tx_bps" ? "bg-action" : "bg-state-success"}`}
+              style={{ height: `${value === null ? 0 : value / scale * 100}%`, minHeight: value !== null && value > 0 ? "2px" : 0 }} />
+          </div>
+          <div className="w-full min-w-0 text-center font-mono tabular-nums">
+            <div className={`text-[9px] leading-3 ${field === "net_tx_bps" ? "text-accent" : "text-state-success"}`}>{compact.value}</div>
+            <div className="text-[8px] leading-3 tracking-[-0.25px] text-ink-tertiary">{compact.unit || "\u00a0"}</div>
+          </div>
+        </div>;
+      })}
     </div>
   );
 

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import type { TerminalTab } from "../stores/terminalStore";
-import type { DiskMountMetrics } from "../types/ipc";
 import { isFieldUnavailable, isMetricsStale, readAvailableMetric, useMonitorStore } from "../stores/monitorStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { sshExec } from "../lib/ipc";
@@ -8,6 +7,7 @@ import { useContainerStore } from "../stores/containerStore";
 import { NetworkTraffic } from "./NetworkTraffic";
 import { memoryPercent } from "../lib/resourceMetrics";
 import { DockerIcon } from "./ui/DockerIcon";
+import { DiskUsageRail } from "./DiskUsageRail";
 import { ConnectionDetailsPopover } from "./ConnectionDetailsPopover";
 import { HostIcon } from "./ui/HostIcon";
 import { ActivityIcon, CpuIcon, MemoryIcon, HardDriveIcon, InfoIcon, WifiOffIcon } from "./ui/icons";
@@ -190,11 +190,6 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
   const memValue = memoryPercent(metrics);
   const memPct = memValue === null ? null : Math.round(memValue);
   const memLabel = memPct === null ? "不可用" : `${memPct}%`;
-  const fullestDisk = isFieldUnavailable(metrics, "disk_mounts") ? undefined : metrics?.disk_mounts
-    ?.filter((disk) => Number.isFinite(disk.use_percent) && disk.use_percent >= 0)
-    .reduce<DiskMountMetrics | undefined>((fullest, disk) =>
-      !fullest || disk.use_percent > fullest.use_percent ? disk : fullest, undefined);
-  const diskPct = fullestDisk ? Math.round(Math.min(100, fullestDisk.use_percent)) : null;
 
   const isStatusConnected = tab.status === "connected";
   const isStatusConnecting = tab.status === "connecting" || tab.status === "reconnecting";
@@ -251,15 +246,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
               <span className="text-[9px] font-mono tabular-nums text-ink-secondary mt-1">{memPct === null ? "—" : memLabel}</span>
             </div>
             <NetworkTraffic metrics={metrics} mode="rail" />
-            <div aria-label="最高分区占用" className="flex flex-col items-center gap-1"
-              title={fullestDisk ? `最高分区占用：${fullestDisk.mount_point} · ${diskPct}%` : "磁盘占用不可用"}>
-              <HardDriveIcon className="h-4 w-4 text-ink-secondary" />
-              <div className="h-1 w-6 overflow-hidden rounded-full bg-line/10">
-                <div className={`h-full rounded-full ${diskPct !== null && diskPct > 85 ? "bg-state-danger" : "bg-state-warning"}`}
-                  style={{ width: `${diskPct ?? 0}%` }} />
-              </div>
-              <span className="text-[9px] font-mono tabular-nums text-ink-secondary">{diskPct === null ? "—" : `${diskPct}%`}</span>
-            </div>
+            <DiskUsageRail metrics={metrics} />
           </>
         ) : (
           <div className="flex flex-col items-center justify-center text-ink-tertiary gap-1 py-4">

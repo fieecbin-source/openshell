@@ -59,7 +59,7 @@ it("does not show missing network rates as zero traffic", () => {
   expect(container.textContent).not.toContain("0 B/s");
 });
 
-it("shows independent upload and download traces in the collapsed rail", () => {
+it("shows parallel upload and download meters with readable live values in the rail", () => {
   const now = Date.now();
   const latest = { session_id: "a", timestamp_ms: now, net_tx_bps: 2048, net_rx_bps: 1024 } as HostMetrics;
   useMonitorStore.setState({ history: [{ ...latest, timestamp_ms: now - 3000 }] });
@@ -67,10 +67,20 @@ it("shows independent upload and download traces in the collapsed rail", () => {
   const root = createRoot(container);
   cleanup = () => act(() => root.unmount());
   act(() => root.render(<NetworkTraffic metrics={latest} mode="rail" />));
-  expect(container.querySelectorAll('svg[role="img"]')).toHaveLength(2);
-  expect(container.querySelector('svg[aria-label="上行速率历史：2.0 KB/s"]')).not.toBeNull();
-  expect(container.querySelector('svg[aria-label="下行速率历史：1.0 KB/s"]')).not.toBeNull();
-  expect(container.textContent).toBe("↑↓");
+  expect(container.querySelectorAll('[role="meter"]')).toHaveLength(2);
+  expect(container.querySelector('[aria-label="上行速率：2.0 KB/s"]')?.getAttribute("aria-valuenow")).toBe("2048");
+  expect(container.querySelector('[aria-label="下行速率：1.0 KB/s"]')?.getAttribute("aria-valuenow")).toBe("1024");
+  expect(container.querySelector('svg[role="img"]')).toBeNull();
+  expect(container.textContent).toContain("2.0KB/s");
+  expect(container.textContent).toContain("1.0KB/s");
+  act(() => root.render(<NetworkTraffic metrics={{ ...latest, net_tx_bps: 0, unavailable_fields: ["net_rx_bps"] }} mode="rail" />));
+  expect(container.querySelector('[aria-label="上行速率：0 B/s"]')?.getAttribute("aria-valuenow")).toBe("0");
+  expect(container.querySelector('[aria-label="下行速率：不可用"]')?.hasAttribute("aria-valuenow")).toBe(false);
+  expect(container.textContent).toContain("—");
+  act(() => root.render(<NetworkTraffic metrics={{ ...latest, net_tx_bps: 1023.8, net_rx_bps: 999.6 * 1024 }} mode="rail" />));
+  const meters = container.querySelectorAll('[role="meter"]');
+  expect(meters[0].textContent).toContain("1.0KB/s");
+  expect(meters[1].textContent).toContain("1.0MB/s");
 });
 
 it("keeps both directions and the trend visible in the dashboard presentation", () => {
