@@ -19,7 +19,7 @@ import {
 import { formatFriendlyError } from "../lib/errors";
 import { appendSessionLog, dropSessionLog } from "../lib/terminal-log";
 import { TerminalSearch } from "./TerminalSearch";
-import { MaximizeIcon, MinimizeIcon, SearchIcon, CopyIcon, DownloadIcon, CommandIcon, TrashIcon, ChevronDownIcon, PlayIcon, RowsIcon, StopIcon, RefreshIcon, SaveIcon, SlidersIcon, PlusIcon } from "./ui/icons";
+import { MaximizeIcon, MinimizeIcon, SearchIcon, CopyIcon, DownloadIcon, CommandIcon, TrashIcon, ChevronDownIcon, PlayIcon, RowsIcon, StopIcon, RefreshIcon, SaveIcon, SlidersIcon, PlusIcon, TerminalIcon } from "./ui/icons";
 import { ConfirmDialog } from "./ui/Overlay";
 import { ConnectAuthModal } from "./ConnectAuthModal";
 import { toast, useToastStore } from "../stores/toastStore";
@@ -172,7 +172,7 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
       fontFamily: opts.fontFamily,
       fontWeight: opts.fontWeight,
       fontWeightBold: 700,
-      lineHeight: 1.4,
+      lineHeight: 1.35,
       letterSpacing: 0,
       minimumContrastRatio: 7,
       allowTransparency: true,
@@ -661,10 +661,16 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
   ]);
 
   const isLight = isLightBackground(currentTheme.background);
+  const statusLabel = { launched: "已启动", connecting: "连接中", connected: "已连接",
+    reconnecting: "重连中", disconnected: "已断开", error: "连接失败" }[tab.status];
+  const statusColor = tab.status === "connected" ? "bg-emerald-400"
+    : tab.status === "connecting" || tab.status === "reconnecting" ? "bg-amber-400"
+    : tab.status === "error" ? "bg-red-400" : "bg-zinc-500";
 
   return (
     <div
-      className="relative h-full w-full overflow-hidden transition-colors duration-300 border-t border-line/10 shadow-[inset_0_1px_3px_rgba(0,0,0,0.15)]"
+      className="terminal-pane relative flex h-full w-full flex-col overflow-hidden"
+      data-tone={isLight ? "light" : "dark"}
       style={{
         backgroundColor: currentTheme.background,
       }}
@@ -702,32 +708,46 @@ export const XtermView: React.FC<XtermViewProps> = ({ tab, visible = true }) => 
         />
       )}
 
-      {/* 终端浮动快捷工具栏 (全屏放大与快捷搜索) */}
-      <div className="absolute right-2.5 top-2.5 z-20 flex items-center gap-1.5">
-        <button
-          onClick={toggleFullscreen}
-          title={isFullscreen ? "退出终端全屏 (Esc / F11)" : "全屏放大终端 (F11)"}
-          aria-label={isFullscreen ? "退出终端全屏" : "全屏放大终端"}
-          className="rounded-lg border border-line/15 bg-surface/80 p-1.5 text-ink-secondary shadow-os-sm backdrop-blur-md transition-all hover:bg-surface hover:text-ink active:scale-95"
-        >
-          {isFullscreen ? (
-            <MinimizeIcon className="h-3.5 w-3.5" />
-          ) : (
-            <MaximizeIcon className="h-3.5 w-3.5" />
-          )}
-        </button>
+      {/* 独立工具栏避免遮挡终端首行，始终标明当前操作区域。 */}
+      <div className="terminal-toolbar relative z-20 flex h-9 shrink-0 items-center gap-2 px-4">
+        <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
+        <span className="shrink-0 text-[11px] font-semibold">终端</span>
+        <span aria-hidden="true" className="terminal-toolbar-divider mx-1 h-3 w-px" />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] opacity-75" title={tab.sessionName}>{tab.sessionName}</span>
+        <span className="flex shrink-0 items-center gap-1.5 text-[10px]" aria-label={`终端状态：${statusLabel}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
+          {statusLabel}
+        </span>
+        <div className="ml-2 flex items-center gap-1">
+          <button
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "退出终端全屏 (Esc / F11)" : "全屏放大终端 (F11)"}
+            aria-label={isFullscreen ? "退出终端全屏" : "全屏放大终端"}
+            className="terminal-tool-button rounded-md p-1.5 transition-colors"
+          >
+            {isFullscreen ? (
+              <MinimizeIcon className="h-3.5 w-3.5" />
+            ) : (
+              <MaximizeIcon className="h-3.5 w-3.5" />
+            )}
+          </button>
 
-        <button
-          onClick={() => setSearchOpen((prev) => !prev)}
-          title="在终端中搜索 (Ctrl+F)"
-          aria-label="在终端中搜索"
-          className="rounded-lg border border-line/15 bg-surface/80 p-1.5 text-ink-secondary shadow-os-sm backdrop-blur-md transition-all hover:bg-surface hover:text-ink active:scale-95"
-        >
-          <SearchIcon className="h-3.5 w-3.5" />
-        </button>
+          <button
+            onClick={() => setSearchOpen((prev) => !prev)}
+            title="在终端中搜索 (Ctrl+F)"
+            aria-label="在终端中搜索"
+            aria-pressed={searchOpen}
+            className="terminal-tool-button rounded-md p-1.5 transition-colors"
+          >
+            <SearchIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
-      <div ref={containerRef} className="relative z-10 h-full w-full p-1.5 focus:outline-none" />
+      {/* FitAddon 不会扣除父容器的 padding；留白放在测量容器外层，保证最后一列和最后一行完整显示。 */}
+      <div className="relative min-h-0 w-full flex-1 px-4 py-3">
+        <div ref={containerRef} className="terminal-content relative z-10 h-full w-full focus:outline-none" />
+      </div>
       {ctxMenu && visible && createPortal(
         <div ref={menuRef} role="menu" aria-label="终端操作" className="fixed z-[70] max-h-[calc(100vh-16px)] w-60 overflow-y-auto rounded-xl border border-line/10 bg-surface/95 p-1.5 text-os-xs text-ink shadow-os-lg backdrop-blur-xl"
           style={{ left: ctxMenu.x, top: ctxMenu.y }} onMouseDown={(event) => event.stopPropagation()}

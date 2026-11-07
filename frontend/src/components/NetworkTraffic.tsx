@@ -1,12 +1,14 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { HostMetrics } from "../types/ipc";
 import { readAvailableMetric, useMonitorStore } from "../stores/monitorStore";
 import { resourceSamples } from "../lib/resourceMetrics";
 import { ChevronDownIcon, NetworkIcon } from "./ui/icons";
 
 const rate = (value: number | undefined) => Number.isFinite(value) ? Math.max(0, value!) : 0;
-const speed = (value: number) => value < 1024 ? `${value.toFixed(0)} B/s`
-  : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB/s` : `${(value / 1024 ** 2).toFixed(1)} MB/s`;
+const speed = (value: number) => {
+  const unit = Math.min(6, Math.floor(Math.log(Math.max(1, value)) / Math.log(1024)));
+  return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${["B/s", "KB/s", "MB/s", "GB/s", "TB/s", "PB/s", "EB/s"][unit]}`;
+};
 const total = (value: number | undefined) => {
   const bytes = rate(value);
   const unit = Math.min(4, Math.floor(Math.log(Math.max(1, bytes)) / Math.log(1024)));
@@ -15,6 +17,7 @@ const total = (value: number | undefined) => {
 
 /** 图表横轴展示最近 3 分钟，坐标按真实采样时间推进，数据点随刷新左移形成平滑滚动 */
 const WINDOW_MS = 180_000;
+const MAX_SAMPLE_GAP_MS = 15_000;
 const WIDTH = 200;
 const TOP = 2;
 const BASELINE = 38;
@@ -48,6 +51,7 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
 }) {
   const history = useMonitorStore((state) => state.history);
   const [collapsed, setCollapsed] = useState(false);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
   const id = useId();
@@ -66,7 +70,7 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
     let frame = 0;
     let last = 0;
     const tick = (time: number) => {
-      if (time - last >= 50) {
+      if (time - last >= 100) {
         last = time;
         setNow(Date.now());
       }
@@ -76,9 +80,14 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
     return () => cancelAnimationFrame(frame);
   }, [collapsed, reducedMotion, mode]);
 
-  const samples = resourceSamples(metrics, history);
+  const samples = useMemo(() => resourceSamples(metrics, history), [metrics, history]);
   const observedPeak = Math.max(0, ...samples.flatMap((sample) => FIELDS.map((field) => readRate(sample, field) ?? 0)));
-  const peak = Math.max(1024, observedPeak);
+  // Rounded shared scale leaves headroom and makes axis labels easy to scan.
+  const target = Math.max(1024, observedPeak * 1.12);
+  const magnitude = 1024 ** Math.floor(Math.log(target) / Math.log(1024));
+  const peak = ([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024].find((step) => step * magnitude >= target) ?? 1024) * magnitude;
+  const axisUnit = speed(peak).split(" ")[1];
+  const axisDivisor = 1024 ** Math.min(6, Math.floor(Math.log(peak) / Math.log(1024)));
   // Reduced-motion charts still advance on collection; they just do not scroll between samples.
   const plotTime = reducedMotion || mode === "rail" ? metrics?.timestamp_ms ?? now : Math.max(now, metrics?.timestamp_ms ?? now);
   const xFor = (timestamp: number) =>
@@ -91,7 +100,11 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
     for (const sample of samples) {
       if (readRate(sample, field) === null) {
         if (result[result.length - 1].length) result.push([]);
-      } else result[result.length - 1].push(sample);
+      } else {
+        const segment = result[result.length - 1];
+        if (segment.length && sample.timestamp_ms - segment[segment.length - 1].timestamp_ms > MAX_SAMPLE_GAP_MS) result.push([]);
+        result[result.length - 1].push(sample);
+      }
     }
     return result.filter((segment) => segment.length);
   };
@@ -103,17 +116,39 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
     const value = readRate(metrics, field);
     return value === null ? "不可用" : total(value);
   };
+  const hovered = hoverTime === null || !samples.length ? null : samples.reduce((nearest, sample) =>
+    Math.abs(sample.timestamp_ms - hoverTime) < Math.abs(nearest.timestamp_ms - hoverTime) ? sample : nearest);
   const graph = (fields: readonly RateField[], className: string, label: string) => (
     <svg viewBox="0 0 200 40" preserveAspectRatio="none" className={className}
-      role="img" aria-label={label}>
-      {mode !== "rail" && [TOP, 20, BASELINE].map((y) => <path key={y} d={`M2 ${y}H198`} fill="none"
-        className="stroke-line/10" strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />)}
-      {fields.filter((field) => readRate(metrics, field) !== null).map((field) => <g key={field} className={field === "net_tx_bps" ? "text-accent" : "text-state-success"}>
+      role="img" aria-label={label}
+      onPointerMove={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (!bounds.width) return;
+        const x = Math.max(2, Math.min(198, (event.clientX - bounds.left) / bounds.width * WIDTH));
+        setHoverTime(plotTime - (198 - x) / 196 * WINDOW_MS);
+      }} onPointerLeave={() => setHoverTime(null)}>
+      <defs>
+        {fields.map((field) => <linearGradient key={field} id={`${id}-${field}`} x1="0" y1="0" x2="0" y2="1"
+          className={field === "net_tx_bps" ? "text-accent" : "text-state-success"}>
+          <stop offset="0%" stopColor="currentColor" stopOpacity="0.16" />
+          <stop offset="100%" stopColor="currentColor" stopOpacity="0.015" />
+        </linearGradient>)}
+      </defs>
+      {[TOP, 11, 20, 29, BASELINE].map((y) => <path key={y} d={`M2 ${y}H198`} fill="none"
+        className="stroke-line/10" strokeDasharray={y === BASELINE ? undefined : "3 4"} vectorEffect="non-scaling-stroke" />)}
+      {[2, 67.33, 132.67, 198].map((x) => <path key={x} d={`M${x} ${TOP}V${BASELINE}`} fill="none"
+        className="stroke-line/5" vectorEffect="non-scaling-stroke" />)}
+      {fields.map((field) => <g key={field} className={field === "net_tx_bps" ? "text-accent" : "text-state-success"}>
         {segments(field).map((segment, index) => <g key={index}>
-          <polyline points={points(segment, field)} fill="none" stroke="currentColor" strokeWidth="1.5"
+          {segment.length > 1 && <path data-network-area d={`M${xFor(segment[0].timestamp_ms)} ${BASELINE} L${points(segment, field).replaceAll(" ", " L")} L${xFor(segment[segment.length - 1].timestamp_ms)} ${BASELINE} Z`}
+            fill={`url(#${id}-${field})`} />}
+          <polyline points={points(segment, field)} fill="none" stroke="currentColor" strokeWidth="1.8"
             strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          {segment.length === 1 && <path d={`M${xFor(segment[0].timestamp_ms)} ${yFor(segment[0][field])}h0.01`} stroke="currentColor" strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
         </g>)}
       </g>)}
+      {hovered && <path d={`M${xFor(hovered.timestamp_ms)} ${TOP}V${BASELINE}`} className="stroke-ink-tertiary/50"
+        strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
     </svg>
   );
 
@@ -128,7 +163,7 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
         const scale = Math.max(peak, tx ?? 0, rx ?? 0);
         return <div key={field} role="meter" aria-label={`${label}速率：${formatted}`}
           aria-valuemin={0} aria-valuemax={scale} aria-valuenow={value ?? undefined} aria-valuetext={formatted}
-          title={`${label} ${formatted} · 柱高相对最近 3 分钟双向峰值 ${speed(scale)}`}
+          title={`${label} ${formatted} · 双向统一刻度上限 ${speed(scale)}`}
           className="flex w-[18px] flex-col items-center gap-1">
           <span aria-hidden="true" className={`text-[10px] leading-3 ${field === "net_tx_bps" ? "text-accent" : "text-state-success"}`}>
             {field === "net_tx_bps" ? "↑" : "↓"}
@@ -149,31 +184,45 @@ export function NetworkTraffic({ metrics, mode = "sidebar" }: {
   const dashboard = mode === "dashboard";
   const speedValue = (label: string) => {
     const [value, unit] = label.split(" ");
-    return <div className="mt-1 flex flex-wrap items-baseline gap-x-1 text-ink">
-      <span className="font-mono text-lg font-semibold leading-tight tracking-tight tabular-nums">{value}</span>
-      {unit && <span className="text-[10px] font-medium text-ink-tertiary"> {unit}</span>}
+    return <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-ink">
+      <span className={`${dashboard ? "text-2xl" : "text-xl"} font-semibold leading-tight tracking-tight tabular-nums`}>{value}</span>
+      {unit && <span className="text-[11px] font-medium text-ink-tertiary"> {unit}</span>}
     </div>;
   };
   const heading = <><NetworkIcon className="h-3.5 w-3.5 text-accent" />
     <span className="flex-1 text-left">网络传输速率</span></>;
 
   return (
-    <section aria-label="网络仪表盘" className={`min-w-0 rounded-2xl border border-line/10 shadow-apple-sm ${dashboard ? "liquid-glass-card p-4" : "bg-surface/80 p-3"}`}>
+    <section aria-label="网络仪表盘" className={`min-w-0 rounded-xl border border-line/10 ${dashboard ? "bg-surface p-4" : "bg-surface p-3"}`}>
       {dashboard ? <div className="flex items-center gap-1.5 text-xs font-semibold text-ink">
-        {heading}<span className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium ${metrics ? "bg-state-success/10 text-state-success" : "bg-line/5 text-ink-tertiary"}`}>{metrics ? "实时" : "无数据"}</span>
+        {heading}<span className={`flex items-center gap-1.5 text-[10px] font-medium ${tx !== null || rx !== null ? "text-state-success" : "text-ink-tertiary"}`}><span className="h-1.5 w-1.5 rounded-full bg-current" />{tx !== null || rx !== null ? "实时" : "无数据"}</span>
       </div> : <button type="button" aria-expanded={!collapsed} aria-controls={`${id}-content`}
         onClick={() => setCollapsed((value) => !value)} className="flex w-full items-center gap-1.5 text-xs font-semibold text-ink">
         {heading}<ChevronDownIcon className={`h-3.5 w-3.5 text-ink-tertiary transition-transform motion-reduce:transition-none ${collapsed ? "-rotate-90" : ""}`} />
       </button>}
-      {(!collapsed || dashboard) && <div id={`${id}-content`} className="mt-4 space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="min-w-0"><span className="text-[10px] font-medium text-accent">↑ 上行</span>{speedValue(upload)}<div className="mt-1 text-[9px] text-ink-tertiary">累计 {totalLabel("net_tx_total")}</div></div>
-          <div className="min-w-0"><span className="text-[10px] font-medium text-state-success">↓ 下行</span>{speedValue(download)}<div className="mt-1 text-[9px] text-ink-tertiary">累计 {totalLabel("net_rx_total")}</div></div>
+      {(!collapsed || dashboard) && <div id={`${id}-content`} className="mt-4 space-y-4">
+        <div className="grid grid-cols-2 gap-3 divide-x divide-line/10">
+          <div className="min-w-0"><span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-accent"><span className="h-0.5 w-3 rounded-full bg-current" />上行</span>{speedValue(upload)}<div className="mt-1.5 text-[10px] text-ink-tertiary">累计 {totalLabel("net_tx_total")}</div></div>
+          <div className="min-w-0 pl-3"><span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-state-success"><span className="h-0.5 w-3 rounded-full bg-current" />下行</span>{speedValue(download)}<div className="mt-1.5 text-[10px] text-ink-tertiary">累计 {totalLabel("net_rx_total")}</div></div>
         </div>
-        <figure className="space-y-1.5 border-t border-line/10 pt-2">
-          <div className="text-right text-[9px] text-ink-tertiary">{samples.length > 1 ? `峰值 ${speed(observedPeak)}` : "等待更多采样"}</div>
-          {graph(FIELDS, dashboard ? "h-20 w-full" : "h-12 w-full", `网络速率历史：上行 ${upload}，下行 ${download}`)}
-          <figcaption className="flex justify-between text-[9px] text-ink-tertiary"><span>最近 3 分钟</span><span>现在</span></figcaption>
+        <figure className="space-y-2 border-t border-line/10 pt-3">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-ink-tertiary"><span>速率{samples.length ? ` · ${axisUnit}` : ""}</span><span className="tabular-nums">{samples.length > 1 ? `峰值 ${speed(observedPeak)}` : "等待更多采样"}</span></div>
+          <div className="relative flex gap-2">
+            <div data-network-axis aria-hidden="true" className={`flex w-8 shrink-0 flex-col justify-between py-1 text-right text-[10px] leading-none tabular-nums text-ink-tertiary ${dashboard ? "h-28" : "h-[88px]"}`}>
+              {[peak, peak * 3 / 4, peak / 2, peak / 4, 0].map((value) => <span key={value}>{samples.length ? Number((value / axisDivisor).toFixed(2)) : "—"}</span>)}
+            </div>
+            <div className="relative min-w-0 flex-1">
+              {graph(FIELDS, dashboard ? "h-28 w-full" : "h-[88px] w-full", `网络速率历史（最近 3 分钟）：上行 ${upload}，下行 ${download}`)}
+              {!samples.length && <div className="absolute inset-0 flex items-center justify-center text-[10px] text-ink-tertiary">等待网络数据</div>}
+              {hovered && <div role="tooltip" className="pointer-events-none absolute left-1 top-1 z-10 rounded-md border border-line/10 bg-surface/95 px-2 py-1.5 text-[10px] leading-relaxed shadow-os-sm">
+                <div className="font-medium tabular-nums text-ink-secondary">{new Date(hovered.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false })}</div>
+                {FIELDS.map((field) => <div key={field} className={field === "net_tx_bps" ? "text-accent" : "text-state-success"}>
+                  {field === "net_tx_bps" ? "上行" : "下行"} {readRate(hovered, field) === null ? "不可用" : speed(readRate(hovered, field)!)}
+                </div>)}
+              </div>}
+            </div>
+          </div>
+          <figcaption className="ml-10 flex justify-between text-[10px] tabular-nums text-ink-tertiary"><span>{dashboard ? "3 分钟前" : "-3m"}</span><span>{dashboard ? "2 分钟前" : "-2m"}</span><span>{dashboard ? "1 分钟前" : "-1m"}</span><span>现在</span></figcaption>
         </figure>
       </div>}
     </section>

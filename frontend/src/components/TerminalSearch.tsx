@@ -44,7 +44,7 @@ export const TerminalSearch: React.FC<TerminalSearchProps> = ({ searchAddon, onC
     );
 
   return (
-    <div className="absolute right-4 top-2 z-30 flex items-center gap-1.5 rounded-os-md border border-line/10 bg-surface/95 p-1.5 shadow-os-md backdrop-blur-md animate-[fade-in_180ms_var(--os-ease)]">
+    <div className="absolute right-4 top-11 z-30 flex items-center gap-1.5 rounded-os-md border border-line/10 bg-surface p-1.5 shadow-os-md animate-[fade-in_180ms_var(--os-ease)]">
       <div className="flex h-[26px] items-center gap-1.5 rounded-os-sm border border-line/10 bg-surface-muted px-2">
         <SearchIcon className="h-3.5 w-3.5 shrink-0 text-ink-tertiary" />
         <input

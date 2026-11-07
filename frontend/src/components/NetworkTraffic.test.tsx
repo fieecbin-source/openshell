@@ -59,6 +59,24 @@ it("does not show missing network rates as zero traffic", () => {
   expect(container.textContent).not.toContain("0 B/s");
 });
 
+it("breaks the trend across collection outages and fills only continuous segments", () => {
+  const now = Date.now();
+  const latest = { session_id: "a", timestamp_ms: now, net_tx_bps: 2048, net_rx_bps: 1024 } as HostMetrics;
+  useMonitorStore.setState({ history: [
+    { ...latest, timestamp_ms: now - 60_000 },
+    { ...latest, timestamp_ms: now - 57_000 },
+    { ...latest, timestamp_ms: now - 3000 },
+  ] });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  cleanup = () => act(() => root.unmount());
+  act(() => root.render(<NetworkTraffic metrics={latest} />));
+  expect(container.querySelector('g.text-accent')!.querySelectorAll("polyline")).toHaveLength(2);
+  expect(container.querySelectorAll("[data-network-area]")).toHaveLength(4);
+  expect(container.textContent).toContain("-1m");
+  expect(container.querySelector("[data-network-axis]")!.lastElementChild!.textContent).toBe("0");
+});
+
 it("shows parallel upload and download meters with readable live values in the rail", () => {
   const now = Date.now();
   const latest = { session_id: "a", timestamp_ms: now, net_tx_bps: 2048, net_rx_bps: 1024 } as HostMetrics;

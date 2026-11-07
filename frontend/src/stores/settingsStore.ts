@@ -33,6 +33,30 @@ export interface TerminalThemeConfig {
 }
 
 export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
+  terminal_black: {
+    name: "经典黑 · 默认",
+    background: "#0a0a0a",
+    foreground: "#e6edf3",
+    cursor: "#e6edf3",
+    cursorAccent: "#0a0a0a",
+    selectionBackground: "#3b526d80",
+    black: "#25292e",
+    red: "#f47067",
+    green: "#57ab5a",
+    yellow: "#d29922",
+    blue: "#6cb6ff",
+    magenta: "#bc8cff",
+    cyan: "#56d4dd",
+    white: "#d1d9e0",
+    brightBlack: "#89929b",
+    brightRed: "#ff938a",
+    brightGreen: "#85e89d",
+    brightYellow: "#e3b341",
+    brightBlue: "#9ecbff",
+    brightMagenta: "#d2a8ff",
+    brightCyan: "#a5f3fc",
+    brightWhite: "#ffffff",
+  },
   finalshell: {
     name: "FinalShell 经典暗黑 (推荐)",
     background: "#0c1017",
@@ -346,7 +370,7 @@ export const THEMES: Record<TerminalTheme, TerminalThemeConfig> = {
     brightWhite: "#ffffff",
   },
   clean_light: {
-    name: "清晰白 · 默认",
+    name: "清晰白",
     background: "#fcfdff",
     foreground: "#000000",
     cursor: "#000000",
@@ -424,13 +448,12 @@ export type ThemeMap = Record<string, TerminalThemeConfig>;
 
 /** 合并内置主题与用户导入的主题（自定义同名时覆盖内置）。 */
 export function allThemes(customThemes: ThemeMap): ThemeMap {
-  return Object.fromEntries(Object.entries({ ...THEMES, ...customThemes })
-    .filter(([, config]) => isLightBackground(config.background)));
+  return { ...THEMES, ...customThemes };
 }
 
-/** 解析主题键；未知或深色主题回退到清晰白，避免终端渲染时拿到 undefined。 */
+/** 终端配色独立于外层界面；未知主题回退到经典黑。 */
 export function resolveTheme(key: string, customThemes: ThemeMap): TerminalThemeConfig {
-  return allThemes(customThemes)[key] ?? THEMES.clean_light;
+  return allThemes(customThemes)[key] ?? THEMES.terminal_black;
 }
 
 function normalizeCustomThemes(raw: unknown): ThemeMap {
@@ -544,12 +567,13 @@ const LEGACY_FONT_FAMILIES = [
   'Consolas, "Cascadia Mono", "Microsoft YaHei UI", Menlo, monospace',
   "Menlo, Monaco",
   '"Cascadia Code", "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace',
+  '"DejaVu Sans Mono", "Cascadia Code", "Cascadia Mono", "Segoe UI Mono", "Microsoft YaHei UI", Consolas, Menlo, monospace',
 ];
 
 export const DEFAULT_SETTINGS = {
-  theme: "clean_light" as TerminalTheme,
-  fontSize: 14,
-  fontFamily: '"DejaVu Sans Mono", "Cascadia Code", "Cascadia Mono", "Segoe UI Mono", "Microsoft YaHei UI", Consolas, Menlo, monospace',
+  theme: "terminal_black" as TerminalTheme,
+  fontSize: 15,
+  fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, "DejaVu Sans Mono", "Microsoft YaHei UI", monospace',
   fontWeight: 400 as 400 | 500 | 600,
   cursorBlink: true,
   cursorStyle: "bar" as CursorStyle,
@@ -590,6 +614,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const fontFamilyRec = await settingsGet("user", "terminal.font_family");
       const weightRec = await settingsGet("user", "terminal.font_weight");
       const clarityRec = await settingsGet("user", "appearance.daylight_v1");
+      const darkDefaultRec = await settingsGet("user", "appearance.terminal_dark_v1");
       const cursorBlinkRec = await settingsGet("user", "terminal.cursor_blink");
       const cursorStyleRec = await settingsGet("user", "terminal.cursor_style");
       const scrollbackRec = await settingsGet("user", "terminal.scrollback");
@@ -606,7 +631,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const customThemes = normalizeCustomThemes(customThemesRec?.value_json);
       // 历史数据里可能保存了已不存在的主题键，回退到内置默认值避免终端渲染异常
       const savedTheme = typeof themeRec?.value_json === "string" ? themeRec.value_json : "";
-      const theme = allThemes(customThemes)[savedTheme] ? savedTheme : DEFAULT_SETTINGS.theme;
+      const upgradeDefault = darkDefaultRec?.value_json !== true;
+      const theme = upgradeDefault && savedTheme === "clean_light"
+        ? DEFAULT_SETTINGS.theme
+        : allThemes(customThemes)[savedTheme] ? savedTheme : DEFAULT_SETTINGS.theme;
 
       set({
         // 缺省值与初始 state 保持一致，避免首屏闪一下主题
@@ -652,6 +680,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         await settingsSet("user", "terminal.theme", theme);
         await settingsSet("user", "appearance.daylight_v1", true);
       }
+      if (upgradeDefault) {
+        await settingsSet("user", "terminal.theme", theme);
+        await settingsSet("user", "appearance.terminal_dark_v1", true);
+      }
     } catch (e) {
       console.warn("load settings error", e);
     }
@@ -663,6 +695,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     applyThemeToDocument(theme, get().customThemes);
     try {
       await settingsSet("user", "terminal.theme", theme);
+      await settingsSet("user", "appearance.terminal_dark_v1", true);
     } catch {}
   },
 
@@ -688,9 +721,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setTerminalColor: async (key: TerminalColorKey, value: string) => {
     if (!/^#[0-9a-f]{6}$/i.test(value)) throw new Error("请输入六位十六进制颜色，如 #24466B");
     const current = resolveTheme(get().theme, get().customThemes);
-    const config = { ...current, name: "自定义浅色", [key]: key === "selectionBackground" ? `${value}40` : value };
+    const config = { ...current, name: "自定义配色", [key]: key === "selectionBackground" ? `${value}40` : value };
     config.cursorAccent = config.background;
-    if (!isLightBackground(config.background)) throw new Error("请使用浅色背景，系统不支持黑色或深色底色");
     if (colorContrast(config.foreground, config.background) < 4.5) throw new Error("文字与背景对比度需达到 4.5:1，请选择更清晰的颜色");
     const theme = "custom_display";
     const customThemes = { ...get().customThemes, [theme]: config };

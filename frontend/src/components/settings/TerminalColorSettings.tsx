@@ -60,18 +60,18 @@ export function TerminalColorSettings() {
     <section className="space-y-5" aria-label="终端配色设置">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-os-md font-semibold text-ink">清晰、舒适的浅色终端</h3>
+          <h3 className="text-os-md font-semibold text-ink">清晰、舒适的终端</h3>
         </div>
-        <Button size="sm" onClick={() => void reset()}>恢复清晰默认值</Button>
+        <Button size="sm" onClick={() => void reset()}>恢复黑色默认值</Button>
       </div>
 
       <div className="overflow-hidden rounded-os-lg border border-line/20" data-testid="terminal-color-preview"
         style={{ backgroundColor: current.background, color: current.foreground }}>
-        <div className="flex items-center justify-between border-b border-line/10 px-4 py-2 text-os-2xs text-ink-secondary">
+        <div className="flex items-center justify-between px-4 py-2 text-os-2xs" style={{ borderBottom: `1px solid ${current.foreground}20`, color: current.foreground }}>
           <span>实时预览 · {fontSize}px · 字重 {fontWeight}</span>
-          <span className="font-medium text-state-success">对比度 {contrast.toFixed(2)}:1</span>
+          <span className="font-medium" style={{ color: current.green }}>对比度 {contrast.toFixed(2)}:1</span>
         </div>
-        <div className="space-y-1 px-4 py-4" style={{ fontFamily, fontSize, fontWeight, lineHeight: 1.5 }}>
+        <div className="px-4 py-4" style={{ fontFamily, fontSize, fontWeight, lineHeight: 1.35 }}>
           <p><span style={{ color: current.blue }}>ops@workspace</span> <span style={{ color: current.cyan }}>~/services</span> $ systemctl status api</p>
           <p><span style={{ color: current.green }}>● active (running)</span> 服务运行正常，连接稳定</p>
           <p><span style={{ color: current.yellow }}>WARN</span> 日志与命令输出清晰可读 · Aa 0O 1Il 0123456789</p>
@@ -80,7 +80,7 @@ export function TerminalColorSettings() {
       </div>
 
       <fieldset>
-        <legend className="mb-2 text-os-xs font-semibold text-ink">浅色主题</legend>
+        <legend className="mb-2 text-os-xs font-semibold text-ink">终端主题</legend>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {Object.entries(allThemes(customThemes)).map(([key, config]) => (
             <button type="button" key={key} aria-pressed={theme === key} onClick={() => void setTheme(key)}

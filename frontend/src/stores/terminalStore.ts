@@ -307,8 +307,8 @@ interface TerminalState {
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
-  // FinalShell 经典布局：SSH 会话默认「上终端 + 中命令栏 + 下 SFTP」上下分屏
-  layoutMode: "split",
+  // 默认进入全终端；分屏与 SFTP 由用户按需切换。
+  layoutMode: "terminal",
   splitRatio: 0.58,
   isFullscreen: false,
   commandHistory: readCommandHistory(),

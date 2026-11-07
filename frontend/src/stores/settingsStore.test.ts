@@ -45,6 +45,7 @@ describe("shell and terminal appearance isolation", () => {
       if (command !== "settings_get") return null;
       const key = (args as { key: string }).key;
       return key === "terminal.background_opacity" ? { value_json: 100 }
+        : key === "appearance.terminal_dark_v1" ? { value_json: true }
         : key === "terminal.theme" ? { value_json: "clean_light" } : null;
     });
     await useSettingsStore.getState().loadSettings();
@@ -52,12 +53,14 @@ describe("shell and terminal appearance isolation", () => {
     expect(useSettingsStore.getState().theme).toBe("clean_light");
   });
 
-  it("defaults to 50% wallpaper opacity and pure black terminal text", async () => {
+  it("defaults to a black terminal with readable light text and comfortable typography", async () => {
     await useSettingsStore.getState().loadSettings();
     const store = useSettingsStore.getState();
     expect(store.backgroundOpacity).toBe(50);
-    expect(resolveTheme(store.theme, store.customThemes).foreground).toBe("#000000");
-    expect(resolveTheme(store.theme, store.customThemes).black).toBe("#000000");
+    const theme = resolveTheme(store.theme, store.customThemes);
+    expect(theme.background).toBe("#0a0a0a");
+    expect(colorContrast(theme.foreground, theme.background)).toBeGreaterThan(7);
+    expect(store.fontSize).toBe(15);
   });
 
   it.each([0, 35, 70, 100])("preserves saved wallpaper opacity %i across reloads", async (opacity) => {
@@ -73,10 +76,11 @@ describe("shell and terminal appearance isolation", () => {
     expect(useSettingsStore.getState().backgroundOpacity).toBe(opacity);
   });
 
-  it("rejects dark background changes and preserves the current readable theme", async () => {
-    await expect(useSettingsStore.getState().setTerminalColor("background", "#101010")).rejects.toThrow("浅色背景");
-    expect(useSettingsStore.getState().theme).toBe("clean_light");
-    expect(Object.keys(useSettingsStore.getState().customThemes)).toHaveLength(0);
+  it("allows readable dark custom backgrounds", async () => {
+    await useSettingsStore.getState().setTheme(DEFAULT_SETTINGS.theme);
+    await useSettingsStore.getState().setTerminalColor("background", "#101010");
+    const store = useSettingsStore.getState();
+    expect(resolveTheme(store.theme, store.customThemes).background).toBe("#101010");
   });
 
   it("persists a custom foreground and restores it on reload", async () => {
@@ -94,11 +98,11 @@ describe("shell and terminal appearance isolation", () => {
     expect(colorContrast(resolveTheme(store.theme, store.customThemes).foreground, "#fcfdff")).toBeGreaterThan(7);
   });
 
-  it("filters dark presets and falls back safely when a legacy theme is selected", async () => {
-    expect(Object.keys(allThemes({}))).not.toContain("dark");
+  it("supports dark presets and falls back safely for an unknown theme", async () => {
+    expect(Object.keys(allThemes({}))).toContain("dark");
     await useSettingsStore.getState().setTheme("dark");
-    expect(useSettingsStore.getState().theme).toBe(DEFAULT_SETTINGS.theme);
-    expect(resolveTheme("dark", {}).background).toBe("#fcfdff");
+    expect(useSettingsStore.getState().theme).toBe("dark");
+    expect(resolveTheme("missing", {}).background).toBe("#0a0a0a");
   });
 
   it("rejects low-contrast and malformed foreground values", async () => {
@@ -114,8 +118,8 @@ describe("shell and terminal appearance isolation", () => {
       return values.has(data.key) ? { value_json: values.get(data.key) } : null;
     });
     await useSettingsStore.getState().loadSettings();
-    expect(useSettingsStore.getState().fontSize).toBe(14);
-    expect(useSettingsStore.getState().theme).toBe("clean_light");
+    expect(useSettingsStore.getState().fontSize).toBe(15);
+    expect(useSettingsStore.getState().theme).toBe("dark");
     await useSettingsStore.getState().setFontSize(15);
     await useSettingsStore.getState().loadSettings();
     expect(useSettingsStore.getState().fontSize).toBe(15);
@@ -151,6 +155,21 @@ describe("shell and terminal appearance isolation", () => {
     });
     await useSettingsStore.getState().loadSettings();
     expect(useSettingsStore.getState().fontFamily).toBe('"JetBrains Mono", monospace');
+  });
+
+  it("upgrades the previous white default once and respects subsequent theme choices", async () => {
+    const values = new Map<string, unknown>([["terminal.theme", "clean_light"], ["appearance.daylight_v1", true]]);
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const data = args as { key: string; value: unknown };
+      if (command === "settings_set") { values.set(data.key, data.value); return null; }
+      return values.has(data.key) ? { value_json: values.get(data.key) } : null;
+    });
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().theme).toBe(DEFAULT_SETTINGS.theme);
+    expect(values.get("appearance.terminal_dark_v1")).toBe(true);
+    await useSettingsStore.getState().setTheme("clean_light");
+    await useSettingsStore.getState().loadSettings();
+    expect(useSettingsStore.getState().theme).toBe("clean_light");
   });
 
 });
