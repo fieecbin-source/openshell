@@ -90,6 +90,14 @@ describe("buildGroupTree", () => {
     const model = buildGroupTree(groups, []);
     expect(model.roots.map((n) => n.group.id)).toContain("orphan");
   });
+
+  it("keeps sessions whose group was removed visible in the ungrouped list", () => {
+    const model = buildGroupTree([group("known", null)], [
+      session("assigned", "known"), session("lost", "deleted"), session("standalone", null),
+    ]);
+    expect(model.roots[0].sessions.map((item) => item.id)).toEqual(["assigned"]);
+    expect(model.ungrouped.map((item) => item.id)).toEqual(["lost", "standalone"]);
+  });
 });
 
 describe("wouldCreateCycle", () => {

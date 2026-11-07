@@ -39,10 +39,12 @@ export function buildGroupTree(groups: Group[], sessions: Session[]): SessionTre
     else byParent.set(key, [g]);
   }
 
+  const knownIds = new Set(groups.map((g) => g.id));
+
   const byGroup = new Map<string, Session[]>();
   const ungrouped: Session[] = [];
   for (const s of sessions) {
-    if (s.group_id) {
+    if (s.group_id && knownIds.has(s.group_id)) {
       const list = byGroup.get(s.group_id);
       if (list) list.push(s);
       else byGroup.set(s.group_id, [s]);
@@ -50,8 +52,6 @@ export function buildGroupTree(groups: Group[], sessions: Session[]): SessionTre
       ungrouped.push(s);
     }
   }
-
-  const knownIds = new Set(groups.map((g) => g.id));
 
   const build = (parentId: string | null): GroupNode[] => {
     const children = (byParent.get(parentId) ?? []).slice().sort(bySortOrder);
