@@ -4,7 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PortForwardModal } from "./PortForwardModal";
 import { useForwardStore } from "../stores/forwardStore";
 import { useSessionStore } from "../stores/sessionStore";
-import type { PortForwardRule } from "../types/ipc";
+import type { ForwardRuleView } from "../types/ipc";
+import { forwardCreate, forwardList, forwardListStatuses } from "../lib/ipc";
+
+vi.mock("../lib/ipc", () => ({
+  forwardCreate: vi.fn(), forwardList: vi.fn(), forwardListStatuses: vi.fn(),
+  forwardUpdate: vi.fn(), forwardDelete: vi.fn(), forwardStart: vi.fn(), forwardStop: vi.fn(),
+}));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -115,7 +128,7 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
   });
 
   it("editing dynamic rule does not echo password and preserves it when left blank", async () => {
-    const existingRule: PortForwardRule = {
+    const existingRule: ForwardRuleView = {
       id: "rule_1",
       session_id: "sess_1",
       name: "已有SOCKS",
@@ -127,9 +140,11 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
       auto_start: false,
       auto_reconnect: true,
       reconnect_max: 3,
-      socks_auth: "userpass" as any,
+      socks_auth: "userpass",
       socks_username: "existing_user",
       socks_password_ref: "vault://secret/socks1",
+      has_socks_password: true,
+      credential_state: "ready",
       expose_warning_ack: false,
       sort_order: 0,
       created_at: 100,
@@ -171,7 +186,7 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
   });
 
   it("marks a rule needing credential re-entry and forces an explicit new password", async () => {
-    const brokenRule = {
+    const brokenRule: ForwardRuleView = {
       id: "rule_b",
       session_id: "sess_1",
       name: "待补录SOCKS",
@@ -214,7 +229,7 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
   });
 
   it("checking clear password sends socks_clear_password: true", async () => {
-    const existingRule: PortForwardRule = {
+    const existingRule: ForwardRuleView = {
       id: "rule_1",
       session_id: "sess_1",
       name: "已有SOCKS",
@@ -226,9 +241,11 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
       auto_start: false,
       auto_reconnect: true,
       reconnect_max: 3,
-      socks_auth: "userpass" as any,
+      socks_auth: "userpass",
       socks_username: "existing_user",
       socks_password_ref: "vault://secret/socks1",
+      has_socks_password: true,
+      credential_state: "ready",
       expose_warning_ack: false,
       sort_order: 0,
       created_at: 100,
@@ -254,5 +271,76 @@ describe("PortForwardModal dynamic socks authentication (BUG-011, BUG-012)", () 
 
     // When cleared without a new password, it requires a new password or switching auth
     expect(document.body.textContent).toContain("已选择清除原密码");
+  });
+});
+
+describe("PortForwardModal real store read ownership", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const rule: ForwardRuleView = {
+    id: "current", session_id: "session-b", name: "Current forward", rule_type: "local",
+    bind_host: "127.0.0.1", bind_port: 8080, dest_host: "127.0.0.1", dest_port: 80,
+    auto_start: false, auto_reconnect: true, reconnect_max: 3, socks_auth: "none", socks_username: null,
+    socks_password_ref: null, has_socks_password: false, credential_state: "none",
+    expose_warning_ack: false, sort_order: 0, created_at: 1, updated_at: 1, deleted_at: null,
+  };
+  beforeEach(() => {
+    vi.mocked(forwardList).mockReset();
+    vi.mocked(forwardListStatuses).mockReset();
+    vi.mocked(forwardCreate).mockReset();
+    useForwardStore.setState(useForwardStore.getInitialState());
+    useSessionStore.setState({ sessions: [] });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+  afterEach(() => { act(() => root.unmount()); container.remove(); document.body.innerHTML = ""; });
+
+  it("clears the prior page's formatted read failure when the session changes and loads successfully", async () => {
+    vi.mocked(forwardList).mockResolvedValueOnce([]).mockResolvedValueOnce([rule]);
+    vi.mocked(forwardListStatuses)
+      .mockRejectedValueOnce({ code: "IO", message: "failed to read session A" })
+      .mockResolvedValueOnce({ current: { state: "Stopped" } });
+    await act(async () => { root.render(<PortForwardModal sessionId="session-a" onClose={() => {}} />); });
+    expect(document.body.textContent).toContain("本地文件读写失败，请检查磁盘空间与文件权限。");
+    await act(async () => { root.render(<PortForwardModal sessionId="session-b" onClose={() => {}} />); });
+    expect(document.body.textContent).toContain("Current forward");
+    expect(document.body.textContent).not.toContain("本地文件读写失败");
+    expect(document.body.textContent).not.toContain("重试");
+    expect(useForwardStore.getState().activeSessionId).toBe("session-b");
+    expect(useForwardStore.getState().loading).toBe(false);
+  });
+
+  it.each(["resolve", "reject"] as const)("keeps real close/reopen and failure retry owned after old statuses %s late", async (outcome) => {
+    const old = deferred<Record<string, import("../types/ipc").ForwardStatus>>();
+    vi.mocked(forwardList).mockResolvedValueOnce([{ ...rule, id: "old", name: "Old forward", session_id: "session-a" }]).mockResolvedValue([rule]);
+    vi.mocked(forwardListStatuses).mockReturnValueOnce(old.promise)
+      .mockRejectedValueOnce({ code: "IO", message: "failed to read current statuses" })
+      .mockResolvedValueOnce({ current: { state: "Stopped" } });
+    const close = vi.fn(() => root.render(null));
+    await act(async () => { root.render(<PortForwardModal sessionId="session-a" onClose={close} />); });
+    expect(document.body.textContent).toContain("加载规则中");
+    const closeButton = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "关闭")!;
+    await act(async () => { closeButton.click(); });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("端口转发");
+    await act(async () => { root.render(<PortForwardModal sessionId="session-b" onClose={close} />); });
+    expect(document.body.textContent).toContain("本地文件读写失败");
+    const retry = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "重试")!;
+    await act(async () => { retry.click(); });
+    expect(document.body.textContent).toContain("Current forward");
+    expect(document.body.textContent).not.toContain("重试");
+    await act(async () => {
+      if (outcome === "resolve") old.resolve({ old: { state: "Listening", details: { bound_addr: "127.0.0.1:8080" } } });
+      else old.reject({ code: "TIMEOUT", message: "failed to read old statuses" });
+    });
+    expect(document.body.textContent).not.toContain("Old forward");
+    expect(document.body.textContent).not.toContain("连接超时");
+    expect(document.body.textContent).not.toContain("重试");
+    expect(useForwardStore.getState().statuses).toEqual({ current: { state: "Stopped" } });
+    expect(useForwardStore.getState().activeSessionId).toBe("session-b");
+    expect(useForwardStore.getState().loading).toBe(false);
+    expect(forwardList).toHaveBeenNthCalledWith(3, "session-b");
+    expect(forwardCreate).not.toHaveBeenCalled();
   });
 });

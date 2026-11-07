@@ -80,6 +80,7 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
   useEffect(() => {
     let mounted = true;
     const currentSessionId = sessionId;
+    setReadError(null);
     void loadRules(sessionId).catch((e) => {
       if (mounted && sessionId === currentSessionId) {
         setReadError(formatFriendlyError(e));

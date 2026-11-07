@@ -1,6 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useSnippetStore } from "./snippetStore";
 import * as ipcModule from "../lib/ipc";
+import type { Snippet } from "../types/ipc";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+const currentSnippet: Snippet = {
+  id: "current", group_id: "current-group", name: "Current snippet", kind: "snippet", body: "echo current",
+  shortcut: null, send_mode: "insert", sort_order: 0, created_at: 1, updated_at: 1, deleted_at: null,
+};
 
 vi.mock("../lib/ipc", () => ({
   snippetCreate: vi.fn(),
@@ -12,11 +25,13 @@ vi.mock("../lib/ipc", () => ({
 describe("snippetStore and Snippet logic", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(ipcModule.snippetList).mockReset();
     useSnippetStore.setState({
       snippets: [],
       loading: false,
       activeGroupId: null,
       searchQuery: "",
+      error: null,
     });
   });
 
@@ -226,5 +241,35 @@ describe("snippetStore and Snippet logic", () => {
 
     // A must NOT overwrite B's data!
     expect(useSnippetStore.getState().snippets).toEqual(snipB);
+  });
+
+  it.each([
+    ["resolve", "pending"], ["reject", "pending"],
+    ["resolve", "finished"], ["reject", "finished"],
+  ] as const)("keeps a sibling failure and retry owned when old IPC %s arrives with retry %s", async (outcome, retryStage) => {
+    const older = deferred<Snippet[]>();
+    const retry = deferred<Snippet[]>();
+    useSnippetStore.setState({ snippets: [currentSnippet] });
+    vi.mocked(ipcModule.snippetList)
+      .mockReturnValueOnce(older.promise)
+      .mockRejectedValueOnce({ code: "IO", message: "failed to read current snippets" })
+      .mockReturnValueOnce(retry.promise);
+    const olderRead = useSnippetStore.getState().loadSnippets("old-group").catch((error) => error);
+    await expect(useSnippetStore.getState().loadSnippets("current-group")).rejects.toEqual({ code: "IO", message: "failed to read current snippets" });
+    expect(useSnippetStore.getState().error).toBe("本地文件读写失败，请检查磁盘空间与文件权限。");
+    expect(useSnippetStore.getState().loading).toBe(false);
+    expect(useSnippetStore.getState().snippets).toEqual([currentSnippet]);
+    const retried = useSnippetStore.getState().loadSnippets("current-group");
+    if (retryStage === "finished") { retry.resolve([currentSnippet]); await retried; }
+    if (outcome === "resolve") older.resolve([{ ...currentSnippet, id: "obsolete", name: "Obsolete" }]);
+    else older.reject({ code: "TIMEOUT", message: "failed to read old snippets" });
+    await olderRead;
+    expect(useSnippetStore.getState().snippets).toEqual([currentSnippet]);
+    expect(useSnippetStore.getState().error).toBeNull();
+    expect(useSnippetStore.getState().loading).toBe(retryStage === "pending");
+    if (retryStage === "pending") { retry.resolve([currentSnippet]); await retried; }
+    expect(useSnippetStore.getState().loading).toBe(false);
+    expect(useSnippetStore.getState().error).toBeNull();
+    expect(ipcModule.snippetList).toHaveBeenNthCalledWith(3, "current-group");
   });
 });

@@ -84,6 +84,184 @@ describe("ImportExportModal", () => {
     document.body.innerHTML = "";
   });
 
+  describe("Task9 file reader ownership at preview IPC", () => {
+    const cases = (["json", "osvault"] as const).flatMap((kind) =>
+      (["tab", "close", "unmount"] as const).flatMap((exit) =>
+        (["resolve", "reject"] as const).map((outcome) => ({ kind, exit, outcome }))),
+    );
+    const click = async (label: string) => {
+      const button = Array.from(document.body.querySelectorAll("button")).find((candidate) => candidate.textContent === label);
+      expect(button).toBeTruthy();
+      await act(async () => { button!.click(); });
+    };
+    const select = async (file: File) => {
+      const input = document.body.querySelector<HTMLInputElement>("input[type='file']")!;
+      await act(async () => {
+        Object.defineProperty(input, "files", { value: [file], configurable: true });
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    };
+
+    it.each(cases)("keeps B's reader and preview payload when $kind A $outcome after $exit", async ({ kind, exit, outcome }) => {
+      vi.mocked(ipcModule.importerPreviewBundleJson).mockReset();
+      vi.mocked(ipcModule.importerPreviewBundleEncrypted).mockReset();
+      vi.mocked(ipcModule.importerCommit).mockReset().mockResolvedValueOnce(0);
+      const report: ImportPreviewReport = { total: 0, new_count: 0, update_count: 0, skip_count: 0, warnings: [], candidates: [], archive_token: "current-file-token" };
+      vi.mocked(ipcModule.importerPreviewBundleJson).mockResolvedValueOnce(report);
+      vi.mocked(ipcModule.importerPreviewBundleEncrypted).mockResolvedValueOnce(report);
+      const oldRead = deferred<string | ArrayBuffer>();
+      const currentRead = deferred<string | ArrayBuffer>();
+      const makeFile = (name: string, read: typeof oldRead) => {
+        const file = new File(["fixture"], `${name}.${kind}`);
+        if (kind === "json") file.text = () => read.promise as Promise<string>;
+        else file.arrayBuffer = () => read.promise as Promise<ArrayBuffer>;
+        return file;
+      };
+      const close = vi.fn(() => root.render(null));
+      await act(async () => { root = createRoot(container); root.render(<ImportExportModal onClose={close} />); });
+      await click("恢复备份");
+      await select(makeFile("old-file", oldRead));
+      expect(document.body.textContent).toContain(`old-file.${kind} (读取中...)`);
+      if (exit === "tab") {
+        await click("FinalShell 导入");
+        expect(document.body.textContent).not.toContain("读取中...");
+        await click("恢复备份");
+      } else if (exit === "close") {
+        await click("关闭");
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(document.body.textContent).not.toContain("会话导入与数据备份");
+        await act(async () => { root.render(<ImportExportModal onClose={close} />); });
+        await click("恢复备份");
+      } else {
+        await act(async () => { root.unmount(); });
+        expect(document.body.textContent).not.toContain("会话导入与数据备份");
+        await act(async () => { root = createRoot(container); root.render(<ImportExportModal onClose={close} />); });
+        await click("恢复备份");
+      }
+      await select(makeFile("current-file", currentRead));
+      await act(async () => {
+        if (outcome === "reject") oldRead.reject({ code: "IO", message: "failed to read obsolete file" });
+        else oldRead.resolve(kind === "json" ? '{"obsolete":true}' : new Uint8Array([1, 2]).buffer);
+      });
+      expect(document.body.textContent).toContain(`current-file.${kind} (读取中...)`);
+      expect(document.body.textContent).not.toContain("old-file");
+      expect(document.body.textContent).not.toContain("本地文件读写失败，请检查磁盘空间与文件权限。");
+      expect(document.body.textContent).not.toContain("操作未完成");
+      const reading = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "读取中...")!;
+      expect(reading.disabled).toBe(true);
+      expect(ipcModule.importerPreviewBundleJson).not.toHaveBeenCalled();
+      expect(ipcModule.importerPreviewBundleEncrypted).not.toHaveBeenCalled();
+      expect(ipcModule.importerCommit).not.toHaveBeenCalled();
+      await act(async () => { currentRead.resolve(kind === "json" ? '{"current":true}' : new Uint8Array([8, 9]).buffer); });
+      expect(document.body.textContent).not.toContain("读取中...");
+      if (kind === "osvault") {
+        const password = document.body.querySelector<HTMLInputElement>("#restore-password")!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(password, "fixture-password");
+          password.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      }
+      await click("校验并预览");
+      if (kind === "json") {
+        expect(ipcModule.importerPreviewBundleJson).toHaveBeenCalledTimes(1);
+        expect(ipcModule.importerPreviewBundleJson).toHaveBeenCalledWith('{"current":true}', "skip");
+        expect(ipcModule.importerPreviewBundleEncrypted).not.toHaveBeenCalled();
+      } else {
+        expect(ipcModule.importerPreviewBundleEncrypted).toHaveBeenCalledTimes(1);
+        expect(ipcModule.importerPreviewBundleEncrypted).toHaveBeenCalledWith(new Uint8Array([8, 9]), "fixture-password", "skip");
+        expect(ipcModule.importerPreviewBundleJson).not.toHaveBeenCalled();
+      }
+      await click("确认恢复");
+      expect(ipcModule.importerCommit).toHaveBeenCalledTimes(1);
+      expect(ipcModule.importerCommit).toHaveBeenCalledWith([], "current-file-token");
+      expect(document.body.textContent).not.toContain("操作未完成");
+      expect(document.body.textContent).not.toContain("读取中...");
+    });
+
+    it.each(["resolve", "reject"] as const)("preserves B's pending preview and token when commit A %s late", async (outcome) => {
+      const commit = deferred<number>();
+      const preview = deferred<ImportPreviewReport>();
+      const reportA: ImportPreviewReport = { total: 0, new_count: 0, update_count: 0, skip_count: 0, warnings: [], candidates: [], archive_token: "pending-commit-a" };
+      const reportB: ImportPreviewReport = { ...reportA, archive_token: "pending-preview-b", total: 1, new_count: 1, candidates: [{ input: { name: "Current B", host: "example.invalid", port: 22, username: "fixture" }, action: "create", existing_session_id: null }] };
+      vi.mocked(ipcModule.importerCommit).mockReset().mockReturnValueOnce(commit.promise).mockResolvedValueOnce(1);
+      vi.mocked(ipcModule.importerPreviewBundleJson).mockReset().mockResolvedValueOnce(reportA);
+      vi.mocked(ipcModule.importerPreviewOpenSsh).mockReset().mockReturnValueOnce(preview.promise);
+      await act(async () => { root = createRoot(container); root.render(<ImportExportModal onClose={() => {}} />); });
+      await click("恢复备份");
+      const file = new File(["{}"], "commit-a.json");
+      file.text = () => Promise.resolve("{}");
+      await select(file);
+      await click("校验并预览");
+      await click("确认恢复");
+      await click("OpenSSH 配置");
+      await fillTextarea("Host current-b\nHostName example.invalid");
+      await click("解析并预览");
+      expect(document.body.textContent).toContain("分析中...");
+      await act(async () => {
+        if (outcome === "resolve") commit.resolve(0);
+        else commit.reject({ code: "IO", message: "failed to commit obsolete A" });
+      });
+      expect(document.body.textContent).toContain("分析中...");
+      expect(document.body.textContent).not.toContain("本地文件读写失败");
+      expect(ipcModule.importerCommit).toHaveBeenCalledTimes(1);
+      if (outcome === "resolve") {
+        expect(ipcModule.listSessions).toHaveBeenCalledTimes(1);
+        expect(ipcModule.listGroups).toHaveBeenCalledTimes(1);
+        expect(ipcModule.snippetList).toHaveBeenCalledTimes(1);
+        expect(ipcModule.importerDiscardPreview).not.toHaveBeenCalledWith("pending-commit-a");
+      } else {
+        expect(ipcModule.importerDiscardPreview).toHaveBeenCalledWith("pending-commit-a");
+        expect(ipcModule.snippetList).not.toHaveBeenCalled();
+      }
+      await act(async () => { preview.resolve(reportB); });
+      expect(document.body.textContent).toContain("Current B");
+      expect(document.body.textContent).not.toContain("分析中...");
+      expect(ipcModule.importerDiscardPreview).not.toHaveBeenCalledWith("pending-preview-b");
+      await click("确认导入");
+      expect(ipcModule.importerCommit).toHaveBeenNthCalledWith(2, reportB.candidates, "pending-preview-b");
+    });
+
+    it.each(["resolve", "reject"] as const)("keeps B's file reader owned after restore A's read-only retry %s late", async (outcome) => {
+      const report: ImportPreviewReport = { total: 0, new_count: 0, update_count: 0, skip_count: 0, warnings: [], candidates: [], archive_token: "restore-retry-a" };
+      const refresh = deferred<Snippet[]>();
+      const fileRead = deferred<string>();
+      vi.mocked(ipcModule.importerCommit).mockReset().mockResolvedValueOnce(0);
+      vi.mocked(ipcModule.importerPreviewBundleJson).mockReset().mockResolvedValueOnce(report);
+      vi.mocked(ipcModule.snippetList).mockReset()
+        .mockRejectedValueOnce({ code: "IO", message: "failed to refresh A" })
+        .mockReturnValueOnce(refresh.promise);
+      await act(async () => { root = createRoot(container); root.render(<ImportExportModal onClose={() => {}} />); });
+      await click("恢复备份");
+      const fileA = new File(["{}"], "retry-a.json");
+      fileA.text = () => Promise.resolve("{}");
+      await select(fileA);
+      await click("校验并预览");
+      await click("确认恢复");
+      expect(document.body.textContent).toContain("操作已成功、刷新失败");
+      await click("重试刷新");
+      const fileB = new File(["{}"], "current-reader-b.json");
+      fileB.text = () => fileRead.promise;
+      await select(fileB);
+      expect(document.body.textContent).toContain("current-reader-b.json (读取中...)");
+      expect(document.body.textContent).not.toContain("操作已成功、刷新失败");
+      await act(async () => {
+        if (outcome === "resolve") refresh.resolve([]);
+        else refresh.reject({ code: "IO", message: "failed to retry old A" });
+      });
+      expect(document.body.textContent).toContain("current-reader-b.json (读取中...)");
+      expect(document.body.textContent).not.toContain("操作已成功、刷新失败");
+      expect(document.body.textContent).not.toContain("本地文件读写失败");
+      expect(document.body.textContent).not.toContain("重试刷新");
+      await act(async () => { fileRead.resolve('{"current":true}'); });
+      const previewButton = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "校验并预览")!;
+      expect(previewButton.disabled).toBe(false);
+      expect(document.body.textContent).not.toContain("读取中...");
+      expect(ipcModule.importerCommit).toHaveBeenCalledTimes(1);
+      expect(ipcModule.snippetList).toHaveBeenCalledTimes(2);
+      expect(ipcModule.importerPreviewBundleJson).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("passes archive_token to importerCommit and keeps warnings visible on commit", async () => {
     const mockReport = {
       total: 1,

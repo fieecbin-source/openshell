@@ -56,11 +56,20 @@ type RecoveredState = {
 
 const state = () => useForwardStore.getState() as ReturnType<typeof useForwardStore.getState> & RecoveredState;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
 describe("forwardStore credential recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(forwardList).mockReset();
+    vi.mocked(forwardListStatuses).mockReset();
     vi.mocked(forwardListStatuses).mockResolvedValue({});
-    useForwardStore.setState({ rules: [], statuses: {}, loading: false, activeSessionId: null });
+    useForwardStore.setState({ rules: [], statuses: {}, loading: false, activeSessionId: null, loadError: null, refreshError: null });
   });
 
   it("keeps a redacted broken rule in the list and exposes its credential state", async () => {
@@ -174,12 +183,15 @@ describe("forwardStore credential recovery", () => {
     expect(state().statuses).toEqual({ rule_1: { state: "Listening" } });
   });
 
-  it.each(["rules", "statuses"] as const)(
-    "keeps the latest statuses when an older %s read completes across both read paths",
-    async (olderReader) => {
+  it.each([["rules", "resolve"], ["rules", "reject"], ["statuses", "resolve"], ["statuses", "reject"]] as const)(
+    "keeps the latest statuses when an older %s read %s across both read paths",
+    async (olderReader, outcome) => {
+      useForwardStore.setState({ rules: [healthy] });
       let resolveOlder!: (statuses: Record<string, ForwardStatus>) => void;
-      const olderStatuses = new Promise<Record<string, ForwardStatus>>((resolve) => {
+      let rejectOlder!: (error: unknown) => void;
+      const olderStatuses = new Promise<Record<string, ForwardStatus>>((resolve, reject) => {
         resolveOlder = resolve;
+        rejectOlder = reject;
       });
       const latestStatuses: Record<string, ForwardStatus> = {
         rule_a: { state: "Stopped" },
@@ -189,13 +201,14 @@ describe("forwardStore credential recovery", () => {
         .mockReturnValueOnce(olderStatuses)
         .mockResolvedValueOnce(latestStatuses);
 
-      const olderRead = olderReader === "rules"
+      const olderRead = (olderReader === "rules"
         ? state().loadRules("sess_1")
-        : state().loadStatuses();
+        : state().loadStatuses()).catch((error) => error);
       await (olderReader === "rules"
         ? state().loadStatuses()
         : state().loadRules("sess_1"));
-      resolveOlder({ rule_a: { state: "Listening", details: { bound_addr: "127.0.0.1:1080" } } });
+      if (outcome === "resolve") resolveOlder({ rule_a: { state: "Listening", details: { bound_addr: "127.0.0.1:1080" } } });
+      else rejectOlder(new Error("old status failed"));
       await olderRead;
 
       expect(state().statuses).toEqual(latestStatuses);
@@ -204,4 +217,33 @@ describe("forwardStore credential recovery", () => {
       expect(state().activeSessionId).toBe("sess_1");
     },
   );
+
+  it.each(["rules", "statuses"] as const)("ignores an older %s status rejection after the sibling read fails and retries", async (olderReader) => {
+    const old = deferred<Record<string, ForwardStatus>>();
+    const retry = deferred<Record<string, ForwardStatus>>();
+    const latestRule = { ...healthy, id: "current", session_id: olderReader === "rules" ? "sess_1" : "sess_2", name: "current" };
+    vi.mocked(forwardList).mockResolvedValueOnce([healthy]).mockResolvedValue([latestRule]);
+    vi.mocked(forwardListStatuses).mockReturnValueOnce(old.promise)
+      .mockRejectedValueOnce(new Error("current status read failed"))
+      .mockReturnValueOnce(retry.promise);
+    const oldRead = (olderReader === "rules" ? state().loadRules("sess_1") : state().loadStatuses()).catch((error) => error);
+    const failedRead = olderReader === "rules" ? state().loadStatuses() : state().loadRules("sess_2");
+    await expect(failedRead).rejects.toThrow("current status read failed");
+    if (olderReader === "statuses") expect(state().loadError).toBe("current status read failed");
+    const retried = state().retryRefresh();
+    expect(state().loading).toBe(true);
+    old.reject(new Error("old status rejection"));
+    await oldRead;
+    expect(state().loading).toBe(true);
+    expect(state().statuses).toEqual({});
+    expect(state().activeSessionId).toBe(olderReader === "rules" ? "sess_1" : "sess_2");
+    retry.resolve({ current: { state: "Stopped" } });
+    await retried;
+    expect(state().statuses).toEqual({ current: { state: "Stopped" } });
+    expect(state().rules).toEqual([latestRule]);
+    expect(state().loading).toBe(false);
+    expect(state().loadError).toBeNull();
+    expect(state().refreshError).toBeNull();
+    expect(forwardCreate).not.toHaveBeenCalled();
+  });
 });

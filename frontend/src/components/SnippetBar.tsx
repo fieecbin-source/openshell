@@ -21,7 +21,7 @@ interface SnippetBarProps {
 
 export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
   const connected = useTerminalStore((state) => state.tabs.some((tab) => tab.tabId === activeTabId && tab.status === "connected"));
-  const { snippets, loadSnippets, createSnippet, deleteSnippet } = useSnippetStore();
+  const { snippets, loading, error, loadSnippets, createSnippet, deleteSnippet } = useSnippetStore();
   const [paramModal, setParamModal] = useState<{
     snippet: Snippet;
     params: { name: string; defaultValue: string; value: string }[];
@@ -112,6 +112,9 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
         body: newCmd.trim(),
         send_mode: newSendMode,
       });
+      if (useSnippetStore.getState().error) {
+        toast.warning("片段已保存，刷新失败，请重试", useSnippetStore.getState().error ?? undefined);
+      }
       setNewName("");
       setNewCmd("");
       setCreateModal(false);
@@ -129,6 +132,18 @@ export const SnippetBar: React.FC<SnippetBarProps> = ({ activeTabId }) => {
       </div>
 
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+        {error && (
+          <>
+            <span role="alert" className="shrink-0 text-os-2xs text-state-warning">{error}</span>
+            <Button size="sm" variant="secondary" loading={loading} onClick={() => {
+              void loadSnippets(useSnippetStore.getState().activeGroupId ?? undefined).catch((err) => {
+                console.warn("Failed to retry snippets:", err);
+              });
+            }}>
+              重试
+            </Button>
+          </>
+        )}
         {snippets.length === 0 ? (
           <span className="text-os-2xs text-ink-tertiary">点击右侧按钮添加常用命令快捷方式</span>
         ) : (

@@ -7,6 +7,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useTerminalStore, type TerminalTab } from "../stores/terminalStore";
 import { sendSerial, terminalEncode, writeTerminal, snippetCreate, snippetDelete, snippetList } from "../lib/ipc";
 import type { Session, Snippet } from "../types/ipc";
+import { useToastStore } from "../stores/toastStore";
 
 vi.mock("../lib/ipc", () => ({
   writeTerminal: vi.fn().mockResolvedValue(1),
@@ -43,6 +44,7 @@ const makeSnippet = (overrides?: Partial<Snippet>): Snippet => ({
 });
 
 const originalSendTextToTab = useTerminalStore.getState().sendTextToTab;
+const originalDateNow = Date.now;
 
 describe("SnippetBar (R05, R09)", () => {
   let container: HTMLDivElement;
@@ -50,6 +52,11 @@ describe("SnippetBar (R05, R09)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(snippetList).mockReset();
+    vi.mocked(snippetCreate).mockReset();
+    vi.mocked(snippetDelete).mockReset();
+    useSnippetStore.setState(useSnippetStore.getInitialState());
+    useToastStore.getState().clear();
     useTerminalStore.setState({ sendTextToTab: originalSendTextToTab });
     container = document.createElement("div");
     document.body.append(container);
@@ -60,6 +67,8 @@ describe("SnippetBar (R05, R09)", () => {
     act(() => root.unmount());
     container.remove();
     document.body.innerHTML = "";
+    useToastStore.getState().clear();
+    Date.now = originalDateNow;
   });
 
   it("exposes the full long name and sends command via sendTextToTab in execute mode", async () => {
@@ -305,6 +314,68 @@ describe("SnippetBar (R05, R09)", () => {
     );
     // UI remains open with input intact for user retry
     expect(document.body.querySelector("input[aria-label='命令名称']")).toBeTruthy();
+    expect(useToastStore.getState().toasts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: "error", title: "创建片段失败" }),
+    ]));
+    expect(nameInput.value).toBe("New Command");
+    expect(cmdInput.value).toBe("ls -la");
+
+    vi.mocked(snippetCreate).mockResolvedValueOnce(makeSnippet({ name: "New Command", body: "ls -la" }));
+    vi.mocked(snippetList).mockResolvedValueOnce([makeSnippet({ name: "New Command", body: "ls -la" })]);
+    await act(async () => { saveBtn!.click(); });
+    expect(document.body.querySelector("input[aria-label='命令名称']")).toBeNull();
+    expect(container.textContent).toContain("New Command");
+    expect(snippetCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a saved mutation's real list failure and retries only the read before sending its canonical body", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
+    const saved = makeSnippet({ name: "Saved command", body: "echo first\necho second" });
+    let resolveRetry!: (snippets: Snippet[]) => void;
+    const retryRead = new Promise<Snippet[]>((resolve) => { resolveRetry = resolve; });
+    vi.mocked(snippetList)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce({ code: "IO", message: "failed to read snippet database" })
+      .mockReturnValueOnce(retryRead);
+    vi.mocked(snippetCreate).mockResolvedValueOnce(saved);
+    const sendSpy = vi.fn().mockResolvedValue(undefined);
+    useTerminalStore.setState({ tabs: [{ tabId: "active-terminal", status: "connected" } as TerminalTab], sendTextToTab: sendSpy });
+    await act(async () => { root.render(<SnippetBar activeTabId="active-terminal" />); });
+    const add = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "新增")!;
+    await act(async () => { add.click(); });
+    const name = document.body.querySelector<HTMLInputElement>("input[aria-label='命令名称']")!;
+    const body = document.body.querySelector<HTMLTextAreaElement>("textarea[aria-label='命令模板']")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, " Saved command ");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(body, "echo first\necho second");
+      body.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const save = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent === "保存")!;
+    await act(async () => { save.click(); });
+    expect(document.body.querySelector("input[aria-label='命令名称']")).toBeNull();
+    expect(container.textContent).toContain("本地文件读写失败，请检查磁盘空间与文件权限。");
+    expect(useToastStore.getState().toasts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: "warning", title: "片段已保存，刷新失败，请重试" }),
+    ]));
+    expect(snippetCreate).toHaveBeenCalledWith({ name: "Saved command", kind: "snippet", body: "echo first\necho second", send_mode: "execute" });
+    const retry = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "重试")!;
+    expect(retry).toBeTruthy();
+    await act(async () => { retry.click(); });
+    expect(useSnippetStore.getState().loading).toBe(true);
+    expect(container.querySelector("[aria-label='Saved command']")).toBeNull();
+    expect(snippetCreate).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveRetry([saved]); });
+    expect(container.textContent).not.toContain("本地文件读写失败");
+    expect(useSnippetStore.getState().loading).toBe(false);
+    expect(snippetCreate).toHaveBeenCalledTimes(1);
+    expect(snippetList).toHaveBeenCalledTimes(3);
+    const command = container.querySelector<HTMLButtonElement>("[aria-label='Saved command']")!;
+    await act(async () => { command.click(); });
+    expect(sendSpy).toHaveBeenCalledWith("active-terminal", "echo first\necho second\n");
+    expect(useToastStore.getState().toasts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: "success", title: "命令已发送并执行" }),
+    ]));
   });
 
   it("handles snippet deletion safely when real store and IPC fail", async () => {
