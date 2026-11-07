@@ -279,12 +279,12 @@ export const AboutUpdateTab: React.FC = () => {
                   const info = await backupNow();
                   setBackupResult({
                     tone: "success",
-                    text: `备份成功：${info?.file_name ?? "已生成快照"} (${info?.path ?? runtime?.backups_dir ?? ""})`,
+                    text: `${UPDATE_COPY.about.backupSuccessPrefix}${info?.file_name ?? UPDATE_COPY.about.snapshotCreated} (${info?.path ?? runtime?.backups_dir ?? ""})`,
                   });
                 } catch (err: any) {
                   setBackupResult({
                     tone: "danger",
-                    text: `备份失败：${formatFriendlyError(err)}`,
+                    text: `${UPDATE_COPY.about.backupFailurePrefix}${formatFriendlyError(err)}`,
                   });
                 } finally {
                   setBackupInProgress(false);
@@ -292,7 +292,7 @@ export const AboutUpdateTab: React.FC = () => {
               }}
               className="rounded-xl border border-line/15 bg-surface px-2.5 py-1.5 text-[11px] font-medium text-[#1d1d1f] shadow-apple-sm transition hover:bg-surface-muted active:scale-[0.98] disabled:opacity-50"
             >
-              {backupInProgress ? "备份中..." : UPDATE_COPY.actions.backupNow}
+              {backupInProgress ? UPDATE_COPY.actions.backingUp : UPDATE_COPY.actions.backupNow}
             </button>
             <button
               onClick={() => void openBackupDir()}

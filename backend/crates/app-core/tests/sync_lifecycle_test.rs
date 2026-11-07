@@ -1140,13 +1140,7 @@ async fn sync_pulls_back_missing_secret_and_makes_rule_password_resolvable() {
         })
         .unwrap();
     let server_head: i64 = server_db
-        .with_conn(|conn| {
-            Ok::<_, rusqlite::Error>(conn.query_row(
-                "SELECT MAX(head_seq) FROM vault",
-                [],
-                |row| row.get(0),
-            )?)
-        })
+        .with_conn(|conn| conn.query_row("SELECT MAX(head_seq) FROM vault", [], |row| row.get(0)))
         .unwrap();
     assert_eq!(
         cursor, server_head as u64,
