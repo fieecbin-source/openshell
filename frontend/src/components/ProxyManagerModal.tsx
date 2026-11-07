@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import type { ProxyServerConfig, ProxyTestResult, ProxyType } from "../types/ipc";
+import React, { useEffect, useRef, useState } from "react";
+import type { ProxyServerConfig, ProxyServerInput, ProxyTestResult, ProxyType } from "../types/ipc";
 import * as ipcModule from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { RequiredMark } from "./ui/Field";
@@ -59,6 +59,54 @@ const PROXY_TYPE_BADGE: Record<ProxyType, { label: string; className: string }> 
   },
 };
 
+const LEGACY_PROXY_KEY = "openshell_proxy_list_fallback_v1";
+const LEGACY_INVALID = "历史代理数据无法安全导入，请手动处理；原数据已保留";
+const LEGACY_VERIFY = "历史代理已保存，但确认失败，请刷新列表并手动处理保留的原数据";
+
+function legacyInputs(raw: string): ProxyServerInput[] {
+  let rows: unknown;
+  try { rows = JSON.parse(raw); } catch { throw new Error(LEGACY_INVALID); }
+  if (!Array.isArray(rows)) throw new Error(LEGACY_INVALID);
+  const ids = new Set<string>();
+  const allowed = new Set([
+    "id", "name", "proxy_type", "host", "port", "username", "password", "notes",
+    "created_at", "updated_at", "password_ref", "has_password", "clear_password",
+  ]);
+  return rows.map((value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(LEGACY_INVALID);
+    const row = value as Record<string, unknown>;
+    if (Object.keys(row).some((key) => !allowed.has(key))
+      || ["id", "name", "host"].some((key) => typeof row[key] !== "string" || !(row[key] as string).trim())
+      || !["http", "socks4", "socks5"].includes(row.proxy_type as string)
+      || typeof row.port !== "number" || !Number.isInteger(row.port) || row.port < 1 || row.port > 65535
+      || /[\r\n\0]/.test(row.host as string)
+      || ["username", "password", "notes"].some((key) => row[key] != null && typeof row[key] !== "string")
+      || ["created_at", "updated_at"].some((key) => row[key] != null && !Number.isSafeInteger(row[key]))
+      || row.password_ref != null || (row.has_password != null && typeof row.has_password !== "boolean")
+      || (row.has_password === true && !row.password)
+      || (row.clear_password != null && row.clear_password !== false)
+      || ids.has(row.id as string)) throw new Error(LEGACY_INVALID);
+    ids.add(row.id as string);
+    // Legacy references cannot establish ownership of a backend secret.
+    const { password_ref: _reference, has_password: _hasPassword, ...input } = row;
+    return { ...input, clear_password: false } as unknown as ProxyServerInput;
+  });
+}
+
+function publicConfig(input: ProxyServerInput): ProxyServerConfig {
+  const { password: _password, clear_password: _clearPassword, ...config } = input;
+  return config;
+}
+
+function confirmsProxy(actual: ProxyServerConfig | undefined, expected: ProxyServerInput): boolean {
+  if (!actual) return false;
+  const fields = ["id", "name", "proxy_type", "host", "port", "username", "notes", "created_at", "updated_at"] as const;
+  if (fields.some((key) => (actual[key] ?? null) !== (expected[key] ?? null))) return false;
+  if (expected.password) return actual.has_password === true && Boolean(actual.password_ref);
+  return (actual.password_ref ?? null) === (expected.password_ref ?? null)
+    && Boolean(actual.has_password) === Boolean(expected.has_password);
+}
+
 /**
  * 代理服务器管理弹窗（HTTP / SOCKS4 / SOCKS5）
  */
@@ -71,6 +119,15 @@ export function ProxyManagerModal({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
+  const activeLoad = useRef<number | null>(null);
+  const mutationGeneration = useRef(0);
+  const activeMutation = useRef<number | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const migrationJob = useRef<Promise<{ list: ProxyServerConfig[]; error?: string }> | null>(null);
+  // A successful write is never repeated after a failed verification. No credentials are retained here.
+  const migrationCommitted = useRef(false);
 
   // 编辑/新建表单状态
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -105,28 +162,96 @@ export function ProxyManagerModal({
   };
 
   const loadProxies = async () => {
+    if (activeMutation.current !== null) return;
+    const generation = ++loadGeneration.current;
+    activeLoad.current = generation;
     setLoading(true);
     setErrorMsg(null);
     try {
       const proxyListGetFn = getIpcFn("proxyListGet");
       if (!proxyListGetFn) throw new Error("proxyListGet unavailable");
-      const list = await proxyListGetFn();
-      const normalized = Array.isArray(list) ? list : [];
-      setProxies(normalized);
+      let result: { list: ProxyServerConfig[]; error?: string };
+      if (migrationJob.current) {
+        result = await migrationJob.current;
+      } else {
+        const list = await proxyListGetFn();
+        if (generation !== loadGeneration.current) return;
+        if (!Array.isArray(list)) throw new Error("无法读取代理列表，请刷新后重试");
+        const normalized = list.map(publicConfig);
+        setProxies(normalized);
+        const raw = localStorage.getItem(LEGACY_PROXY_KEY);
+        result = { list: normalized };
+        if (raw !== null && migrationCommitted.current) {
+          result.error = LEGACY_VERIFY;
+        } else if (raw !== null) {
+          const migrate = async (): Promise<typeof result> => {
+            let candidates: ProxyServerInput[];
+            try { candidates = legacyInputs(raw); } catch { return { list: normalized, error: LEGACY_INVALID }; }
+            if (candidates.some((candidate) => normalized.some((proxy) => proxy.id === candidate.id))) {
+              return { list: normalized, error: "历史代理与已有代理冲突，请手动处理；原数据已保留" };
+            }
+            if (candidates.length === 0) {
+              if (localStorage.getItem(LEGACY_PROXY_KEY) === raw) localStorage.removeItem(LEGACY_PROXY_KEY);
+              return { list: normalized };
+            }
+            const proxyListSaveFn = getIpcFn("proxyListSave");
+            if (!proxyListSaveFn) return { list: normalized, error: "proxyListSave unavailable" };
+            const inputs: ProxyServerInput[] = [
+              ...normalized.map((proxy) => ({ ...proxy, clear_password: false })), ...candidates,
+            ];
+            let saved: ProxyServerConfig[];
+            try {
+              const output = await proxyListSaveFn(inputs);
+              migrationCommitted.current = true;
+              saved = Array.isArray(output) ? output.map(publicConfig) : normalized;
+            } catch (err) { return { list: normalized, error: formatFriendlyError(err) }; }
+            let notificationError: string | undefined;
+            try { onChanged?.(saved); } catch { notificationError = "历史代理已保存，请刷新列表"; }
+            try {
+              const verified = await proxyListGetFn();
+              if (!Array.isArray(verified) || !inputs.every((expected) =>
+                confirmsProxy(verified.find((proxy) => proxy.id === expected.id), expected))) {
+                return { list: saved, error: LEGACY_VERIFY };
+              }
+              const finalList = verified.map(publicConfig);
+              if (localStorage.getItem(LEGACY_PROXY_KEY) !== raw) {
+                return { list: finalList, error: "历史代理数据已变化，请手动处理；当前原数据已保留" };
+              }
+              localStorage.removeItem(LEGACY_PROXY_KEY);
+              return { list: finalList, error: notificationError };
+            } catch { return { list: saved, error: LEGACY_VERIFY }; }
+          };
+          const job = migrate();
+          migrationJob.current = job;
+          try { result = await job; } finally {
+            if (migrationJob.current === job) migrationJob.current = null;
+          }
+        }
+      }
+      if (generation !== loadGeneration.current) return;
+      setProxies(result.list);
+      setErrorMsg(result.error ?? null);
     } catch (err) {
-      if (checkTauriRuntime()) {
+      if (generation === loadGeneration.current && checkTauriRuntime()) {
         setErrorMsg(formatFriendlyError(err));
       }
     } finally {
-      setLoading(false);
+      if (activeLoad.current === generation) activeLoad.current = null;
+      if (generation === loadGeneration.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (open) {
-      void loadProxies();
       resetForm();
+      setSaving(activeMutation.current !== null);
+      void loadProxies();
     }
+    return () => {
+      loadGeneration.current += 1;
+      mutationGeneration.current += 1;
+      activeLoad.current = null;
+    };
   }, [open]);
 
   if (!open) return null;
@@ -155,18 +280,26 @@ export function ProxyManagerModal({
     setErrorMsg(null);
   };
 
-  const persistList = async (nextList: any[]): Promise<ProxyServerConfig[]> => {
+  const persistList = async (nextList: ProxyServerInput[], generation: number): Promise<string | undefined> => {
     const proxyListSaveFn = getIpcFn("proxyListSave");
     if (!proxyListSaveFn) throw new Error("proxyListSave unavailable");
-    const saved = await proxyListSaveFn(nextList as any);
-    const finalList = Array.isArray(saved) ? saved : (nextList as any);
-    setProxies(finalList);
-    onChanged?.(finalList);
-    return finalList;
+    const saved = await proxyListSaveFn(nextList);
+    if (!Array.isArray(saved)) throw new Error("无法确认代理保存结果，请刷新列表");
+    const finalList = saved.map(publicConfig);
+    if (generation === mutationGeneration.current) setProxies(finalList);
+    try { onChanged?.(finalList); } catch { return "代理已保存，请刷新列表"; }
+  };
+
+  const finishMutation = (generation: number) => {
+    if (activeMutation.current !== generation) return;
+    activeMutation.current = null;
+    setSaving(false);
+    if (generation !== mutationGeneration.current && openRef.current) void loadProxies();
   };
 
   const handleSaveProxy = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!openRef.current || activeLoad.current !== null || migrationJob.current || activeMutation.current !== null) return;
     const trimmedName = name.trim();
     const trimmedHost = host.trim();
     const numericPort = Number(port);
@@ -184,6 +317,8 @@ export function ProxyManagerModal({
       return;
     }
 
+    const generation = ++mutationGeneration.current;
+    activeMutation.current = generation;
     setSaving(true);
     setErrorMsg(null);
     const now = Math.floor(Date.now() / 1000);
@@ -224,6 +359,7 @@ export function ProxyManagerModal({
           port: numericPort,
           username: username.trim() ? username.trim() : null,
           password: password ? password : null,
+          clear_password: false,
           notes: notes.trim() ? notes.trim() : null,
           created_at: now,
           updated_at: now,
@@ -231,25 +367,35 @@ export function ProxyManagerModal({
         nextList = [...proxies, newItem];
       }
 
-      await persistList(nextList);
-      resetForm();
+      const notificationError = await persistList(nextList, generation);
+      if (generation === mutationGeneration.current) {
+        resetForm();
+        if (notificationError) setErrorMsg(notificationError);
+      }
     } catch (err) {
-      setErrorMsg(formatFriendlyError(err));
+      if (generation === mutationGeneration.current) setErrorMsg(formatFriendlyError(err));
     } finally {
-      setSaving(false);
+      finishMutation(generation);
     }
   };
 
   const handleDeleteProxy = async (target: ProxyServerConfig) => {
+    if (!openRef.current || activeLoad.current !== null || migrationJob.current || activeMutation.current !== null) return;
+    const generation = ++mutationGeneration.current;
+    activeMutation.current = generation;
+    setSaving(true);
     setErrorMsg(null);
     try {
       const nextList = proxies.filter((item) => item.id !== target.id);
-      await persistList(nextList);
-      if (editingId === target.id) {
-        resetForm();
+      const notificationError = await persistList(nextList, generation);
+      if (generation === mutationGeneration.current) {
+        if (editingId === target.id) resetForm();
+        if (notificationError) setErrorMsg(notificationError);
       }
     } catch (err) {
-      setErrorMsg(formatFriendlyError(err));
+      if (generation === mutationGeneration.current) setErrorMsg(formatFriendlyError(err));
+    } finally {
+      finishMutation(generation);
     }
   };
 
@@ -351,6 +497,7 @@ export function ProxyManagerModal({
                 <button
                   type="button"
                   onClick={() => void loadProxies()}
+                  disabled={saving}
                   className="rounded-md p-1 text-ink-tertiary transition hover:bg-line/5 hover:text-ink"
                   title="刷新代理列表"
                 >
@@ -472,6 +619,7 @@ export function ProxyManagerModal({
                           <button
                             type="button"
                             onClick={() => void handleDeleteProxy(proxy)}
+                            disabled={loading || saving}
                             className="rounded-lg p-1.5 text-ink-tertiary transition hover:bg-state-danger/10 hover:text-state-danger"
                             title="删除代理"
                             aria-label={`删除代理 ${proxy.name}`}
@@ -692,7 +840,7 @@ export function ProxyManagerModal({
                 )}
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={loading || saving}
                   className="inline-flex items-center gap-1.5 rounded-xl bg-action px-4 py-2 text-xs font-semibold text-white shadow-apple-sm transition hover:bg-action/90 disabled:opacity-50"
                 >
                   <CheckIcon className="h-3.5 w-3.5" />
