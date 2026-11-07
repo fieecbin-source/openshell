@@ -78,8 +78,17 @@ export const PortForwardModal: React.FC<PortForwardModalProps> = ({
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    void loadRules(sessionId).catch((e) => setReadError(formatFriendlyError(e)));
-  }, [sessionId]);
+    let mounted = true;
+    const currentSessionId = sessionId;
+    void loadRules(sessionId).catch((e) => {
+      if (mounted && sessionId === currentSessionId) {
+        setReadError(formatFriendlyError(e));
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [sessionId, loadRules]);
 
   const isExposeRisky = bindHost === "0.0.0.0" || bindHost === "::";
 

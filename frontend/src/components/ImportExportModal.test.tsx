@@ -5,6 +5,7 @@ import { ImportExportModal } from "./ImportExportModal";
 import * as ipcModule from "../lib/ipc";
 
 import { useSnippetStore } from "../stores/snippetStore";
+import type { ImportPreviewReport, Snippet } from "../types/ipc";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -35,6 +36,16 @@ const fillTextarea = (val: string) =>
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: any) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("ImportExportModal", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -56,7 +67,7 @@ describe("ImportExportModal", () => {
       isLoading: false,
       error: null,
     });
-    vi.mocked(ipcModule.snippetList).mockResolvedValue([]);
+    vi.mocked(ipcModule.snippetList).mockReset().mockResolvedValue([]);
     vi.mocked(ipcModule.listSessions).mockResolvedValue([]);
     vi.mocked(ipcModule.listGroups).mockResolvedValue([]);
     container = document.createElement("div");
@@ -805,6 +816,63 @@ describe("ImportExportModal", () => {
   });
 
   describe("S07: commit succeeded but real snippetStore refresh failed", () => {
+    it("clears the previous restore refresh retry while a newly selected file is still reading", async () => {
+      const report: ImportPreviewReport = {
+        total: 0,
+        new_count: 0,
+        update_count: 0,
+        skip_count: 0,
+        warnings: [],
+        candidates: [],
+        archive_token: "restore-refresh-owner-a",
+      };
+      vi.mocked(ipcModule.importerPreviewBundleJson).mockResolvedValueOnce(report);
+      vi.mocked(ipcModule.importerCommit).mockResolvedValueOnce(1);
+      vi.mocked(ipcModule.snippetList).mockRejectedValueOnce(new Error("Restore A refresh failed"));
+      const click = async (label: string) => {
+        const button = Array.from(document.body.querySelectorAll("button")).find(
+          (candidate) => candidate.textContent === label,
+        );
+        expect(button).toBeTruthy();
+        await act(async () => { button!.click(); });
+      };
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+      await click("恢复备份");
+      const fileInput = document.body.querySelector<HTMLInputElement>("input[type='file']")!;
+      const selectFile = async (file: File) => act(async () => {
+        Object.defineProperty(fileInput, "files", { value: [file], configurable: true });
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      const fileA = new File(["{}"], "restore-a.json", { type: "application/json" });
+      fileA.text = () => Promise.resolve("{}");
+      await selectFile(fileA);
+      await click("校验并预览");
+      await click("确认恢复");
+      expect(document.body.textContent).toContain("操作已成功、刷新失败");
+
+      const fileBRead = deferred<string>();
+      const fileB = new File(["{}"], "restore-b.json", { type: "application/json" });
+      fileB.text = () => fileBRead.promise;
+      await selectFile(fileB);
+      expect(document.body.textContent).toContain("restore-b.json (读取中...)");
+      expect(Array.from(document.body.querySelectorAll("button")).some(
+        (button) => button.textContent === "重试刷新",
+      )).toBe(false);
+
+      await act(async () => { fileBRead.resolve('{"sessions":[]}'); });
+      const previewB = Array.from(document.body.querySelectorAll("button")).find(
+        (button) => button.textContent === "校验并预览",
+      );
+      expect(previewB?.disabled).toBe(false);
+      expect(document.body.textContent).toContain("restore-b.json");
+      expect(document.body.textContent).not.toContain("读取中...");
+      expect(ipcModule.importerCommit).toHaveBeenCalledTimes(1);
+      expect(ipcModule.snippetList).toHaveBeenCalledTimes(1);
+    });
+
     it("recognizes commit success but refresh failure with real snippetStore and mock snippetList IPC error, allows retry refresh without re-commit", async () => {
       const mockReport = {
         total: 1,
@@ -878,6 +946,139 @@ describe("ImportExportModal", () => {
       // Refresh failure notice is now dismissed
       expect(document.body.textContent).not.toContain("操作已成功、刷新失败");
     });
+
+    it("retry refresh pending -> switch tab -> late reject: does not write refreshError into new tab, old refresh is ignored", async () => {
+      const mockReport = {
+        total: 1,
+        new_count: 1,
+        update_count: 0,
+        skip_count: 0,
+        warnings: [],
+        candidates: [
+          {
+            input: { name: "Server S07b", host: "1.2.3.4", port: 22, username: "root" },
+            action: "create",
+            existing_session_id: null,
+          },
+        ],
+        archive_token: "token-s07b",
+      };
+
+      (ipcModule.importerPreviewOpenSsh as any).mockResolvedValueOnce(mockReport);
+      (ipcModule.importerCommit as any).mockResolvedValueOnce(1);
+      (ipcModule.snippetList as any).mockRejectedValueOnce(new Error("Snippet DB initial error"));
+
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+
+      await fillTextarea("Host s07b\n  HostName 1.2.3.4");
+      const previewBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("解析并预览")
+      );
+      await act(async () => {
+        previewBtn!.click();
+      });
+
+      const commitBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("确认导入")
+      );
+      await act(async () => {
+        commitBtn!.click();
+      });
+
+      expect(document.body.textContent).toContain("操作已成功、刷新失败");
+
+      const retryRefreshBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("重试刷新")
+      );
+      expect(retryRefreshBtn).toBeTruthy();
+
+      // Retry refresh will be delayed
+      const retryDeferred = deferred<any[]>();
+      (ipcModule.snippetList as any).mockReturnValueOnce(retryDeferred.promise);
+
+      await act(async () => {
+        retryRefreshBtn!.click();
+      });
+
+      // User switches tab to FinalShell while retry refresh is pending
+      const finalshellTabBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("FinalShell 导入")
+      );
+      expect(finalshellTabBtn).toBeTruthy();
+      await act(async () => {
+        finalshellTabBtn!.click();
+      });
+
+      // Now retry refresh rejects late
+      await act(async () => {
+        retryDeferred.reject(new Error("Snippet DB late failure"));
+      });
+
+      // FinalShell tab must NOT display the old retry's refreshError!
+      expect(document.body.textContent).not.toContain("操作已成功、刷新失败");
+      expect(document.body.textContent).not.toContain("Snippet DB late failure");
+    });
+
+    it.each(["switch tab", "start preview"] as const)(
+      "keeps B's refresh retry available after retry A is pending and the user chooses to %s",
+      async (transfer) => {
+        const report: ImportPreviewReport = {
+          total: 1,
+          new_count: 1,
+          update_count: 0,
+          skip_count: 0,
+          warnings: [],
+          candidates: [{
+            input: { name: "Refresh owner", host: "example.invalid", protocol: "ssh" },
+            action: "create",
+            existing_session_id: null,
+          }],
+        };
+        const retryA = deferred<Snippet[]>();
+        vi.mocked(ipcModule.importerPreviewOpenSsh).mockResolvedValue(report);
+        vi.mocked(ipcModule.importerPreviewFinalShell).mockResolvedValue(report);
+        vi.mocked(ipcModule.importerCommit).mockResolvedValue(1);
+        vi.mocked(ipcModule.snippetList)
+          .mockRejectedValueOnce(new Error("Refresh A failed"))
+          .mockReturnValueOnce(retryA.promise)
+          .mockRejectedValueOnce(new Error("Refresh B failed"))
+          .mockResolvedValueOnce([]);
+        const click = async (label: string) => {
+          const button = Array.from(document.body.querySelectorAll("button")).find(
+            (candidate) => candidate.textContent === label,
+          );
+          expect(button).toBeTruthy();
+          await act(async () => { button!.click(); });
+        };
+
+        await act(async () => {
+          root = createRoot(container);
+          root.render(<ImportExportModal onClose={vi.fn()} />);
+        });
+        await fillTextarea("Host refresh-a\n  HostName example.invalid");
+        await click("解析并预览");
+        await click("确认导入");
+        await click("重试刷新");
+        if (transfer === "switch tab") await click("FinalShell 导入");
+        await fillTextarea("Host refresh-b\n  HostName example.invalid");
+        await click("解析并预览");
+        await click("确认导入");
+        await act(async () => { retryA.resolve([]); });
+
+        const retryB = Array.from(document.body.querySelectorAll("button")).find(
+          (button) => button.textContent === "重试刷新",
+        );
+        expect(retryB).toBeTruthy();
+        expect(retryB!.disabled).toBe(false);
+        await click("重试刷新");
+        expect(ipcModule.importerCommit).toHaveBeenCalledTimes(2);
+        expect(ipcModule.snippetList).toHaveBeenCalledTimes(4);
+        expect(document.body.textContent).not.toContain("操作已成功、刷新失败");
+      },
+    );
 
     it("recognizes commit success but refresh failure with real sessionStore and mock listSessions IPC error", async () => {
       const mockReport = {
@@ -1053,6 +1254,117 @@ describe("ImportExportModal", () => {
       // Global read refresh MUST have been called
       expect(ipcModule.listSessions).toHaveBeenCalled();
       expect(ipcModule.snippetList).toHaveBeenCalled();
+    });
+
+    it("commit A pending -> start preview B -> commit A resolves while preview B is still pending: B loading preserved, token A not lost", async () => {
+      const reportA = {
+        total: 1,
+        new_count: 1,
+        update_count: 0,
+        skip_count: 0,
+        warnings: [],
+        candidates: [
+          {
+            input: { name: "Server A Pending", host: "1.1.1.1", port: 22, username: "root" },
+            action: "create",
+            existing_session_id: null,
+          },
+        ],
+        archive_token: "token-commit-A-pend",
+      };
+
+      const reportB = {
+        total: 1,
+        new_count: 1,
+        update_count: 0,
+        skip_count: 0,
+        warnings: [],
+        candidates: [
+          {
+            input: { name: "Server B Result", host: "2.2.2.2", port: 22, username: "root" },
+            action: "create",
+            existing_session_id: null,
+          },
+        ],
+        archive_token: "token-preview-B-pend",
+      };
+
+      const commitADeferred = deferred<number>();
+      const previewBDeferred = deferred<any>();
+
+      (ipcModule.importerPreviewOpenSsh as any).mockResolvedValueOnce(reportA);
+      (ipcModule.importerCommit as any).mockReturnValueOnce(commitADeferred.promise);
+
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+
+      await fillTextarea("Host server-a-pend\n  HostName 1.1.1.1");
+      const previewBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("解析并预览")
+      );
+      await act(async () => {
+        previewBtn!.click();
+      });
+
+      // Commit A starts
+      const commitBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("确认导入")
+      );
+      await act(async () => {
+        commitBtn!.click();
+      });
+
+      expect(ipcModule.importerCommit).toHaveBeenCalledWith(reportA.candidates, "token-commit-A-pend");
+
+      // While Commit A is pending, change strategy to overwrite (cancels pending preview A view, invalidates generation)
+      const overwriteRadio = Array.from(document.body.querySelectorAll("input[type='radio']")).find(
+        (r) => (r as HTMLInputElement).value === "overwrite" || (r as any).labels?.[0]?.textContent?.includes("覆盖已有")
+      ) as HTMLInputElement | undefined;
+      await act(async () => {
+        if (overwriteRadio) {
+          overwriteRadio.click();
+        } else {
+          // click strategy radio label
+          const radioLabel = Array.from(document.body.querySelectorAll("label")).find((l) =>
+            l.textContent?.includes("覆盖已有")
+          );
+          radioLabel?.click();
+        }
+      });
+
+      // Now start Preview B
+      (ipcModule.importerPreviewOpenSsh as any).mockReturnValueOnce(previewBDeferred.promise);
+      await fillTextarea("Host server-b-pend\n  HostName 2.2.2.2");
+      const previewBtn2 = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("解析并预览")
+      );
+      expect(previewBtn2).toBeTruthy();
+      await act(async () => {
+        previewBtn2!.click();
+      });
+
+      // At this point, Preview B is pending, button shows loading / 分析中
+      expect(document.body.textContent).toContain("分析中...");
+
+      // NOW Commit A resolves while Preview B is STILL PENDING
+      await act(async () => {
+        commitADeferred.resolve(1);
+      });
+
+      // Preview B is STILL PENDING: loading must NOT have been turned off by Commit A!
+      expect(document.body.textContent).toContain("分析中...");
+
+      // Now Preview B resolves
+      await act(async () => {
+        previewBDeferred.resolve(reportB);
+      });
+
+      // Preview B report is now rendered and loading finished!
+      expect(document.body.textContent).toContain("Server B Result");
+      expect(document.body.textContent).not.toContain("分析中...");
+      expect(ipcModule.importerDiscardPreview).not.toHaveBeenCalledWith("token-preview-B-pend");
     });
 
     it("commit A pending -> switch tab -> preview B -> commit A rejects: B report preserved, token A discarded on failure, B error not overwritten", async () => {
@@ -1320,7 +1632,7 @@ describe("ImportExportModal", () => {
       expect(document.body.textContent).not.toContain("File disk unreadable");
     });
 
-    it("file reading pending -> modal unmounts -> late resolve/reject causes no errors", async () => {
+    it("file reading (json) pending -> modal unmounts -> late resolve: causes no errors", async () => {
       await act(async () => {
         root = createRoot(container);
         root.render(<ImportExportModal onClose={vi.fn()} />);
@@ -1351,6 +1663,145 @@ describe("ImportExportModal", () => {
       // Late resolve after unmount
       await act(async () => {
         fileADeferred.resolve('{"sessions":[]}');
+      });
+      // No crash
+    });
+
+    it("file reading (json) pending -> modal unmounts -> late reject: causes no errors", async () => {
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+
+      const restoreTabBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("恢复备份")
+      );
+      await act(async () => {
+        restoreTabBtn!.click();
+      });
+
+      const fileInput = document.body.querySelector<HTMLInputElement>("input[type='file']")!;
+      const fileADeferred = deferred<string>();
+      const fileA = new File(["dummy"], "unmount_err.json", { type: "application/json" });
+      (fileA as any).text = vi.fn().mockReturnValue(fileADeferred.promise);
+
+      await act(async () => {
+        Object.defineProperty(fileInput, "files", { value: [fileA], configurable: true });
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+
+      // Late reject after unmount
+      await act(async () => {
+        fileADeferred.reject(new Error("Disk unreadable on unmount"));
+      });
+      // No crash
+    });
+
+    it("file reading (osvault) pending -> switch tab -> late reject: does not crash or corrupt new tab", async () => {
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+
+      const restoreTabBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("恢复备份")
+      );
+      await act(async () => {
+        restoreTabBtn!.click();
+      });
+
+      const fileInput = document.body.querySelector<HTMLInputElement>("input[type='file']")!;
+      const fileADeferred = deferred<ArrayBuffer>();
+      const fileA = new File(["dummy"], "err_backup.osvault", { type: "application/octet-stream" });
+      (fileA as any).arrayBuffer = vi.fn().mockReturnValue(fileADeferred.promise);
+
+      await act(async () => {
+        Object.defineProperty(fileInput, "files", { value: [fileA], configurable: true });
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+
+      const opensshTabBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("OpenSSH 配置")
+      );
+      await act(async () => {
+        opensshTabBtn!.click();
+      });
+
+      // ArrayBuffer read rejects late
+      await act(async () => {
+        fileADeferred.reject(new Error("Encrypted vault corrupt"));
+      });
+
+      // Tab remains healthy, no error banner displayed on OpenSSH tab
+      expect(document.body.textContent).not.toContain("Encrypted vault corrupt");
+    });
+
+    it("file reading (osvault) pending -> modal unmounts -> late resolve: causes no errors", async () => {
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+
+      const restoreTabBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("恢复备份")
+      );
+      await act(async () => {
+        restoreTabBtn!.click();
+      });
+
+      const fileInput = document.body.querySelector<HTMLInputElement>("input[type='file']")!;
+      const fileADeferred = deferred<ArrayBuffer>();
+      const fileA = new File(["dummy"], "unmount_backup.osvault", { type: "application/octet-stream" });
+      (fileA as any).arrayBuffer = vi.fn().mockReturnValue(fileADeferred.promise);
+
+      await act(async () => {
+        Object.defineProperty(fileInput, "files", { value: [fileA], configurable: true });
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+
+      await act(async () => {
+        fileADeferred.resolve(new ArrayBuffer(16));
+      });
+      // No crash
+    });
+
+    it("file reading (osvault) pending -> modal unmounts -> late reject: causes no errors", async () => {
+      await act(async () => {
+        root = createRoot(container);
+        root.render(<ImportExportModal onClose={vi.fn()} />);
+      });
+
+      const restoreTabBtn = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("恢复备份")
+      );
+      await act(async () => {
+        restoreTabBtn!.click();
+      });
+
+      const fileInput = document.body.querySelector<HTMLInputElement>("input[type='file']")!;
+      const fileADeferred = deferred<ArrayBuffer>();
+      const fileA = new File(["dummy"], "unmount_err.osvault", { type: "application/octet-stream" });
+      (fileA as any).arrayBuffer = vi.fn().mockReturnValue(fileADeferred.promise);
+
+      await act(async () => {
+        Object.defineProperty(fileInput, "files", { value: [fileA], configurable: true });
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+
+      await act(async () => {
+        fileADeferred.reject(new Error("Encrypted unmount error"));
       });
       // No crash
     });

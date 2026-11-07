@@ -1,10 +1,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import { ProxyManagerModal } from "./ProxyManagerModal";
 import { proxyListGet, proxyListSave } from "../lib/ipc";
 
-vi.mock("../lib/ipc", () => ({
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: vi.fn() }));
+
+vi.mock("../lib/ipc", async () => ({
+  ...await vi.importActual<typeof import("../lib/ipc")>("../lib/ipc"),
   proxyListGet: vi.fn(),
   proxyListSave: vi.fn(),
   isTauriRuntime: () => true,
@@ -73,12 +77,13 @@ it("retains validation and saves the entered proxy with optional fields empty", 
   expect(marked("proxy-host")).toBe(true);
 });
 
-it("cleans legacy localStorage cache and never writes passwords to localStorage", async () => {
+it("preserves legacy cache when the backend is empty and never caches new passwords", async () => {
   act(() => root.unmount());
-  localStorage.setItem("openshell_proxy_list_fallback_v1", JSON.stringify([{ id: "p1", password: "leaked_secret" }]));
+  const legacy = JSON.stringify([{ id: "p1", password: "synthetic_legacy_secret" }]);
+  localStorage.setItem("openshell_proxy_list_fallback_v1", legacy);
   root = createRoot(container);
   await act(async () => root.render(<ProxyManagerModal open onClose={() => {}} />));
-  expect(localStorage.getItem("openshell_proxy_list_fallback_v1")).toBeNull();
+  expect(localStorage.getItem("openshell_proxy_list_fallback_v1")).toBe(legacy);
 
   fill("proxy-name", "密码代理");
   fill("proxy-host", "127.0.0.1");
@@ -98,8 +103,57 @@ it("cleans legacy localStorage cache and never writes passwords to localStorage"
     password: "super_secret_pwd_99",
   })]);
 
-  expect(localStorage.getItem("openshell_proxy_list_fallback_v1")).toBeNull();
+  expect(localStorage.getItem("openshell_proxy_list_fallback_v1")).toBe(legacy);
   expect(JSON.stringify(localStorage)).not.toContain("super_secret_pwd_99");
+});
+
+it("preserves legacy cache when the backend read fails", async () => {
+  act(() => root.unmount());
+  const legacy = JSON.stringify([{ id: "p1", password: "synthetic_legacy_secret" }]);
+  localStorage.setItem("openshell_proxy_list_fallback_v1", legacy);
+  vi.mocked(proxyListGet).mockRejectedValueOnce(new Error("Vault is locked"));
+  root = createRoot(container);
+  await act(async () => root.render(<ProxyManagerModal open onClose={() => {}} />));
+
+  expect(proxyListGet).toHaveBeenCalled();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Vault is locked");
+  expect(localStorage.getItem("openshell_proxy_list_fallback_v1")).toBe(legacy);
+});
+
+it("passes the clear-password choice through the real proxyTest IPC wrapper", async () => {
+  act(() => root.unmount());
+  vi.mocked(proxyListGet).mockResolvedValue([{
+    id: "p_test",
+    name: "认证代理",
+    proxy_type: "socks5",
+    host: "10.0.0.1",
+    port: 1080,
+    username: "synthetic-user",
+    has_password: true,
+    password_ref: "synthetic-reference",
+  }]);
+  vi.mocked(invoke).mockResolvedValue({ ok: true, latency_ms: 1, message: "ok" });
+  root = createRoot(container);
+  await act(async () => root.render(<ProxyManagerModal open onClose={() => {}} />));
+  act(() => container.querySelector<HTMLButtonElement>('button[aria-label="编辑代理 认证代理"]')!.click());
+  const testButton = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent === "测试当前配置")!;
+
+  act(() => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  await act(async () => testButton.click());
+  expect(invoke).toHaveBeenLastCalledWith("proxy_test", {
+    proxy: expect.objectContaining({ id: "p_test", clear_password: true }),
+  });
+  const payload = vi.mocked(invoke).mock.calls.at(-1)![1] as { proxy: Record<string, unknown> };
+  expect(payload.proxy.password).toBeUndefined();
+  expect(payload.proxy.password_ref).toBeUndefined();
+  expect(proxyListSave).not.toHaveBeenCalled();
+
+  act(() => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  await act(async () => testButton.click());
+  expect(invoke).toHaveBeenLastCalledWith("proxy_test", {
+    proxy: expect.objectContaining({ id: "p_test", clear_password: false }),
+  });
 });
 
 it("editing existing proxy with stored password does not echo password and preserves it when left blank", async () => {

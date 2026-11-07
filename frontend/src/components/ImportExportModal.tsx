@@ -141,6 +141,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
 
   const invalidatePendingOperations = () => {
     generationRef.current++;
+    setRefreshing(false);
     const currentPreviewToken = previewReport?.archive_token;
     if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
       void discardArchiveToken(currentPreviewToken);
@@ -171,19 +172,26 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
   };
 
   const handleRefreshAfterCommit = async () => {
+    const currentGen = ++generationRef.current;
     setRefreshing(true);
     setRefreshError(null);
     try {
       await Promise.all([
         useSessionStore.getState().loadAll({ throwOnError: true }),
-        useSnippetStore.getState().loadSnippets(),
+        useSnippetStore.getState().loadSnippets({ throwOnError: true }),
       ]);
-      setRefreshError(null);
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setRefreshError(null);
+      }
     } catch (refreshErr: any) {
       console.warn("View refresh failed:", refreshErr);
-      setRefreshError(formatFriendlyError(refreshErr));
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setRefreshError(formatFriendlyError(refreshErr));
+      }
     } finally {
-      setRefreshing(false);
+      if (mountedRef.current && generationRef.current === currentGen) {
+        setRefreshing(false);
+      }
     }
   };
 
@@ -193,6 +201,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
       return;
     }
     const currentGen = ++generationRef.current;
+    setRefreshing(false);
     const currentPreviewToken = previewReport?.archive_token;
     if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
       void discardArchiveToken(currentPreviewToken);
@@ -234,6 +243,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     const candidates = previewReport.candidates;
     const warnings = previewReport.warnings || [];
     const commitGen = ++generationRef.current;
+    setRefreshing(false);
     committingTokenRef.current = commitToken;
 
     setLoading(true);
@@ -265,7 +275,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
       try {
         await Promise.all([
           useSessionStore.getState().loadAll({ throwOnError: true }),
-          useSnippetStore.getState().loadSnippets(),
+          useSnippetStore.getState().loadSnippets({ throwOnError: true }),
         ]);
       } catch (refreshErr: any) {
         console.warn("Commit succeeded but view refresh failed:", refreshErr);
@@ -335,6 +345,8 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     if (!file) return;
 
     const currentGen = ++generationRef.current;
+    setRefreshing(false);
+    setRefreshError(null);
     const currentPreviewToken = previewReport?.archive_token;
     if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
       void discardArchiveToken(currentPreviewToken);
@@ -404,6 +416,7 @@ export const ImportExportModal: React.FC<ImportExportModalProps> = ({ onClose })
     }
 
     const currentGen = ++generationRef.current;
+    setRefreshing(false);
     const currentPreviewToken = previewReport?.archive_token;
     if (currentPreviewToken && currentPreviewToken !== committingTokenRef.current) {
       void discardArchiveToken(currentPreviewToken);

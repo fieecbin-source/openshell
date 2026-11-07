@@ -61,8 +61,12 @@ export const SyncSettingsModal: React.FC = () => {
 
   useEffect(() => {
     if (modalOpen) {
-      void loadConfig();
-      void loadConflicts();
+      void Promise.resolve(loadConfig()).catch((err) => {
+        console.warn("Failed to load sync config:", err);
+      });
+      void Promise.resolve(loadConflicts()).catch((err) => {
+        console.warn("Failed to load sync conflicts:", err);
+      });
     } else {
       setPassword("");
       setEmail("");
@@ -167,7 +171,25 @@ export const SyncSettingsModal: React.FC = () => {
 
 
         {error && (
-          <InlineNotice tone="danger">
+          <InlineNotice
+            tone="danger"
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={refreshingViews}
+                onClick={async () => {
+                  try {
+                    await retryRefreshViews();
+                  } catch (e: any) {
+                    console.warn("Retry failed:", e);
+                  }
+                }}
+              >
+                重试
+              </Button>
+            }
+          >
             {error}
           </InlineNotice>
         )}

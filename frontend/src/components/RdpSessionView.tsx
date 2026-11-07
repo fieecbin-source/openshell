@@ -39,7 +39,7 @@ const STATUS_META: Record<
     tone: "border-state-warning/30 bg-state-warning/10",
   },
   connected: {
-    label: "远端登录已完成（native OnLoginComplete）",
+    label: "远端登录已完成",
     dot: "bg-state-success",
     text: "text-state-success",
     tone: "border-state-success/30 bg-state-success/10",
@@ -171,16 +171,6 @@ export const RdpSessionView: React.FC<RdpSessionViewProps> = ({
             {(tab.status === "error" || tab.status === "disconnected" || tab.rdpPhase === "failed") &&
               tab.error && (
               <p className="mt-1.5 break-all font-mono text-[11px] opacity-90">{tab.error}</p>
-            )}
-            {launched && (
-              <p className="mt-1.5 text-[11px] opacity-80">
-                启动 mstsc 仅代表本地客户端已唤起，是否真正连上远端需等待后端状态回传。
-              </p>
-            )}
-            {tab.status === "connected" && (
-              <p className="mt-1.5 text-[11px] opacity-80">
-                后端已确认远端登录完成；本地客户端进程退出或会话断开时会自动更新状态。
-              </p>
             )}
 
           </div>

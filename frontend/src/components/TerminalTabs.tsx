@@ -235,7 +235,7 @@ export const TerminalTabs: React.FC<TerminalTabsProps> = ({
           let statusIndicator = (
             <span
               className="inline-flex items-center justify-center rounded bg-emerald-500/15 p-0.5 text-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.35)] transition-all"
-              title="已建立安全高速连接 · 全速无限制 (512KiB 流水线)"
+              title="已连接"
             >
               <ZapIcon className="h-3 w-3 fill-emerald-500 text-emerald-500 stroke-[2.5]" />
             </span>

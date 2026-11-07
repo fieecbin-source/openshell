@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SyncSettingsModal } from "./SyncSettingsModal";
 
 const mock = vi.hoisted(() => ({
-  modalOpen: true, config: null as any, conflicts: [] as any[], resolvingConflictId: null as string | null, syncing: false, error: null,
+  modalOpen: true, config: null as any, conflicts: [] as any[], resolvingConflictId: null as string | null, syncing: false, error: null as string | null,
   refreshError: null as string | null, refreshingViews: false,
   setModalOpen: vi.fn(), loadConfig: vi.fn(), loadConflicts: vi.fn(), resolveConflict: vi.fn(), retryRefreshViews: vi.fn(), saveConfig: vi.fn(),
   register: vi.fn(), login: vi.fn(), logout: vi.fn(), clearLocalSyncData: vi.fn(),
@@ -237,5 +237,39 @@ describe("sync login privacy", () => {
     expect(mock.login).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("操作已成功、刷新失败");
     expect(container.textContent).not.toContain("登录失败");
+  });
+
+  it("consumes loadConflicts mount rejection without unhandled rejection and allows read-only retry", async () => {
+    let unhandled: any = null;
+    const handler = (event: any) => { unhandled = event.reason ?? event; };
+    window.addEventListener("unhandledrejection", handler);
+
+    try {
+      mock.loadConflicts.mockRejectedValueOnce(new Error("Conflict load failed"));
+      mock.error = "冲突读取失败，请检查网络";
+
+      render();
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(unhandled).toBeNull();
+      expect(container.textContent).toContain("冲突读取失败，请检查网络");
+
+      // Verify retry button exists and calls retryRefreshViews
+      const retryBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent === "重试"
+      );
+      expect(retryBtn).toBeTruthy();
+
+      await act(async () => {
+        retryBtn!.click();
+      });
+
+      expect(mock.retryRefreshViews).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("unhandledrejection", handler);
+    }
   });
 });

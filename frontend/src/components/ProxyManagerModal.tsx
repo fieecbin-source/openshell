@@ -37,17 +37,6 @@ export interface ProxyManagerModalProps {
   onChanged?: (proxies: ProxyServerConfig[]) => void;
 }
 
-const LEGACY_LOCAL_FALLBACK_KEY = "openshell_proxy_list_fallback_v1";
-
-function cleanLegacyProxyCache(): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  try {
-    window.localStorage.removeItem(LEGACY_LOCAL_FALLBACK_KEY);
-  } catch {
-    // ignore storage errors
-  }
-}
-
 function generateProxyId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -135,7 +124,6 @@ export function ProxyManagerModal({
 
   useEffect(() => {
     if (open) {
-      cleanLegacyProxyCache();
       void loadProxies();
       resetForm();
     }
@@ -299,6 +287,7 @@ export function ProxyManagerModal({
       port: Number(port) || 1080,
       username: username.trim() ? username.trim() : null,
       notes: notes.trim() ? notes.trim() : null,
+      clear_password: clearPassword,
     };
     if (password) {
       draft.password = password;
