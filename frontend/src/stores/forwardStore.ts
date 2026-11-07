@@ -32,7 +32,7 @@ export const useForwardStore = create<ForwardState>((set, get) => ({
   activeSessionId: null,
 
   loadRules: async (sessionId?: string) => {
-    const filterId = sessionId ?? get().activeSessionId ?? undefined;
+    const filterId = sessionId;
     set({ loading: true, activeSessionId: filterId ?? null });
     try {
       const [rules, statuses] = await Promise.all([
@@ -57,19 +57,19 @@ export const useForwardStore = create<ForwardState>((set, get) => ({
 
   createRule: async (input: PortForwardRuleInput) => {
     const rule = await forwardCreate(input);
-    await get().loadRules();
+    await get().loadRules(get().activeSessionId ?? undefined);
     return rule;
   },
 
   updateRule: async (id: string, input: PortForwardRuleInput) => {
     const rule = await forwardUpdate(id, input);
-    await get().loadRules();
+    await get().loadRules(get().activeSessionId ?? undefined);
     return rule;
   },
 
   deleteRule: async (id: string) => {
     await forwardDelete(id);
-    await get().loadRules();
+    await get().loadRules(get().activeSessionId ?? undefined);
   },
 
   toggleRule: async (rule: PortForwardRule, connId?: string) => {
