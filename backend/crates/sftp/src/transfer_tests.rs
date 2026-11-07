@@ -248,10 +248,7 @@ async fn terminal_tasks_cannot_be_paused_or_cancelled() {
         TransferState::Failed,
         TransferState::Cancelled,
     ] {
-        tm.tasks
-            .write()
-            .await
-            .insert("test".into(), task(state.clone()));
+        tm.tasks.write().await.insert("test".into(), task(state));
         assert!(tm.pause("test").await.is_err(), "pause changed {state:?}");
         assert_eq!(tm.get("test").await.unwrap().state, state);
         assert!(tm.cancel("test").await.is_err(), "cancel changed {state:?}");

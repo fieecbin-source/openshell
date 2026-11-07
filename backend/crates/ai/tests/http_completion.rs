@@ -3,16 +3,23 @@ use openshell_ai::service::{HttpProfileTester, ProfileTester};
 use openshell_ai::types::{CancellationToken, ChatMessage, CompletionRequest};
 use openshell_core_domain::AiWireKind;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 async fn endpoint(body: &str, hang: bool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let body = body.to_owned();
     tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut request = [0; 4096];
-        socket.read(&mut request).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = BufReader::new(socket);
+        let mut line = Vec::new();
+        loop {
+            assert_ne!(socket.read_until(b'\n', &mut line).await.unwrap(), 0);
+            if line == b"\r\n" {
+                break;
+            }
+            line.clear();
+        }
         let length = if hang { body.len() + 1000 } else { body.len() };
         let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}");
         socket.write_all(response.as_bytes()).await.unwrap();
