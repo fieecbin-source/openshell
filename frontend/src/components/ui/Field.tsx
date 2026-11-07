@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { Children, cloneElement, forwardRef, isValidElement, useId } from "react";
 import type {
   InputHTMLAttributes,
   ReactNode,
@@ -22,21 +22,36 @@ export interface FieldProps {
   hint?: ReactNode;
   error?: string | null;
   required?: boolean;
+  value?: string | number | null;
   htmlFor?: string;
   className?: string;
   children: ReactNode;
 }
 
-export function Field({ label, hint, error, required, htmlFor, className, children }: FieldProps) {
+export function RequiredMark({ value }: { value?: string | number | readonly string[] | null }) {
+  if (String(value ?? "").trim()) return null;
+  return <span aria-hidden="true" title="必填" className="ml-1 text-state-danger">★</span>;
+}
+
+export function Field({ label, hint, error, required, value, htmlFor, className, children }: FieldProps) {
+  const generatedId = useId();
+  const control = Children.toArray(children).find((child) =>
+    isValidElement<InputProps>(child) && (child.type === Input || child.type === Select || child.type === Textarea));
+  const fieldId = htmlFor ?? (isValidElement<InputProps>(control) ? control.props.id : undefined) ?? generatedId;
+  const fieldValue = value ?? (isValidElement<InputProps>(control) ? control.props.value : undefined);
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       {label !== undefined && (
-        <label htmlFor={htmlFor} className="text-os-xs font-medium text-ink-secondary">
+        <label htmlFor={fieldId} className="text-os-xs font-medium text-ink-secondary">
           {label}
-          {required && <span className="ml-0.5 text-state-danger">*</span>}
+          {required && <RequiredMark value={fieldValue} />}
         </label>
       )}
-      {children}
+      {Children.map(children, (child) =>
+        isValidElement<InputProps>(child) && (child.type === Input || child.type === Select || child.type === Textarea)
+          ? cloneElement(child, { id: child.props.id ?? fieldId, "aria-required": required || child.props["aria-required"] })
+          : child,
+      )}
       {error ? (
         <p role="alert" className="text-os-xs text-state-danger">
           {error}

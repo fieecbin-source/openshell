@@ -237,9 +237,13 @@ export const AppLayout: React.FC = () => {
   };
 
   /** 预选协议的新建入口（标签栏「+」菜单 / 首页卡片） */
-  const handleNewSessionWithProtocol = (protocol?: Protocol) => {
+  const handleNewSessionWithProtocol = (protocol?: Protocol, groupId?: string) => {
     setEditingSession(null);
-    setInitialSessionValues(protocol ? { protocol } : undefined);
+    setInitialSessionValues(
+      protocol || groupId
+        ? { ...(protocol ? { protocol } : {}), ...(groupId ? { group_id: groupId } : {}) }
+        : undefined
+    );
     setIsSessionModalOpen(true);
   };
 
@@ -494,6 +498,7 @@ export const AppLayout: React.FC = () => {
             <div className="absolute inset-0 z-30 overflow-hidden bg-canvas text-ink">
               <HomeHub
                 onNewSession={handleNewSession}
+                onNewSessionWithProtocol={handleNewSessionWithProtocol}
                 onEditSession={handleEditSession}
                 onConnectSession={handleConnectSession}
                 onPortCheckerOpen={() => setPortCheckerOpen(true)}

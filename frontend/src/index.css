@@ -94,6 +94,11 @@ button:active:not(:disabled) {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  /* Inherited visibility must also settle immediately on the source's descendants. */
+  [data-add-surface],
+  [data-add-surface] * {
+    transition: none !important;
+  }
   button:active:not(:disabled) {
     transform: none;
   }
