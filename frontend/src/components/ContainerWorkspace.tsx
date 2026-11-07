@@ -3,6 +3,7 @@ import { sshExec } from "../lib/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { useContainerStore, type DockerContainerInfo } from "../stores/containerStore";
 import { BoxIcon, FolderIcon } from "./ui/icons";
+import { DockerIcon } from "./ui/DockerIcon";
 
 interface ContainerWorkspaceProps {
   connId: string;
@@ -179,7 +180,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
         </button>
 
         <div className="flex min-w-0 items-center gap-2">
-          <BoxIcon className="h-5 w-5 text-accent" />
+          <DockerIcon className="h-5 w-5" />
           <span className="truncate text-sm font-bold text-ink">
             {selected ? selected.name : "容器"}
           </span>
@@ -313,7 +314,7 @@ export const ContainerWorkspace: React.FC<ContainerWorkspaceProps> = ({
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {!selected ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 text-ink-secondary">
-              <BoxIcon className="h-10 w-10 text-ink-tertiary" />
+              <DockerIcon className="h-10 w-10" />
               <p className="text-xs">从左侧选择一个容器查看详情</p>
             </div>
           ) : (

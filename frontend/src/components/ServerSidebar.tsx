@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from "react";
 import type { TerminalTab } from "../stores/terminalStore";
+import type { DiskMountMetrics } from "../types/ipc";
 import { isFieldUnavailable, isMetricsStale, readAvailableMetric, useMonitorStore } from "../stores/monitorStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { sshExec } from "../lib/ipc";
 import { useContainerStore } from "../stores/containerStore";
 import { NetworkTraffic } from "./NetworkTraffic";
+import { memoryPercent } from "../lib/resourceMetrics";
+import { DockerIcon } from "./ui/DockerIcon";
 import { ConnectionDetailsPopover } from "./ConnectionDetailsPopover";
 import { HostIcon } from "./ui/HostIcon";
-import { ActivityIcon, BoxIcon, CpuIcon, MemoryIcon, HardDriveIcon, InfoIcon, WifiOffIcon } from "./ui/icons";
+import { ActivityIcon, CpuIcon, MemoryIcon, HardDriveIcon, InfoIcon, WifiOffIcon } from "./ui/icons";
 
 interface ServerSidebarProps {
   tab: TerminalTab;
@@ -129,7 +132,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
 
   const metricsStale = latest ? isMetricsStale(latest) : false;
   // 失败或陈旧快照不能当实时值展示；合法 0 仍会正常显示
-  const metrics = connected && latest?.session_id === sessionId && !metricsStale ? latest : null;
+  const metrics = connected && latest?.session_id === sessionId && !metricsStale && !latestError ? latest : null;
   const hasProcesses = (metrics?.top_processes?.length ?? 0) > 0;
 
   /**
@@ -177,14 +180,21 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
   };
 
   const cpuValue = readAvailableMetric(metrics, "cpu_percent");
-  const cpuPct = cpuValue === null ? null : Math.round(cpuValue);
+  const cpuPct = cpuValue === null || cpuValue < 0 ? null : Math.round(Math.min(100, cpuValue));
   const cpuLabel = cpuPct === null ? "不可用" : `${cpuPct}%`;
   const cpuBarPct = cpuPct === null ? 0 : Math.min(cpuPct, 100);
   const coresUnavailable = isFieldUnavailable(metrics, "cpu_cores");
   const loadUnavailable = isFieldUnavailable(metrics, "load_1");
-  const memTotal = num(metrics?.memory_total_bytes) || 1;
-  const memUsed = num(metrics?.memory_used_bytes);
-  const memPct = Math.min(100, Math.round((memUsed / memTotal) * 100));
+  const memTotal = readAvailableMetric(metrics, "memory_total_bytes");
+  const memUsed = readAvailableMetric(metrics, "memory_used_bytes");
+  const memValue = memoryPercent(metrics);
+  const memPct = memValue === null ? null : Math.round(memValue);
+  const memLabel = memPct === null ? "不可用" : `${memPct}%`;
+  const fullestDisk = isFieldUnavailable(metrics, "disk_mounts") ? undefined : metrics?.disk_mounts
+    ?.filter((disk) => Number.isFinite(disk.use_percent) && disk.use_percent >= 0)
+    .reduce<DiskMountMetrics | undefined>((fullest, disk) =>
+      !fullest || disk.use_percent > fullest.use_percent ? disk : fullest, undefined);
+  const diskPct = fullestDisk ? Math.round(Math.min(100, fullestDisk.use_percent)) : null;
 
   const isStatusConnected = tab.status === "connected";
   const isStatusConnecting = tab.status === "connecting" || tab.status === "reconnecting";
@@ -207,43 +217,52 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
   // 折叠状态仅展示资源可视化监控，其余功能收起，避免点击破坏小侧栏布局
   if (collapsed) {
     return (
-      <aside className="w-full min-w-0 bg-surface-muted flex flex-col items-center py-4 select-none h-full">
+      <aside className="w-full min-w-0 bg-surface-muted flex flex-col items-center px-1 py-3 select-none h-full overflow-y-auto overflow-x-hidden">
+        <div className="flex flex-col items-center gap-4 text-center">
         {connected && metrics ? (
-          <div className="flex flex-col gap-5 text-center pt-1">
+          <>
             <div
               className="flex flex-col items-center"
+              aria-label="CPU 使用率"
               title={`CPU 使用率: ${cpuLabel}`}
             >
               <span className="text-[10px] text-ink-secondary font-bold mb-1">CPU</span>
-              <div className="w-2.5 h-16 bg-line/10 rounded-full overflow-hidden flex flex-col justify-end">
-                <div
-                  className={`w-full rounded-full transition-all duration-500 ${
-                    (cpuPct ?? 0) > 80 ? "bg-state-danger/100" : (cpuPct ?? 0) > 60 ? "bg-state-warning/100" : "bg-action"
-                  }`}
-                  style={{ height: `${cpuBarPct}%` }}
-                />
+              <div className="w-2 h-14 bg-line/10 rounded-full overflow-hidden flex flex-col justify-end">
+                <div data-resource-fill
+                  className={`w-full rounded-full transition-[height] duration-500 motion-reduce:transition-none ${
+                    (cpuPct ?? 0) > 80 ? "bg-state-danger" : (cpuPct ?? 0) > 60 ? "bg-state-warning" : "bg-action"
+                  }`} style={{ height: `${cpuBarPct}%` }} />
               </div>
-              <span className="text-[9px] font-mono text-ink-secondary mt-1">{cpuLabel}</span>
+              <span className="text-[9px] font-mono tabular-nums text-ink-secondary mt-1">{cpuPct === null ? "—" : cpuLabel}</span>
             </div>
 
             <div
               className="flex flex-col items-center"
-              title={`内存占用: ${memPct}%`}
+              aria-label="内存使用率"
+              title={`内存占用: ${memLabel}`}
             >
               <span className="text-[10px] text-ink-secondary font-bold mb-1">MEM</span>
-              <div className="w-2.5 h-16 bg-line/10 rounded-full overflow-hidden flex flex-col justify-end">
-                <div
-                  className={`w-full rounded-full transition-all duration-500 ${
-                    memPct > 80 ? "bg-state-danger/100" : memPct > 60 ? "bg-state-warning/100" : "bg-state-success/100"
-                  }`}
-                  style={{ height: `${Math.min(memPct, 100)}%` }}
-                />
+              <div className="w-2 h-14 bg-line/10 rounded-full overflow-hidden flex flex-col justify-end">
+                <div data-resource-fill
+                  className={`w-full rounded-full transition-[height] duration-500 motion-reduce:transition-none ${
+                    (memPct ?? 0) > 80 ? "bg-state-danger" : (memPct ?? 0) > 60 ? "bg-state-warning" : "bg-state-success"
+                  }`} style={{ height: `${memPct ?? 0}%` }} />
               </div>
-              <span className="text-[9px] font-mono text-ink-secondary mt-1">{memPct}%</span>
+              <span className="text-[9px] font-mono tabular-nums text-ink-secondary mt-1">{memPct === null ? "—" : memLabel}</span>
             </div>
-          </div>
+            <NetworkTraffic metrics={metrics} mode="rail" />
+            <div aria-label="最高分区占用" className="flex flex-col items-center gap-1"
+              title={fullestDisk ? `最高分区占用：${fullestDisk.mount_point} · ${diskPct}%` : "磁盘占用不可用"}>
+              <HardDriveIcon className="h-4 w-4 text-ink-secondary" />
+              <div className="h-1 w-6 overflow-hidden rounded-full bg-line/10">
+                <div className={`h-full rounded-full ${diskPct !== null && diskPct > 85 ? "bg-state-danger" : "bg-state-warning"}`}
+                  style={{ width: `${diskPct ?? 0}%` }} />
+              </div>
+              <span className="text-[9px] font-mono tabular-nums text-ink-secondary">{diskPct === null ? "—" : `${diskPct}%`}</span>
+            </div>
+          </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-ink-tertiary gap-1">
+          <div className="flex flex-col items-center justify-center text-ink-tertiary gap-1 py-4">
             {connected ? (
               latestError ? (
                 <span className="text-[9px] font-mono text-state-danger text-center leading-tight" title={latestError}>
@@ -262,20 +281,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
           </div>
         )}
 
-        {/* 折叠态保留两个最常用入口，避免用户必须展开侧栏才能监控/进容器 */}
-        <div className="mt-auto flex flex-col items-center gap-2 pb-1">
-          {connected && onOpenMonitor && (
-            <button
-              type="button"
-              aria-label="资源监控"
-              aria-pressed={!!monitorOpen}
-              title={`${tab.sessionName} · 资源监控`}
-              onClick={onOpenMonitor}
-              className="rounded-lg border border-accent/25 bg-accent/10 p-1.5 text-accent hover:bg-accent/20 transition"
-            >
-              <ActivityIcon className="h-4 w-4" />
-            </button>
-          )}
+          {/* Release 的鲸鱼入口跟随资源指标；不固定在侧栏底部。 */}
           <button
             type="button"
             aria-label="容器管理"
@@ -287,10 +293,17 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
               probeDocker();
               onOpenContainer?.();
             }}
-            className="rounded-lg border border-line/15 bg-surface/80 p-1.5 text-ink-secondary hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 transition"
+            className="mt-2 p-1 rounded-lg text-ink-secondary hover:bg-line/10 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 transition"
           >
-            <BoxIcon className="h-4 w-4" />
+            <DockerIcon className="h-5 w-5" />
           </button>
+          {connected && onOpenMonitor && (
+            <button type="button" aria-label="资源监控" aria-pressed={!!monitorOpen}
+              title={`${tab.sessionName} · 资源监控`} onClick={onOpenMonitor}
+              className="p-1 rounded-lg text-accent hover:bg-accent/10 transition">
+              <ActivityIcon className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </aside>
     );
@@ -440,12 +453,12 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
           <div className="space-y-3 text-xs">
             {/* 系统运行与负载信息 */}
             {metrics && (
-              <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm flex items-center justify-between font-mono text-[11px]">
-                <div className="flex items-center gap-1.5">
+              <div className="p-2.5 rounded-xl border border-line/10 bg-surface/70 backdrop-blur-md shadow-apple-sm space-y-1 font-mono text-[11px]">
+                <div className="flex items-center justify-between gap-1.5">
                   <span className="text-ink-secondary">运行时长:</span>
                   <span className="text-ink font-semibold">{formatUptime(metrics?.uptime_seconds || 0)}</span>
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center justify-between gap-1.5">
                   <span className="text-ink-secondary">负载:</span>
                   <span className="text-ink font-semibold">
                     {loadUnavailable
@@ -491,19 +504,19 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
                   <MemoryIcon className="h-4 w-4 text-ink-secondary" />
                   <span>内存占用</span>
                 </span>
-                <span className="font-mono font-bold text-ink">{memPct}%</span>
+                <span className="font-mono font-bold text-ink">{memLabel}</span>
               </div>
               <div className="w-full bg-line/10 rounded-full h-2 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${
-                    memPct > 85 ? "bg-state-danger/100" : memPct > 70 ? "bg-state-warning/100" : "bg-state-success/100"
+                    (memPct ?? 0) > 85 ? "bg-state-danger/100" : (memPct ?? 0) > 70 ? "bg-state-warning/100" : "bg-state-success/100"
                   }`}
-                  style={{ width: `${Math.min(memPct, 100)}%` }}
+                  style={{ width: `${memPct ?? 0}%` }}
                 />
               </div>
               <div className="flex items-center justify-between text-[10px] font-mono text-ink-secondary">
-                <span>已用: {formatBytes(memUsed)}</span>
-                <span>总量: {formatBytes(memTotal)}</span>
+                <span>已用: {memUsed === null ? "不可用" : formatBytes(memUsed)}</span>
+                <span>总量: {memTotal === null || memTotal <= 0 ? "不可用" : formatBytes(memTotal)}</span>
               </div>
             </div>
 
@@ -522,11 +535,11 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
                     const usePct = Math.min(100, num(d.use_percent));
                     return (
                       <div key={`${d.mount_point || i}`} className="space-y-1">
-                        <div className="flex items-center justify-between text-[10px] font-mono">
-                          <span className="text-ink-secondary font-semibold truncate max-w-[120px]">
+                        <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                          <span className="min-w-0 text-ink-secondary font-semibold truncate" title={d.mount_point || "-"}>
                             {d.mount_point || "-"}
                           </span>
-                          <span className="text-ink-secondary">
+                          <span className="shrink-0 text-ink-secondary">
                             {formatBytes(d.used_bytes)} / {formatBytes(d.total_bytes)} ({fixed(usePct, 0)}%)
                           </span>
                         </div>
@@ -653,7 +666,7 @@ export const ServerSidebar: React.FC<ServerSidebarProps> = ({ tab, iconKey, coll
           <div className="space-y-2.5 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="min-w-0 text-[11px] font-semibold text-ink-secondary flex items-center gap-1">
-                <span className="inline-flex items-center gap-1.5"><BoxIcon className="h-4 w-4" />Docker / Podman 容器</span>
+                <span className="inline-flex items-center gap-1.5"><DockerIcon className="h-4 w-4" />Docker / Podman 容器</span>
                 {containerRuntime && (
                   <span className="min-w-0 truncate font-mono text-[9px] font-normal text-ink-secondary" title={containerRuntime}>
                     {containerRuntime.split("/").pop()}

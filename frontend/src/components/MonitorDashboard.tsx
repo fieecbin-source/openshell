@@ -3,6 +3,8 @@ import { isFieldUnavailable, isMetricsStale, readAvailableMetric, useMonitorStor
 import type { ProcessMetrics } from "../types/ipc";
 import { formatFriendlyError } from "../lib/errors";
 import { cn } from "./ui/cn";
+import { NetworkTraffic } from "./NetworkTraffic";
+import { memoryPercent, resourceSamples } from "../lib/resourceMetrics";
 
 /** 与工作区共享浅色玻璃材质和语义状态色。 */
 const C = {
@@ -41,7 +43,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
 
   // 只有「有快照、未过期、未失败」才能当实时值展示；合法 0 仍然保留，不伪造占位
   const stale = latest ? isMetricsStale(latest) : false;
-  const liveMetrics = latest && !stale ? latest : null;
+  const liveMetrics = latest?.session_id === sessionId && !stale && !latestError ? latest : null;
   const staleSeconds =
     latest && Number.isFinite(latest.timestamp_ms)
       ? Math.max(0, Math.round((Date.now() - latest.timestamp_ms) / 1000))
@@ -52,9 +54,8 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
   // 合法 0 仍返回 0 并按正常数值展示。
   const unavailableText = "不可用";
   const cpuValue = readAvailableMetric(liveMetrics, "cpu_percent");
-  const netRxBps = readAvailableMetric(liveMetrics, "net_rx_bps");
-  const netTxBps = readAvailableMetric(liveMetrics, "net_tx_bps");
   const memCachedBytes = readAvailableMetric(liveMetrics, "memory_cached_bytes");
+  const memValue = memoryPercent(liveMetrics);
   const coresUnavailable = isFieldUnavailable(liveMetrics, "cpu_cores");
   const processesUnavailable = isFieldUnavailable(liveMetrics, "top_processes");
   const loadUnavailable = isFieldUnavailable(liveMetrics, "load_1");
@@ -104,10 +105,6 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   };
 
-  const formatBps = (bps: number) => {
-    return formatBytes(bps) + "/s";
-  };
-
   const formatUptime = (sec: number) => {
     if (!sec) return "-";
     const days = Math.floor(sec / 86400);
@@ -131,7 +128,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
 
   // 简易 SVG 历史趋势折线图
   const renderHistoryChart = (
-    data: number[],
+    data: (number | null)[],
     color: string,
     maxVal = 100,
     height = 40
@@ -144,34 +141,31 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       );
     }
     const width = 200;
-    const points = data.map((val, idx) => {
+    const segments: string[][] = [[]];
+    data.forEach((val, idx) => {
+      if (val === null || !Number.isFinite(val) || val < 0) {
+        if (segments[segments.length - 1].length) segments.push([]);
+        return;
+      }
       const x = (idx / (data.length - 1)) * width;
       const y = height - (Math.min(val, maxVal) / maxVal) * (height - 4) - 2;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      segments[segments.length - 1].push(`${x.toFixed(1)},${y.toFixed(1)}`);
     });
     return (
       <svg className="w-full h-10 overflow-visible" viewBox={`0 0 ${width} ${height}`}>
-        <polyline
+        {segments.filter((points) => points.length).map((points, index) => <polyline key={index}
           fill="none"
           stroke={color}
           strokeWidth="1.5"
           points={points.join(" ")}
-        />
+        />)}
       </svg>
     );
   };
 
-  const cpuHistory = history
-    .filter((h) => !isFieldUnavailable(h, "cpu_percent"))
-    .map((h) => h.cpu_percent);
-  const memHistory = history
-    .filter(
-      (h) =>
-        !isFieldUnavailable(h, "memory_used_bytes") &&
-        !isFieldUnavailable(h, "memory_total_bytes") &&
-        h.memory_total_bytes > 0
-    )
-    .map((h) => (h.memory_used_bytes / h.memory_total_bytes) * 100);
+  const currentHistory = resourceSamples(liveMetrics, history);
+  const cpuHistory = currentHistory.map((h) => readAvailableMetric(h, "cpu_percent"));
+  const memHistory = currentHistory.map(memoryPercent);
 
   return (
     <div className={`absolute inset-0 z-40 flex flex-col overflow-hidden ${C.page} ${C.ink}`}>
@@ -288,9 +282,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-medium ${C.inkDim}`}>物理内存</span>
               <span className="text-lg font-bold text-accent font-mono">
-                {liveMetrics && liveMetrics.memory_total_bytes > 0
-                  ? `${((liveMetrics.memory_used_bytes / liveMetrics.memory_total_bytes) * 100).toFixed(1)}%`
-                  : "-"}
+                {displayMetric(memValue, (value) => `${value.toFixed(1)}%`)}
               </span>
             </div>
             {renderHistoryChart(memHistory, "#60a5fa")}
@@ -298,7 +290,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               <div className="mt-3 pt-3 border-t border-line/10 text-xs space-y-1">
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>已用</span>
-                  <span className={`font-mono ${C.ink}`}>{formatBytes(liveMetrics.memory_used_bytes)}</span>
+                  <span className={`font-mono ${C.ink}`}>{displayMetric(readAvailableMetric(liveMetrics, "memory_used_bytes"), formatBytes)}</span>
                 </div>
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>缓存</span>
@@ -312,46 +304,14 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 </div>
                 <div className={`flex justify-between ${C.inkDim} text-[11px]`}>
                   <span>总计</span>
-                  <span className={`font-mono ${C.ink}`}>{formatBytes(liveMetrics.memory_total_bytes)}</span>
+                  <span className={`font-mono ${C.ink}`}>{displayMetric(readAvailableMetric(liveMetrics, "memory_total_bytes"), formatBytes)}</span>
                 </div>
               </div>
             )}
           </div>
 
           {/* 网络卡片 */}
-          <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs font-medium ${C.inkDim}`}>网络吞吐</span>
-              <span className={`text-[10px] ${C.inkFaint} font-mono`}>
-                {statusState === "live" ? "实时" : statusState === "stale" ? "已过期" : "无数据"}
-              </span>
-            </div>
-            <div className="space-y-3 py-2">
-              <div>
-                <div className="flex justify-between text-[11px] mb-1">
-                  <span className={C.inkDim}>接收 RX</span>
-                  <span className="font-mono text-state-success font-semibold">
-                    {displayMetric(netRxBps, formatBps)}
-                  </span>
-                </div>
-                <div className={`text-[10px] ${C.inkFaint} font-mono text-right`}>
-                  累计 {liveMetrics ? formatBytes(liveMetrics.net_rx_total) : "-"}
-                </div>
-              </div>
-
-              <div>
-                <div className="flex justify-between text-[11px] mb-1">
-                  <span className={C.inkDim}>发送 TX</span>
-                  <span className="font-mono text-accent font-semibold">
-                    {displayMetric(netTxBps, formatBps)}
-                  </span>
-                </div>
-                <div className={`text-[10px] ${C.inkFaint} font-mono text-right`}>
-                  累计 {liveMetrics ? formatBytes(liveMetrics.net_tx_total) : "-"}
-                </div>
-              </div>
-            </div>
-          </div>
+          <NetworkTraffic metrics={liveMetrics} mode="dashboard" />
 
           {/* 系统负载卡片 */}
           <div className={`${C.panel} rounded-xl p-4 shadow-lg shadow-black/30`}>

@@ -491,7 +491,7 @@ export const AppLayout: React.FC = () => {
               <div
                 aria-label={terminalIsSsh ? "会话侧栏" : "主机列表侧栏"}
                 style={{ width: sidebarCollapsed ? 48 : 256, flex: "0 0 auto" }}
-                className="min-w-0 flex flex-col h-full overflow-hidden border-r border-line/10 bg-surface-muted transition-[width] duration-200 ease-out"
+                className="min-w-0 flex flex-col h-full overflow-hidden border-r border-line/10 bg-surface-muted transition-[width] duration-200 ease-out motion-reduce:transition-none"
               >
                 <div className={`flex shrink-0 min-w-0 overflow-hidden items-center p-1 bg-surface-muted/90 border-b border-line/10 text-[11px] font-semibold gap-0.5 ${sidebarCollapsed ? "justify-center" : ""}`}>
                   {/* 折叠状态下：只显示展开按钮，不显示标签与多余按钮，避免误触 */}
@@ -504,12 +504,8 @@ export const AppLayout: React.FC = () => {
                       aria-expanded={false}
                       className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-line/10 hover:text-ink transition"
                     >
-                      {/* 展开侧栏图标：>≡ (与参考设计图一致) */}
-                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="5.5 6.5 11 12 5.5 17.5" />
-                        <line x1="13" y1="6.5" x2="20.5" y2="6.5" />
-                        <line x1="14.5" y1="12" x2="20.5" y2="12" />
-                        <line x1="13" y1="17.5" x2="20.5" y2="17.5" />
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                       </svg>
                     </button>
                   ) : (
@@ -561,12 +557,8 @@ export const AppLayout: React.FC = () => {
                         aria-expanded={true}
                         className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-line/10 hover:text-ink transition"
                       >
-                        {/* 折叠侧栏图标：≡< (与参考设计图一致) */}
-                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="3.5" y1="6.5" x2="11" y2="6.5" />
-                          <line x1="3.5" y1="12" x2="9.5" y2="12" />
-                          <line x1="3.5" y1="17.5" x2="11" y2="17.5" />
-                          <polyline points="18.5 6.5 13 12 18.5 17.5" />
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
                         </svg>
                       </button>
                     </>
