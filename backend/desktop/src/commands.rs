@@ -95,7 +95,7 @@ pub async fn app_info(state: tauri::State<'_, Arc<AppServices>>) -> Result<AppIn
     })
 }
 
-/// 便携模式判定：可执行文件旁存在 `openshell.portable` 时提示前端关闭自动更新。
+/// 便携模式判定：可执行文件旁存在 `openshell.portable` 时使用便携更新策略。
 pub(crate) fn is_portable() -> bool {
     std::env::current_exe()
         .ok()

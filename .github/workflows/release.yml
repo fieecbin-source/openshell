@@ -13,7 +13,7 @@ on:
       tag_name:
         description: 'Release tag (must match frontend/package.json version)'
         required: true
-        default: 'v1.1.8'
+        default: 'v1.1.9'
 
 concurrency:
   group: release-${{ github.ref }}

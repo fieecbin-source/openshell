@@ -97,6 +97,100 @@ impl WindowsUpgradePlan {
     }
 }
 
+/// 便携包先同步解压检查，再交给独立脚本等待退出、替换和重启。
+fn install_windows_portable(
+    exe_path: Option<&Path>,
+    profile_dir: Option<&Path>,
+    ctx: &InstallContext<'_>,
+    runner: &dyn CommandRunner,
+) -> Result<(), UpdaterError> {
+    let exe = exe_path.ok_or_else(|| {
+        UpdaterError::new(
+            UpdaterErrorKind::Install,
+            "cannot locate the portable executable",
+        )
+    })?;
+    if extension_of(ctx.asset_path).as_deref() != Some("zip") {
+        return Err(UpdaterError::new(
+            UpdaterErrorKind::Install,
+            "便携版更新需要 ZIP 包，请重新检查更新后再试。",
+        ));
+    }
+    let plan = WindowsUpgradePlan {
+        script_path: ctx.log_dir.join("openshell-portable-update.ps1"),
+        script: windows_portable_script(
+            exe,
+            ctx.asset_path,
+            ctx.log_dir,
+            std::process::id(),
+            profile_dir,
+        ),
+    };
+    write_windows_script(&plan)?;
+    let mut stage = plan.invocation();
+    stage.args.push("-StageOnly".to_string());
+    runner.run(&stage)?;
+    runner.spawn_script(&plan.invocation())
+}
+
+fn windows_portable_script(
+    exe: &Path,
+    asset: &Path,
+    log_dir: &Path,
+    pid: u32,
+    profile_dir: Option<&Path>,
+) -> String {
+    // 单遍占位符替换，路径中即使包含另一占位符也不会被再次解析。
+    include_str!("windows_portable.ps1")
+        .lines()
+        .map(|line| match line {
+            "__APP_EXE__" => format!("$appExe = {}", ps_str(&exe.to_string_lossy())),
+            "__APP_PID__" => format!("$appPid = {pid}"),
+            "__RESTART_ARGS__" => {
+                let args = profile_dir
+                    .map(|path| {
+                        format!(
+                            "--profile-dir {}",
+                            windows_quote_argument(&path.to_string_lossy())
+                        )
+                    })
+                    .unwrap_or_default();
+                format!("$restartArgs = {}", ps_str(&args))
+            }
+            "__ARCHIVE__" => format!("$archivePath = {}", ps_str(&asset.to_string_lossy())),
+            "__LOG_FILE__" => format!(
+                "$logFile = {}",
+                ps_str(&log_dir.join(INSTALL_LOG_FILE).to_string_lossy())
+            ),
+            "__FAILURE_FILE__" => format!(
+                "$markerFile = {}",
+                ps_str(&log_dir.join(INSTALL_FAILURE_FILE).to_string_lossy())
+            ),
+            other => other.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
+/// Windows CRT 参数转义：引号前的反斜杠和结尾反斜杠必须加倍。
+fn windows_quote_argument(value: &str) -> String {
+    let mut result = String::from("\"");
+    let mut slashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            slashes += 1;
+            continue;
+        }
+        let count = if ch == '"' { slashes * 2 + 1 } else { slashes };
+        result.extend(std::iter::repeat('\\').take(count));
+        result.push(ch);
+        slashes = 0;
+    }
+    result.extend(std::iter::repeat('\\').take(slashes * 2));
+    result.push('"');
+    result
+}
+
 /// 命令执行抽象（测试注入假实现，绝不执行真实安装）。
 pub trait CommandRunner: Send + Sync {
     fn run(&self, invocation: &Invocation) -> Result<(), UpdaterError>;
@@ -116,15 +210,19 @@ pub struct SystemCommandRunner;
 
 impl CommandRunner for SystemCommandRunner {
     fn run(&self, invocation: &Invocation) -> Result<(), UpdaterError> {
-        let status = std::process::Command::new(&invocation.program)
-            .args(&invocation.args)
-            .status()
-            .map_err(|err| {
-                UpdaterError::new(
-                    UpdaterErrorKind::Install,
-                    format!("failed to run installer step: {err}"),
-                )
-            })?;
+        let mut command = std::process::Command::new(&invocation.program);
+        command.args(&invocation.args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let status = command.status().map_err(|err| {
+            UpdaterError::new(
+                UpdaterErrorKind::Install,
+                format!("failed to run installer step: {err}"),
+            )
+        })?;
         if status.success() {
             Ok(())
         } else {
@@ -442,6 +540,11 @@ fn launch_windows_upgrade(
     plan: &WindowsUpgradePlan,
     runner: &dyn CommandRunner,
 ) -> Result<(), UpdaterError> {
+    write_windows_script(plan)?;
+    runner.spawn_script(&plan.invocation())
+}
+
+fn write_windows_script(plan: &WindowsUpgradePlan) -> Result<(), UpdaterError> {
     if let Some(dir) = plan.script_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -453,7 +556,7 @@ fn launch_windows_upgrade(
             format!("failed to write the update script: {err}"),
         )
     })?;
-    runner.spawn_script(&plan.invocation())
+    Ok(())
 }
 
 /// macOS 需要用户手动完成最后一步（拖入「应用程序」）。
@@ -535,12 +638,23 @@ fn extension_of(path: &Path) -> Option<String> {
 pub struct SelfInstall {
     runner: Arc<dyn CommandRunner>,
     exe_path: Option<PathBuf>,
+    profile_dir: Option<PathBuf>,
 }
 
 impl SelfInstall {
     /// 显式指定运行中的可执行文件（AppImage 自更新需要）。
     pub fn new(runner: Arc<dyn CommandRunner>, exe_path: Option<PathBuf>) -> Self {
-        Self { runner, exe_path }
+        Self {
+            runner,
+            exe_path,
+            profile_dir: None,
+        }
+    }
+
+    /// 重启时显式使用当前数据目录，避免自定义 profile 在更新后变为默认目录。
+    pub fn with_profile_dir(mut self, profile_dir: PathBuf) -> Self {
+        self.profile_dir = Some(profile_dir);
+        self
     }
 
     /// 使用当前进程路径（生产环境使用）。
@@ -567,6 +681,8 @@ impl InstallStrategy for SelfInstall {
             return false;
         };
         platform.extension_priority().contains(&ext.as_str())
+            || (platform == Platform::Windows
+                && asset.name.to_ascii_lowercase().ends_with("-portable.zip"))
     }
 
     async fn install(&self, ctx: &InstallContext<'_>) -> Result<InstallOutcome, UpdaterError> {
@@ -580,8 +696,26 @@ impl InstallStrategy for SelfInstall {
         };
         let backup_path = prepare()?;
 
-        // 便携版：绝不运行安装器，也不碰程序文件，只提示用户手动替换
+        // 便携版不运行系统安装器；Windows 先暂存 ZIP 中的程序，再等待退出后替换。
         if ctx.portable {
+            if Platform::current() == Some(Platform::Windows) {
+                install_windows_portable(self.exe_path.as_deref(), self.profile_dir.as_deref(), ctx, self.runner.as_ref())
+                    .map_err(|err| {
+                        let hint = std::fs::read_to_string(ctx.log_dir.join(INSTALL_FAILURE_FILE))
+                            .ok().map(|text| text.trim_start_matches('\u{feff}').trim().to_string())
+                            .filter(|text| !text.is_empty())
+                            .unwrap_or_else(|| "便携版自动更新未能启动，当前程序已保留。请重试；若已下载的是安装包，请重新检查更新以获取便携 ZIP。".to_string());
+                        err.with_details(serde_json::json!({
+                        "manual_install": true,
+                        "hint": hint,
+                    }))})?;
+                return Ok(InstallOutcome {
+                    strategy: StrategyKind::SelfInstall,
+                    launched: true,
+                    manual_hint: None,
+                    backup_path: Some(backup_path),
+                });
+            }
             tracing::info!(
                 version = ctx.version,
                 asset = ctx.asset_name,
@@ -1024,29 +1158,237 @@ mod tests {
         );
     }
 
-    /// 便携版：必须完成快照、必须不运行任何安装器、必须给出「手动替换」提示。
+    /// Windows 便携版应启动替换脚本，让客户端退出后自动更新。
+    #[cfg(windows)]
     #[tokio::test]
-    async fn portable_never_launches_installer() {
+    async fn portable_launches_update_after_backup() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let runner = FakeRunner::new();
-        let strategy = SelfInstall::new(runner.clone(), None);
+        let current = dir.path().join("OpenShell.exe");
+        std::fs::write(&current, b"old-binary").unwrap();
+        let strategy = SelfInstall::new(runner.clone(), Some(current.clone()));
         let prepare = prepare_ok();
-        let asset = "OpenShell-1.1.0-windows-x86_64.exe";
+        let asset = "OpenShell-1.1.0-windows-x86_64-portable.zip";
         let ctx = InstallContext {
             asset_path: Path::new(asset),
             asset_name: asset,
             version: "1.1.0",
-            log_dir: Path::new("."),
+            log_dir: dir.path(),
             prepare: Some(&prepare),
             portable: true,
         };
         let outcome = strategy.install(&ctx).await.expect("portable install");
-        assert!(!outcome.launched, "portable build must not exit the app");
+        assert!(
+            outcome.launched,
+            "portable update must hand off to the script"
+        );
+        assert!(outcome.manual_hint.is_none());
         assert!(runner.spawned.lock().unwrap().is_empty());
-        assert!(runner.ran.lock().unwrap().is_empty());
+        assert_eq!(runner.ran.lock().unwrap().len(), 1, "stage before exiting");
+        assert_eq!(runner.scripts.lock().unwrap().len(), 1);
         assert!(outcome.backup_path.expect("backup").contains("pre-install"));
-        let hint = outcome.manual_hint.expect("hint");
-        assert!(hint.contains("便携"), "unexpected hint: {hint}");
-        assert!(hint.contains("手动替换"), "unexpected hint: {hint}");
+        assert_eq!(std::fs::read(&current).unwrap(), b"old-binary");
+    }
+
+    #[cfg(windows)]
+    fn portable_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("portable [测试]'__ARCHIVE__");
+        let current = root.join("current");
+        let payload = root.join("payload");
+        let logs = root.join("logs");
+        for dir in [&current, &payload, &logs] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let exe = current.join("OpenShell.exe");
+        // Add-Type 把 OutputAssembly 当作通配路径；先在普通目录编译，再复制到特殊路径。
+        let compiled_old = temp.path().join("old.exe");
+        let new = temp.path().join("new.exe");
+        let zip = root.join("OpenShell-portable.zip");
+        let source = |class: &str, marker: &str| {
+            format!(
+            "public class {class} {{ public static void Main(string[] args) {{ var root = System.AppDomain.CurrentDomain.BaseDirectory; System.IO.File.WriteAllLines(System.IO.Path.Combine(root, \"restart-args\"), args); System.IO.File.WriteAllText(System.IO.Path.Combine(root, \"{marker}\"), \"started\"); for (int i = 0; i < 100 && System.IO.File.Exists(System.IO.Path.Combine(root, \"hold-client\")); i++) System.Threading.Thread.Sleep(50); }} }}"
+        )
+        };
+        let setup = format!(
+            "$ErrorActionPreference = 'Stop'; Add-Type -TypeDefinition {} -OutputAssembly {} -OutputType ConsoleApplication; Add-Type -TypeDefinition {} -OutputAssembly {} -OutputType ConsoleApplication; Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [IO.Compression.ZipFile]::Open({}, 'Create'); try {{ [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, {}, 'OpenShell.exe') | Out-Null; $entry = $zip.CreateEntry('connections.db'); $stream = $entry.Open(); $stream.WriteByte(99); $stream.Dispose() }} finally {{ $zip.Dispose() }}",
+            ps_str(&source("OldClient", "restarted-old")), ps_str(&compiled_old.to_string_lossy()),
+            ps_str(&source("NewClient", "restarted-new")), ps_str(&new.to_string_lossy()),
+            ps_str(&zip.to_string_lossy()), ps_str(&new.to_string_lossy()),
+        );
+        SystemCommandRunner
+            .run(&Invocation {
+                program: "powershell".into(),
+                args: vec![
+                    "-NoProfile".into(),
+                    "-NonInteractive".into(),
+                    "-Command".into(),
+                    setup,
+                ],
+            })
+            .expect("fixture executables and ZIP");
+        std::fs::copy(compiled_old, &exe).unwrap();
+        std::fs::write(current.join("connections.db"), b"saved-connections").unwrap();
+        std::fs::write(current.join("openshell.portable"), b"").unwrap();
+        (temp, exe, zip, logs)
+    }
+
+    #[cfg(windows)]
+    fn staged_portable_plan(exe: &Path, zip: &Path, logs: &Path) -> WindowsUpgradePlan {
+        let plan = WindowsUpgradePlan {
+            script_path: logs.join("portable-test.ps1"),
+            script: windows_portable_script(exe, zip, logs, i32::MAX as u32, logs.parent()),
+        };
+        write_windows_script(&plan).unwrap();
+        let mut stage = plan.invocation();
+        stage.args.push("-StageOnly".into());
+        SystemCommandRunner.run(&stage).unwrap_or_else(|err| {
+            panic!(
+                "stage: {err:?}; {}",
+                std::fs::read_to_string(logs.join(INSTALL_FAILURE_FILE)).unwrap_or_default()
+            )
+        });
+        plan
+    }
+
+    #[cfg(windows)]
+    fn wait_for_fixture(path: &Path) {
+        for _ in 0..100 {
+            if path.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("fixture client did not restart: {}", path.display());
+    }
+
+    /// 真正执行生成的 PowerShell：替换程序并重启，ZIP 中的数据库不应覆盖用户数据。
+    #[cfg(windows)]
+    #[test]
+    fn portable_script_replaces_and_restarts_without_overwriting_data() {
+        let (_temp, exe, zip, logs) = portable_fixture();
+        let original = std::fs::read(&exe).unwrap();
+        let plan = staged_portable_plan(&exe, &zip, &logs);
+        assert_eq!(
+            std::fs::read(&exe).unwrap(),
+            original,
+            "stage must leave old client intact"
+        );
+        SystemCommandRunner
+            .run(&plan.invocation())
+            .unwrap_or_else(|err| {
+                panic!(
+                    "apply: {err:?}; {}",
+                    std::fs::read_to_string(logs.join(INSTALL_LOG_FILE)).unwrap_or_default()
+                )
+            });
+        wait_for_fixture(&exe.parent().unwrap().join("restarted-new"));
+        let args = std::fs::read_to_string(exe.parent().unwrap().join("restart-args")).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec!["--profile-dir", logs.parent().unwrap().to_str().unwrap()]
+        );
+        assert_ne!(std::fs::read(&exe).unwrap(), original);
+        assert_eq!(
+            std::fs::read(exe.with_extension("exe.update-old")).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::read(exe.parent().unwrap().join("connections.db")).unwrap(),
+            b"saved-connections"
+        );
+        assert!(exe.parent().unwrap().join("openshell.portable").exists());
+        assert!(!logs.join(INSTALL_FAILURE_FILE).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn portable_corrupt_archive_aborts_before_client_exit() {
+        let (_temp, exe, zip, logs) = portable_fixture();
+        let original = std::fs::read(&exe).unwrap();
+        std::fs::write(&zip, b"broken ZIP").unwrap();
+        let prepare = prepare_ok();
+        let strategy = SelfInstall::new(Arc::new(SystemCommandRunner), Some(exe.clone()));
+        let ctx = InstallContext {
+            asset_path: &zip,
+            asset_name: "OpenShell-portable.zip",
+            version: "1.1.0",
+            log_dir: &logs,
+            prepare: Some(&prepare),
+            portable: true,
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(strategy.install(&ctx))
+            .expect_err("corrupt archive");
+        assert_eq!(error.kind, UpdaterErrorKind::Install);
+        assert_eq!(std::fs::read(&exe).unwrap(), original);
+        assert!(!exe.with_extension("exe.update-new").exists());
+        assert!(logs.join(INSTALL_FAILURE_FILE).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn portable_script_waits_for_running_client_before_replacement() {
+        use std::os::windows::process::CommandExt;
+        let (_temp, exe, zip, logs) = portable_fixture();
+        let original = std::fs::read(&exe).unwrap();
+        let hold = exe.parent().unwrap().join("hold-client");
+        std::fs::write(&hold, b"").unwrap();
+        let mut old = std::process::Command::new(&exe)
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .unwrap();
+        wait_for_fixture(&exe.parent().unwrap().join("restarted-old"));
+        let mut plan = staged_portable_plan(&exe, &zip, &logs);
+        plan.script = windows_portable_script(&exe, &zip, &logs, old.id(), logs.parent());
+        write_windows_script(&plan).unwrap();
+        let invocation = plan.invocation();
+        let mut apply = std::process::Command::new(&invocation.program)
+            .args(&invocation.args)
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(
+            apply.try_wait().unwrap().is_none(),
+            "must wait for the old client"
+        );
+        assert_eq!(std::fs::read(&exe).unwrap(), original);
+        assert!(!exe.with_extension("exe.update-old").exists());
+        std::fs::remove_file(hold).unwrap();
+        old.wait().unwrap();
+        assert!(apply.wait().unwrap().success());
+        wait_for_fixture(&exe.parent().unwrap().join("restarted-new"));
+        assert_ne!(std::fs::read(&exe).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn portable_restart_failure_restores_and_restarts_previous_client() {
+        use sha2::{Digest, Sha256};
+        let (_temp, exe, zip, logs) = portable_fixture();
+        let original = std::fs::read(&exe).unwrap();
+        let plan = staged_portable_plan(&exe, &zip, &logs);
+        // 内容仍符合暂存哈希，但不是有效 PE：模拟新程序无法被 Windows 启动。
+        let invalid = b"MZ-invalid-executable";
+        std::fs::write(exe.with_extension("exe.update-new"), invalid).unwrap();
+        std::fs::write(
+            logs.join(format!("{INSTALL_LOG_FILE}.portable-sha256")),
+            format!("{:x}", Sha256::digest(invalid)),
+        )
+        .unwrap();
+        SystemCommandRunner
+            .run(&plan.invocation())
+            .expect_err("invalid executable must fail");
+        assert_eq!(std::fs::read(&exe).unwrap(), original);
+        assert!(logs.join(INSTALL_FAILURE_FILE).exists());
+        wait_for_fixture(&exe.parent().unwrap().join("restarted-old"));
+        let args = std::fs::read_to_string(exe.parent().unwrap().join("restart-args")).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec!["--profile-dir", logs.parent().unwrap().to_str().unwrap()]
+        );
     }
 
     /// 平台兜底提示：Linux deb 要给出可直接复制的命令，Windows msi 要提示提权。

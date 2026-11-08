@@ -21,6 +21,7 @@ export const UpdateModal: React.FC = () => {
     download,
     cancelDownload,
     install,
+    installing,
     skipVersion,
     remindLater,
     openReleasePage,
@@ -44,6 +45,9 @@ export const UpdateModal: React.FC = () => {
   if (!modalOpen) return null;
 
   const renderFooter = () => {
+    if (installing) {
+      return <span role="status" className="text-[12px] text-[#86868b]">{UPDATE_COPY.actions.installing}</span>;
+    }
     switch (state.kind) {
       case "checking":
         return <span className="text-[11px] text-[#86868b]">{UPDATE_COPY.actions.checking}</span>;

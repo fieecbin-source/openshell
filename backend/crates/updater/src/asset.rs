@@ -48,6 +48,31 @@ pub fn expected_file_name(version: &Version, platform: Platform, arch: Arch) -> 
     )
 }
 
+/// 便携包只接受 CI 的完整命名，不能回退到系统安装器或其他架构的 ZIP。
+pub fn pick_portable(
+    candidates: &[AssetCandidate],
+    platform: Platform,
+    arch: Arch,
+    version: &Version,
+) -> Result<AssetCandidate, UpdaterError> {
+    let expected = format!(
+        "{APP_NAME}-{version}-{}-{}-portable.zip",
+        platform.as_str(),
+        arch.as_str()
+    );
+    candidates
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(&expected))
+        .cloned()
+        .ok_or_else(|| {
+            UpdaterError::new(
+                UpdaterErrorKind::AssetNotFound,
+                "no portable archive matched this platform, architecture and version",
+            )
+            .with_details(serde_json::json!({ "expected": expected }))
+        })
+}
+
 /// 选出最合适的安装包；没有可用项时返回 `AssetNotFound`（前端据此提示手动下载）。
 pub fn pick(
     candidates: &[AssetCandidate],
@@ -230,6 +255,27 @@ mod tests {
         ]);
         let picked = pick(&list, Platform::Windows, Arch::X86_64, &v("1.1.0")).expect("pick");
         assert_eq!(picked.name, "OpenShell-1.1.0-windows-x86_64.exe");
+    }
+
+    #[test]
+    fn portable_selects_the_matching_zip_instead_of_an_installer() {
+        let list = candidates(&[
+            "OpenShell-1.1.0-windows-x86_64.exe",
+            "OpenShell-1.1.0-windows-x86_64-portable.zip",
+            "OpenShell-1.1.0-windows-aarch64-portable.zip",
+            "OpenShell-1.1.0-macos-x86_64-portable.zip",
+        ]);
+        let picked = pick_portable(&list, Platform::Windows, Arch::X86_64, &v("1.1.0"))
+            .expect("portable zip");
+        assert_eq!(picked.name, "OpenShell-1.1.0-windows-x86_64-portable.zip");
+        assert_eq!(
+            pick(&list, Platform::Windows, Arch::X86_64, &v("1.1.0"))
+                .unwrap()
+                .name,
+            "OpenShell-1.1.0-windows-x86_64.exe"
+        );
+        assert!(pick_portable(&list, Platform::Windows, Arch::X86_64, &v("1.2.0")).is_err());
+        assert!(pick_portable(&list[..1], Platform::Windows, Arch::X86_64, &v("1.1.0")).is_err());
     }
 
     #[test]

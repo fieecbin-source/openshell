@@ -45,7 +45,10 @@ impl UpdaterHandle {
         backups_dir: PathBuf,
     ) -> Result<Self, UpdaterError> {
         // 版本号来自编译期（与 `frontend/package.json` 由 scripts/version.mjs 保持一致）
-        let service = Arc::new(UpdateService::new(&updater_dir, APP_VERSION)?);
+        let service = Arc::new(
+            UpdateService::new(&updater_dir, APP_VERSION)?
+                .with_portable(crate::commands::is_portable()),
+        );
         Ok(Self {
             service,
             downloads: SingleFlight::new(),
@@ -305,9 +308,10 @@ pub async fn updater_install(
 
     let manager = InstallManager::new(vec![
         Arc::new(PluginUpdater),
-        Arc::new(SelfInstall::for_current_process(Arc::new(
-            SystemCommandRunner,
-        ))),
+        Arc::new(
+            SelfInstall::for_current_process(Arc::new(SystemCommandRunner))
+                .with_profile_dir(updater.data_dir.clone()),
+        ),
     ]);
     let strategy = manager.select(&asset)?;
 
@@ -326,7 +330,7 @@ pub async fn updater_install(
         version: &version,
         log_dir: &updater.updater_dir,
         prepare: Some(&prepare),
-        // 便携版不能运行安装器，只能提示用户手动替换（数据目录不会被覆盖）
+        // Windows 便携版使用 ZIP 自动替换程序，保留标记与连接数据。
         portable: crate::commands::is_portable(),
     };
     // 清掉上一次失败留下的标记：这次如果又失败，脚本会重新写入

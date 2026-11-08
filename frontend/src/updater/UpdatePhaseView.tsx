@@ -39,8 +39,7 @@ const MandatoryBanner: React.FC = () => (
 /**
  * 「还需要你完成最后一步」提示。
  *
- * macOS 需要在镜像里拖入「应用程序」，便携版需要手动替换程序文件 ——
- * 这两种情况后端刻意不让应用退出，必须在这里把话讲清楚，否则用户会以为点了没反应。
+ * macOS 等需要用户手动完成的平台保持运行，并在这里展示后续操作。
  */
 const ManualHint: React.FC = () => {
   const installHint = useUpdaterStore((s) => s.installHint);

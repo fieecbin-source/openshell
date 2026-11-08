@@ -29,7 +29,30 @@ vi.mock("../lib/ipc", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
-  useUpdaterStore.setState({ state: { kind: "idle" }, installHint: null, bootstrapped: false });
+  useUpdaterStore.setState({ state: { kind: "idle" }, installHint: null, installing: false, bootstrapped: false });
+});
+
+it("does not launch a second update while preparing or waiting for app exit", async () => {
+  const result: UpdateCheckResult = {
+    has_update: true, current_version: "1.1.1", latest_version: "1.1.4", tag: "v1.1.4",
+    release_name: "OpenShell 1.1.4", release_notes: "", notes_html: "",
+    asset: { name: "OpenShell-1.1.4-windows-x86_64-portable.zip", url: "https://github.com/a/b/x.zip",
+      size: 1, sha256: "0".repeat(64), manifest: "{}", signature: "{}" },
+    mandatory: false, channel: "stable", from_cache: false,
+    release_page_url: "https://github.com/a/b/releases", source: "github", checked_at_ms: 1,
+  };
+  let complete!: (value: { strategy: "self_install"; launched: boolean }) => void;
+  vi.mocked(api.installUpdate).mockResolvedValue({ strategy: "self_install", launched: true })
+    .mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  useUpdaterStore.setState({ state: { kind: "ready", result, path: "C:/Downloads/update.zip" } });
+  const first = useUpdaterStore.getState().install();
+  const second = useUpdaterStore.getState().install();
+  expect(api.installUpdate).toHaveBeenCalledTimes(1);
+  complete({ strategy: "self_install", launched: true });
+  await Promise.all([first, second]);
+  await useUpdaterStore.getState().install();
+  expect(api.installUpdate).toHaveBeenCalledTimes(1);
+  expect(useUpdaterStore.getState().installHint).toBeNull();
 });
 
 it("retries the downloaded installer after a launch failure", async () => {

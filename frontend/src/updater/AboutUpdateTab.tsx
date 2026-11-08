@@ -111,12 +111,14 @@ export const AboutUpdateTab: React.FC = () => {
         </div>
       </Card>
 
-      {/* 便携版提示：不会运行安装器 */}
+      {/* Windows 便携版支持原位更新；其他平台仍显示各自的手动说明。 */}
       {appInfo?.is_portable && (
         <div className="rounded-xl border border-[#ff9f0a]/30 bg-[#ff9f0a]/[0.08] px-3 py-2.5">
-          <p className="text-[11px] font-semibold text-[#1d1d1f]">{UPDATE_COPY.platform.manualTitle}</p>
+          <p className="text-[11px] font-semibold text-[#1d1d1f]">{
+            appInfo.target === "windows" ? UPDATE_COPY.platform.portableTitle : UPDATE_COPY.platform.manualTitle
+          }</p>
           <p className="mt-0.5 text-[10px] leading-relaxed text-[#5c3d00]">
-            {UPDATE_COPY.platform.portable}
+            {appInfo.target === "windows" ? UPDATE_COPY.platform.portableAuto : UPDATE_COPY.platform.portable}
           </p>
         </div>
       )}

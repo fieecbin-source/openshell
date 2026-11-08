@@ -283,6 +283,61 @@ async fn detects_update_and_resolves_checksum() {
     assert_eq!(h.client.call_count(SUMS_URL), 0);
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn portable_check_discards_cached_installer_and_verifies_zip() {
+    let h = harness();
+    happy_routes(&h.client);
+    h.service
+        .check(&UpdateConfig::default(), true)
+        .await
+        .unwrap();
+
+    let zip = format!(
+        "OpenShell-1.1.0-windows-{}-portable.zip",
+        std::env::consts::ARCH
+    );
+    let mut release: serde_json::Value = serde_json::from_str(&release_body(true, "")).unwrap();
+    release["assets"].as_array_mut().unwrap().push(serde_json::json!({
+        "name": zip, "size": 1024,
+        "browser_download_url": format!("https://github.com/fieecbin-source/openshell/releases/download/v1.1.0/{zip}")
+    }));
+    let manifest = serde_json::json!({
+        "key_id": TEST_KEY_ID,
+        "assets": [{ "name": zip, "sha256": HASH }],
+    })
+    .to_string();
+    h.client
+        .replace_route(API_URL, response(200, &[], &release.to_string()));
+    h.client
+        .replace_route(META_URL, response(200, &[], &manifest));
+    h.client
+        .replace_route(SIG_URL, response(200, &[], &signature_for(&manifest)));
+    let service = UpdateService::with_http_and_signature(
+        h.service.dir(),
+        "1.0.1",
+        h.client.clone(),
+        test_verifier(),
+    )
+    .unwrap()
+    .with_portable(true);
+    let outcome = service
+        .check(&UpdateConfig::default(), false)
+        .await
+        .unwrap();
+    let asset = outcome.result.asset.expect("zip selected");
+    assert_eq!(asset.name, zip);
+    assert!(asset.is_auto_installable());
+    assert!(!outcome.from_cache);
+    assert_eq!(h.client.etags.lock().unwrap().last(), Some(&None));
+    let cached = service
+        .check(&UpdateConfig::default(), false)
+        .await
+        .unwrap();
+    assert!(cached.from_cache);
+    assert_eq!(cached.result.asset.unwrap().name, zip);
+}
+
 #[tokio::test]
 async fn no_update_when_versions_equal() {
     let h = harness();

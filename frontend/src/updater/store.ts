@@ -43,8 +43,9 @@ interface UpdaterStore {
   appInfo: AppInfo | null;
   runtime: UpdaterStateView | null;
   lastError: string | null;
-  /** 安装结束后的「还需要你动手」提示（macOS 拖入应用程序 / 便携版手动替换）。 */
+  /** 安装结束后的手动提示（例如 macOS 拖入应用程序）。 */
   installHint: string | null;
+  installing: boolean;
   savingConfig: boolean;
   bootstrapped: boolean;
 
@@ -127,6 +128,7 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
     runtime: null,
     lastError: null,
     installHint: null,
+    installing: false,
     savingConfig: false,
     bootstrapped: false,
 
@@ -228,18 +230,20 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => {
     },
 
     install: async () => {
+      if (get().installing) return;
       const current = get().state;
       if (current.kind !== "ready" && current.kind !== "install_failed") return;
+      set({ installing: true, installHint: null });
       const result: UpdateCheckResult = current.result;
       await api
         .installUpdate(current.path, result.asset!, result.latest_version)
         .then((view) => {
-          // 需要用户手动收尾时（macOS 拖入应用程序 / 便携版替换文件），
-          // 后端不会让应用退出，这里把提示挂到弹窗上，不能让用户觉得「点了没反应」
-          set({ installHint: view.manual_hint ?? null });
+          // 自动更新保持忙碌直到进程退出；手动安装则恢复操作并显示提示。
+          set({ installHint: view.manual_hint ?? null, installing: view.launched });
         })
         .catch((err) => {
           console.error("launch installer failed", err);
+          set({ installing: false });
           dispatch({ type: "install_failed", error: err, retryable: true });
         });
     },

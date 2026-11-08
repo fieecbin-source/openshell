@@ -50,6 +50,7 @@ export const UPDATE_COPY = {
     later: "稍后提醒",
     skip: "跳过此版本",
     installNow: "立即重启安装",
+    installing: "正在准备更新，完成后将自动重启…",
     downloadManually: "手动下载",
     openRelease: "打开版本发布页",
     openLogs: "打开日志目录",
@@ -61,6 +62,8 @@ export const UPDATE_COPY = {
   /** 平台差异说明：能自动安装的走自动，需要用户动手的必须说清楚。 */
   platform: {
     manualTitle: "还需要你完成最后一步",
+    portableTitle: "便携版更新",
+    portableAuto: "更新前会自动备份连接数据，随后退出、替换程序并重新启动。连接数据和便携模式会保留。",
     portable:
       "便携版不支持自动安装：新版已下载，请退出后手动替换程序文件（连接数据目录不会被覆盖）。",
     macosManual: "已打开安装镜像，请把 OpenShell 拖入「应用程序」，然后重新启动客户端。",

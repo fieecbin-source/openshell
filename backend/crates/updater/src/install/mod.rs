@@ -56,7 +56,7 @@ pub struct InstallContext<'a> {
     pub log_dir: &'a Path,
     /// 安装前备份；`None` 表示调用方没有提供，策略必须拒绝安装。
     pub prepare: Option<PrepareHook<'a>>,
-    /// 便携运行（`openshell.portable` 标记存在）：不能走安装器，只能提示手动替换。
+    /// 便携运行（`openshell.portable` 标记存在）：Windows 使用 ZIP 就地更新。
     pub portable: bool,
 }
 

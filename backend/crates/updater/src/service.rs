@@ -55,6 +55,7 @@ pub struct UpdateService {
     current_version: Version,
     platform: Platform,
     arch: Arch,
+    portable: bool,
     state_store: StateStore,
     log: UpdateLog,
     http_for: HttpClientFactory,
@@ -123,6 +124,7 @@ impl UpdateService {
             current_version: current,
             platform,
             arch: Arch::current(),
+            portable: false,
             http_for,
             signatures,
             retry: RetryPolicy::default(),
@@ -151,6 +153,12 @@ impl UpdateService {
         self.arch
     }
 
+    /// Windows 便携运行时选择 ZIP；其他平台维持各自的安装策略。
+    pub fn with_portable(mut self, portable: bool) -> Self {
+        self.portable = portable && self.platform == Platform::Windows;
+        self
+    }
+
     /// 读取持久化状态（跳过列表、缓存、上次检查时间等）。
     pub fn state(&self) -> UpdaterState {
         self.state_store.load()
@@ -170,6 +178,19 @@ impl UpdateService {
         let cfg = config.normalized()?;
         let now = now_ms();
         let mut state = self.state_store.load();
+
+        // 从旧版或不同运行模式沿用的缓存可能指向安装器；同时清 ETag，避免 304 复用它。
+        if state
+            .cached_result
+            .as_ref()
+            .and_then(|result| result.asset.as_ref())
+            .is_some_and(|asset| {
+                asset.name.to_ascii_lowercase().ends_with("-portable.zip") != self.portable
+            })
+        {
+            state.cached_result = None;
+            state.etag = None;
+        }
 
         if !manual {
             if let Some(cached) = state.cached_result.clone() {
@@ -530,7 +551,7 @@ impl UpdateService {
             .assets
             .iter()
             .any(|asset| asset.platform.is_some() || asset.arch.is_some());
-        if declared {
+        if declared && !self.portable {
             let filtered: Vec<&SourceAsset> = release
                 .assets
                 .iter()
@@ -565,7 +586,11 @@ impl UpdateService {
                     .with_sha256(asset.sha256.as_deref().and_then(meta::normalize_sha256))
             })
             .collect();
-        asset::pick(&candidates, self.platform, self.arch, latest)
+        if self.portable {
+            asset::pick_portable(&candidates, self.platform, self.arch, latest)
+        } else {
+            asset::pick(&candidates, self.platform, self.arch, latest)
+        }
     }
 
     /// 读取并验证发布清单。
